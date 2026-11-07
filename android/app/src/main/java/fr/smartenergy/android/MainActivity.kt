@@ -47,9 +47,10 @@ import java.net.HttpURLConnection
 import java.net.URL
 import java.util.concurrent.Executors
 import java.util.Locale
+import java.security.SecureRandom
 
 /**
- * Smart Energy Android 0.1.7-dev.
+ * Smart Energy Android 0.1.8-dev.
  * Initial provisioning over ESP32's setup AP, subsequent management over home Wi-Fi.
  * Credentials kept encrypted in Android Keystore-backed local preferences.
  * DEVELOPMENT-ONLY HTTP local transport; NOT safe for remote/public use.
@@ -77,6 +78,7 @@ class MainActivity : Activity() {
     private val uiHandler = Handler(Looper.getMainLooper())
     private lateinit var lanIp: EditText
     private lateinit var lanConnectBtn: Button
+    private lateinit var physicalRecoverBtn: Button
     private lateinit var lanDiscoverBtn: Button
     private var discoverListener: NsdManager.DiscoveryListener? = null
     private val chosen = mutableSetOf<String>()
@@ -263,6 +265,9 @@ class MainActivity : Activity() {
         add(lan, lanIp)
         lanConnectBtn = action("Se connecter à ma passerelle") { connectHomeLan() }
         add(lan, lanConnectBtn)
+        physicalRecoverBtn = action("Code perdu ? Réassocier avec BOOT") { recoverWithBoot() }
+        add(lan, physicalRecoverBtn)
+        add(lan, label("Avec le firmware ESP32 v0.1.8-dev : maintiens BOOT 4 secondes pour autoriser une nouvelle association, sans USB et sans effacer le Wi-Fi/JK.", 12f, color = subdued))
         lanDiscoverBtn = action("Rechercher sur mon Wi-Fi") { discoverHomeLan() }
         add(lan, lanDiscoverBtn)
         autoEspBtn = action("Trouver un ESP32 proche") { findNearbyEsp32() }
@@ -557,6 +562,101 @@ class MainActivity : Activity() {
                 refreshTelemetry()
                 state((if (recovery) "Code récupéré et mémorisé. " else "Connecté automatiquement. ") +
                     returnedId + " (" + ip + ") · " + chosen.size + " batterie(s) JK conservée(s).")
+            }
+        }
+    }
+
+    private fun recoverWithBoot() {
+        val ip = lanIp.text.toString().trim()
+        if (!allowedLocalIp(ip)) {
+            state("Renseigne l'adresse IP locale de l'ESP32 dans la section 1.")
+            return
+        }
+        AlertDialog.Builder(this)
+            .setTitle("Réassocier sans l'ancien code")
+            .setMessage("1. Assure-toi que l'ESP32 utilise le firmware 0.1.8-dev.\n" +
+                "2. Sur l'ESP32 allumé, maintiens BOOT 4 secondes, puis relâche (ne le maintiens pas 10 secondes).\n" +
+                "3. Dans les 45 secondes, appuie sur « Réassocier » ici.\n\n" +
+                "L'APK créera un nouveau code aléatoire à la place de l'ancien. Le Wi-Fi et les JK enregistrés resteront inchangés.\n\n" +
+                "Cette fonction expérimentale est limitée au réseau local de confiance.")
+            .setNegativeButton("Annuler", null)
+            .setPositiveButton("Réassocier") { _, _ -> performPhysicalRecovery(ip) }
+            .show()
+    }
+
+    private fun randomDeviceCode(): String {
+        val alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
+        val random = SecureRandom()
+        return buildString {
+            repeat(20) { append(alphabet[random.nextInt(alphabet.length)]) }
+        }
+    }
+
+    private fun performPhysicalRecovery(ip: String) {
+        physicalRecoverBtn.isEnabled = false
+        lanVerified = false
+        releaseConnection()
+        localHost = ip
+        state("Vérification de la passerelle et de la confirmation physique BOOT…")
+        async {
+            try {
+                val info = httpCall("GET", "/api/v1/info")
+                val id = info.optString("device_id")
+                val saved = prefs.getString("device_id", "") ?: ""
+                if (info.optString("product") != "smart-jk-esp32" ||
+                    !Regex("^smartjk-[A-F0-9]{6}$", RegexOption.IGNORE_CASE).matches(id) ||
+                    (saved.isNotBlank() && saved != id) ||
+                    !info.optBoolean("wifi_connected")) {
+                    throw IllegalStateException("L'ESP32 ne correspond pas à la passerelle attendue.")
+                }
+                if (!info.optBoolean("physical_recovery")) {
+                    throw IllegalStateException("Firmware trop ancien. Une mise à jour ESP32 v0.1.8-dev est nécessaire avant cette fonction.")
+                }
+                val generated = randomDeviceCode()
+                val payload = JSONObject().put("device_id", id).put("new_code", generated)
+                var submitted = false
+                try {
+                    val response = httpCall("POST", "/api/v1/pair/recover", payload)
+                    if (!response.optBoolean("paired") || response.optString("device_id") != id) {
+                        throw IllegalStateException("La réassociation n'a pas été confirmée par l'ESP32.")
+                    }
+                    submitted = true
+                } catch (ex: Exception) {
+                    // POST response may have been lost after secret rotation.
+                    // Recover only if the *new* code proves accepted by the ESP32.
+                    activeSetupCode = generated
+                    try {
+                        httpCall("GET", "/api/v1/bms")
+                        submitted = true
+                    } catch (_: Exception) {
+                        throw ex
+                    }
+                }
+                if (!submitted) throw IllegalStateException("Réassociation non confirmée.")
+                activeSetupCode = generated
+                // Persist only after receiving device proof using the new secret.
+                val configured = httpCall("GET", "/api/v1/bms")
+                val macs = configured.optJSONArray("bms") ?: JSONArray()
+                savePairing(id, "SmartJK-Setup-" + id.substringAfter("-").uppercase(Locale.ROOT), generated)
+                prefs.edit().putString("local_ip", ip).apply()
+                chosen.clear()
+                for (index in 0 until macs.length()) chosen.add(macs.optString(index))
+                lanVerified = true
+                lastLanFirmwareVersion = info.optString("version")
+                runOnUiThread {
+                    setupCode.text.clear()
+                    scanBtn.isEnabled = true
+                    saveBtn.isEnabled = true
+                    state("ESP32 réassocié avec confirmation physique. Nouveau code sécurisé mémorisé ; " +
+                        chosen.size + " JK conservé(s).")
+                    refreshTelemetry()
+                }
+            } catch (ex: Exception) {
+                state("Réassociation non effectuée : " +
+                    (ex.message ?: ex.javaClass.simpleName) +
+                    ". Vérifie le firmware et maintiens BOOT 4 secondes avant de relancer.")
+            } finally {
+                runOnUiThread { physicalRecoverBtn.isEnabled = true }
             }
         }
     }
