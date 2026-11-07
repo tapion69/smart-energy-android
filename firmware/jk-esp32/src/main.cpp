@@ -1,4 +1,4 @@
-// Smart Energy JK - provisioning test firmware 0.1.2-dev
+// Smart Energy JK - provisioning test firmware 0.1.4-dev
 // IMPORTANT: Wi-Fi setup and BLE discovery only, JK data decoding NOT included yet.
 // Target: classic ESP32 DevKit (esp32dev), flash a spare unit, not the HA proxy.
 #include <Arduino.h>
@@ -10,7 +10,7 @@
 #include <ArduinoJson.h>
 #include <ctype.h>
 
-static const char *VERSION = "0.1.3-dev";
+static const char *VERSION = "0.1.4-dev";
 static const uint32_t WIFI_JOIN_TIMEOUT_MS = 30000; // Return to setup after 30s
 static const int SETUP_BUTTON = 0; // Hold BOOT for 4 s AFTER startup to reopen setup
 static const uint32_t HOLD_MS = 4000;
@@ -85,7 +85,8 @@ void startSetup() {
     mdnsRunning = false;
   }
   WiFi.disconnect(true);
-  WiFi.mode(WIFI_AP);
+  // AP + STA is needed to scan nearby 2.4 GHz routers while pairing.
+  WiFi.mode(WIFI_AP_STA);
   setupMode = true;
   const bool started = WiFi.softAP(setupSsid.c_str(), setupCode.c_str(), 1, false, 1);
   Serial.printf("[WiFi] Setup AP %s, diagnostic=%s, last_reason=%u\\n",
@@ -127,6 +128,8 @@ void onInfo() {
   doc["ip"] = WiFi.localIP().toString();
   doc["ble_scan"] = true;
   doc["lan_management"] = true;
+  doc["wifi_scan"] = true;
+  doc["change_code"] = true;
   doc["telemetry"] = false;
   doc["ota"] = false;
   respond(200, doc);
@@ -203,6 +206,77 @@ void onSaveBms() {
   resp["saved"] = target.size();
   respond(200, resp);
 }
+
+// Scan router networks on the ESP32 itself so Android only asks for Wi-Fi password.
+// Only 2.4 GHz networks can be seen by classic ESP32.
+void onWifiScan() {
+  if (!requireControl()) return;
+  int count = WiFi.scanNetworks(false, true);
+  if (count < 0) {
+    error(503, "wifi_scan_failed");
+    return;
+  }
+  JsonDocument doc;
+  doc["ok"] = true;
+  doc["supports_5ghz"] = false;
+  JsonArray networks = doc["networks"].to<JsonArray>();
+  String seen[40];
+  size_t seenCount = 0;
+  // scanNetworks sorts strongest to weakest, keep strongest instance per SSID.
+  for (int i = 0; i < count && i < 40; ++i) {
+    String ssid = WiFi.SSID(i);
+    if (ssid.isEmpty()) continue;
+    bool duplicate = false;
+    for (size_t j = 0; j < seenCount; ++j) {
+      if (seen[j] == ssid) { duplicate = true; break; }
+    }
+    if (duplicate) continue;
+    seen[seenCount++] = ssid;
+    JsonObject network = networks.add<JsonObject>();
+    network["ssid"] = ssid;
+    network["rssi"] = WiFi.RSSI(i);
+    network["channel"] = WiFi.channel(i);
+    network["secured"] = WiFi.encryptionType(i) != WIFI_AUTH_OPEN;
+  }
+  WiFi.scanDelete();
+  doc["count"] = networks.size();
+  respond(200, doc);
+}
+
+// Change the per-device Wi-Fi AP/API password after authenticating.
+// WPA2 requires >=8 characters; never use a universal 4-digit default as a key.
+void onChangeCode() {
+  if (!requireControl()) return;
+  JsonDocument request;
+  if (deserializeJson(request, http.arg("plain"))) {
+    error(400, "invalid_json");
+    return;
+  }
+  String newCode = request["new_code"].as<String>();
+  if (newCode.length() < 8 || newCode.length() > 32) {
+    error(400, "code_length_8_to_32_required");
+    return;
+  }
+  for (char ch : newCode) {
+    if ((unsigned char)ch < 33 || (unsigned char)ch > 126) {
+      error(400, "code_ascii_printable_no_spaces");
+      return;
+    }
+  }
+  if (prefs.putString("setupCode", newCode) != newCode.length()) {
+    error(500, "storage_failed");
+    return;
+  }
+  // Accepted under old code; new requests must use the new code.
+  setupCode = newCode;
+  JsonDocument result;
+  result["ok"] = true;
+  result["updated"] = true;
+  respond(200, result);
+  // If the AP is in use, recreate it with the new code after response.
+  if (setupMode) restartAt = millis() + 2200;
+}
+
 void onSetWifi() {
   // The same paired device can update Wi-Fi from the trusted home LAN.
   // Prototype uses plaintext HTTP and MUST NOT be exposed to the Internet.
@@ -267,6 +341,8 @@ void setup() {
   http.on("/api/v1/bms/scan", HTTP_GET, onScan);
   http.on("/api/v1/bms", HTTP_PUT, onSaveBms);
   http.on("/api/v1/wifi", HTTP_POST, onSetWifi);
+  http.on("/api/v1/wifi/scan", HTTP_GET, onWifiScan);
+  http.on("/api/v1/access", HTTP_POST, onChangeCode);
   http.on("/api/v1/telemetry", HTTP_GET, onTelemetry);
   http.onNotFound([] { error(404, "unknown_route"); });
   if (prefs.getString("ssid", "").isEmpty()) startSetup();
