@@ -1,4 +1,4 @@
-// Read-only JK02 V19 BLE telemetry poller, standalone ESP32.
+// JK02 V19 read-only persistent BLE telemetry, standalone ESP32.
 // Uses the same documented FFE0/FFE1 handshake and 300-byte frame profiles as
 // the author's Smart JK-BMS Bluetooth Home Assistant project.
 // This worker never sends BMS parameter writes, MOS commands, or SOC changes.
@@ -16,7 +16,7 @@ extern bool setupMode; // main.cpp manages Wi-Fi provisioning state.
 namespace jkreader {
 namespace {
 static constexpr uint8_t MAX_BMS = 8;
-static constexpr uint32_t FRESH_MS = 90000;
+static constexpr uint32_t FRESH_MS = 20000; // never present 30s+ readings as live
 struct Device {
   char mac[18] = {};
   char state[30] = {};
@@ -25,6 +25,9 @@ struct Device {
   uint32_t lastAttemptMs = 0;
   uint32_t badFrames = 0;
   uint32_t rejectedMeasurements = 0;
+  bool bleConnected = false;
+  uint32_t connections = 0;
+  uint32_t disconnections = 0;
 };
 static Device devices[MAX_BMS];
 static uint8_t configured = 0;
@@ -33,6 +36,7 @@ static SemaphoreHandle_t radioMutex = nullptr;
 static smartjk::Assembler assembler;
 static int activeIndex = -1;
 static char activeMac[18] = {};
+static volatile bool maintenanceRequested = false;
 
 void updateState(int index, const char *mac, const char *message) {
   portENTER_CRITICAL(&stateMux);
@@ -101,7 +105,7 @@ void pollOne(int index, const char *mac) {
     updateState(index, mac, "ble_client_unavailable");
     return;
   }
-  client->setConnectTimeout(7000);
+  client->setConnectTimeout(9000);
   const bool connected = client->connect(match);
   scanner->clearResults();
   if (!connected) {
@@ -122,7 +126,7 @@ void pollOne(int index, const char *mac) {
   }
   activeIndex = index;
   strncpy(activeMac, mac, sizeof activeMac - 1);
-  activeMac[sizeof(activeMac) - 1] = '\0';
+  activeMac[sizeof activeMac - 1] = '\0';
   assembler.reset();
   updateState(index, mac, "waiting_frames");
   if (!characteristic->subscribe(true, onNotify)) {
@@ -133,60 +137,97 @@ void pollOne(int index, const char *mac) {
     return;
   }
 
-  const uint32_t initialReading = millis();
+  portENTER_CRITICAL(&stateMux);
+  if (index < configured && strcmp(devices[index].mac, mac) == 0) {
+    devices[index].bleConnected = true;
+    devices[index].connections++;
+  }
+  portEXIT_CRITICAL(&stateMux);
+  Serial.printf("[JK] BLE connected to %s (persistent session)\n", mac);
+
+  // Query metadata/settings ONCE to start unsolicited JK02 telemetry stream.
+  // All commands are READ-ONLY; never send SOC / MOS / setting writes.
   const bool withResponse = !characteristic->canWriteNoResponse();
   sendReadCommand(characteristic, 0x97, withResponse);
   vTaskDelay(pdMS_TO_TICKS(650));
   if (client->isConnected()) sendReadCommand(characteristic, 0x96, withResponse);
-  for (unsigned attempt = 0; attempt < 45 && client->isConnected(); ++attempt) {
-    vTaskDelay(pdMS_TO_TICKS(200));
-    bool fresh = false;
+  uint32_t lastRefreshAt = millis();
+  const uint32_t sessionStartedAt = millis();
+  bool interruptedForMaintenance = false;
+  bool rotation = false;
+
+  while (client->isConnected() && !setupMode && WiFi.status() == WL_CONNECTED) {
+    if (maintenanceRequested) {
+      interruptedForMaintenance = true;
+      break; // explicit user scan; resumption afterwards
+    }
+    bool configuredStill = false;
+    uint32_t lastReadingAt = 0;
+    uint8_t deviceCount = 0;
     portENTER_CRITICAL(&stateMux);
+    deviceCount = configured;
     if (index < configured && strcmp(devices[index].mac, mac) == 0) {
-      fresh = devices[index].lastReadingMs >= initialReading &&
-              devices[index].reading.valid;
+      configuredStill = true;
+      lastReadingAt = devices[index].lastReadingMs;
     }
     portEXIT_CRITICAL(&stateMux);
-    if (fresh) break;
+    if (!configuredStill) break;
+
+    // ESP32 single-client prototype: with 2+ JK devices, rotate slowly rather
+    // than continuously disconnecting, to limit audible BLE beeps.
+    if (deviceCount > 1 && (uint32_t)(millis() - sessionStartedAt) >= 90000) {
+      rotation = true;
+      break;
+    }
+    const uint32_t now = millis();
+    // JK02 usually pushes type-2 updates automatically. Only ask for 0x96 if
+    // no validated sample arrived for >= 8 s, throttled to one request / 8 s.
+    // Never disconnect a healthy BLE link just to refresh values.
+    if ((lastReadingAt == 0 || (uint32_t)(now - lastReadingAt) >= 8000) &&
+        (uint32_t)(now - lastRefreshAt) >= 8000) {
+      sendReadCommand(characteristic, 0x96, withResponse);
+      lastRefreshAt = now;
+      if (!lastReadingAt || (uint32_t)(now - lastReadingAt) > 30000) {
+        updateState(index, mac, "waiting_frames");
+      }
+    }
+    vTaskDelay(pdMS_TO_TICKS(250));
   }
-  portENTER_CRITICAL(&stateMux);
-  if (index < configured && strcmp(devices[index].mac, mac) == 0) {
-    devices[index].badFrames += assembler.badCrc;
-    devices[index].rejectedMeasurements += assembler.rejectedMeasurements;
-  }
-  portEXIT_CRITICAL(&stateMux);
+
   activeIndex = -1;
   if (client->isConnected()) {
     characteristic->unsubscribe();
     client->disconnect();
   }
-  NimBLEDevice::deleteClient(client);
-  bool fresh = false;
   portENTER_CRITICAL(&stateMux);
   if (index < configured && strcmp(devices[index].mac, mac) == 0) {
-    fresh = devices[index].lastReadingMs >= initialReading &&
-            devices[index].reading.valid;
+    devices[index].bleConnected = false;
+    devices[index].disconnections++;
+    devices[index].badFrames += assembler.badCrc;
+    devices[index].rejectedMeasurements += assembler.rejectedMeasurements;
   }
   portEXIT_CRITICAL(&stateMux);
-  if (!fresh) {
-    updateState(index, mac, assembler.validFrames > 0 ?
-                "unknown_jk_layout" : "no_valid_jk_frame");
-  } else {
-    updateState(index, mac, "valid_sample");
-  }
+  NimBLEDevice::deleteClient(client);
+  Serial.printf("[JK] BLE session ended: %s, reason=%s\n", mac,
+                interruptedForMaintenance ? "manual_scan" :
+                rotation ? "multi_bms_rotation" : "link_or_config_lost");
+  updateState(index, mac, interruptedForMaintenance ? "scan_requested" :
+              rotation ? "rotating_multi_bms" : "ble_disconnected");
 }
 
 void worker(void *) {
   uint8_t next = 0;
+  uint8_t consecutiveFailures = 0;
   while (true) {
-    // Do not use the radio while device pairing is active.
-    if (setupMode || WiFi.status() != WL_CONNECTED) {
-      vTaskDelay(pdMS_TO_TICKS(2200));
+    if (setupMode || WiFi.status() != WL_CONNECTED || maintenanceRequested) {
+      vTaskDelay(pdMS_TO_TICKS(500));
       continue;
     }
     char mac[18] = {};
     int index = -1;
+    uint8_t deviceCount = 0;
     portENTER_CRITICAL(&stateMux);
+    deviceCount = configured;
     if (configured > 0) {
       next %= configured;
       index = next;
@@ -195,25 +236,56 @@ void worker(void *) {
     }
     portEXIT_CRITICAL(&stateMux);
     if (index < 0 || !mac[0]) {
-      vTaskDelay(pdMS_TO_TICKS(2200));
+      vTaskDelay(pdMS_TO_TICKS(1500));
       continue;
     }
-    if (acquireRadio(1000)) {
-      pollOne(index, mac);
-      releaseRadio();
+    // Maintenance requests own the radio exclusively; do not start a session.
+    if (radioMutex && !maintenanceRequested &&
+        xSemaphoreTake(radioMutex, pdMS_TO_TICKS(1500)) == pdTRUE) {
+      if (!maintenanceRequested && !setupMode) {
+        uint32_t successfulAtStart = 0;
+        portENTER_CRITICAL(&stateMux);
+        if (index < configured) successfulAtStart = devices[index].lastReadingMs;
+        portEXIT_CRITICAL(&stateMux);
+        pollOne(index, mac); // stays connected indefinitely for ONE JK
+        bool producedSample = false;
+        portENTER_CRITICAL(&stateMux);
+        if (index < configured && strcmp(devices[index].mac, mac) == 0) {
+          producedSample = devices[index].lastReadingMs != successfulAtStart;
+        }
+        portEXIT_CRITICAL(&stateMux);
+        if (producedSample) consecutiveFailures = 0;
+        else if (consecutiveFailures < 4) ++consecutiveFailures;
+      }
+      xSemaphoreGive(radioMutex);
     }
-    // Serial radio access; no concurrent sessions yet. Avoid rapid reconnects.
-    vTaskDelay(pdMS_TO_TICKS(4500));
+    // Reconnect only after an actual BLE loss. Slow down on repeated failures.
+    const uint32_t backoff = deviceCount > 1 ? 3500 :
+      (consecutiveFailures == 0 ? 4500 :
+       (consecutiveFailures == 1 ? 10000 :
+        (consecutiveFailures == 2 ? 20000 : 40000)));
+    uint32_t slept = 0;
+    while (slept < backoff && !maintenanceRequested) {
+      vTaskDelay(pdMS_TO_TICKS(500));
+      slept += 500;
+    }
   }
 }
+
 } // anonymous namespace
 
 bool acquireRadio(uint32_t waitMs) {
-  return radioMutex &&
-         xSemaphoreTake(radioMutex, pdMS_TO_TICKS(waitMs)) == pdTRUE;
+  // Called only by authenticated, user-initiated scans, never by BLE worker.
+  // Asks a persistent session to release the radio before taking its mutex.
+  if (!radioMutex) return false;
+  maintenanceRequested = true;
+  if (xSemaphoreTake(radioMutex, pdMS_TO_TICKS(waitMs)) == pdTRUE) return true;
+  maintenanceRequested = false;
+  return false;
 }
 void releaseRadio() {
   if (radioMutex) xSemaphoreGive(radioMutex);
+  maintenanceRequested = false;
 }
 
 void setConfigured(JsonArrayConst macs) {
@@ -262,6 +334,8 @@ void fillTelemetry(JsonDocument &out) {
   out["decoder"] = "experimental_validate_with_manufacturer";
   out["temperature_safety_verified"] = false;
   out["configured_count"] = count;
+  out["cache_only"] = true;
+  out["recommended_poll_ms"] = 2500;
   const uint32_t now = millis();
   JsonArray list = out["devices"].to<JsonArray>();
   for (uint8_t i = 0; i < count; ++i) {
@@ -269,6 +343,9 @@ void fillTelemetry(JsonDocument &out) {
     JsonObject device = list.add<JsonObject>();
     device["mac"] = item.mac;
     device["state"] = item.state;
+    device["ble_connected"] = item.bleConnected;
+    device["connections"] = item.connections;
+    device["disconnections"] = item.disconnections;
     device["bad_crc_count"] = item.badFrames;
     device["rejected_measurements"] = item.rejectedMeasurements;
     const bool fresh = item.reading.valid && item.lastReadingMs &&
