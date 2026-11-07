@@ -1,4 +1,4 @@
-# Smart JK ESP32 — firmware de test (0.1.1-dev)
+# Smart JK ESP32 — firmware de test (0.1.3-dev)
 
 **Fonctions actuellement codées** : diagnostic Wi-Fi et retour automatique au mode configuration après 30 secondes d'échec, point d'accès Wi-Fi de configuration, secret unique par appareil, lecture de l'identité, scan BLE, sélection et enregistrement persistant des MAC JK, configuration du Wi-Fi, retour au réseau local et état « pas encore de télémétrie ».
 
@@ -55,3 +55,9 @@ Causes possibles : réseau limité au 5 GHz, mot de passe mal saisi, SSID erron�
 ### Attention en reflashant
 
 Le binaire `*-factory.bin` est une image **complète** destinée à une installation USB depuis l'adresse `0x0000` : elle peut **effacer les données NVS**, notamment le Wi-Fi et le code d'appairage. Le fichier `firmware.bin` (app-only) se flashe à l'adresse `0x10000`, avec un outil supportant explicitement cette adresse, et n'est **pas** une image factory. Ce prototype ne dispose pas encore d'OTA.
+
+## Changement Wi-Fi depuis le LAN (0.1.3-dev)
+
+La route `POST /api/v1/wifi` fonctionne désormais depuis le mode setup **ou** le réseau domestique avec l'en-tête d'authentification individuel. Un succès HTTP confirme l'enregistrement dans les préférences, suivi d'un redémarrage ; la connexion à la box **reste à confirmer dans les logs**. L'ESP32 reviendra automatiquement en mode setup en cas d'échec après 30 secondes.
+
+⚠️ Ce transport en clair est réservé au **réseau domestique de confiance pendant les essais**. Il devra être remplacé par un transport chiffré avant toute distribution.
