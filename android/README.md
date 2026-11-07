@@ -1,4 +1,4 @@
-# Smart Energy Android — prototype Android v0.2.0-dev
+# Smart Energy Android — prototype Android v0.2.1-dev
 
 Un projet Android Studio **réel**, en Kotlin natif, ciblant Android 10+.
 
@@ -102,3 +102,15 @@ La signature Android permanente est traitée séparément dans `docs/APK-SIGNATU
 - Les valeurs absentes/invalides sont affichées indisponibles, pas à 0 ; les paramètres non encore reçus affichent leur état d'attente.
 - L'APK interroge la télémétrie toutes les 2,5 s et le cache des paramètres seulement à la consultation, puis toutes les 30 s au maximum. Cela ne déclenche pas de reconnexion BLE.
 - Lecture strictement seule : **aucun paramètre ne peut être modifié depuis cette version**. L'affichage et le décodeur restent expérimentaux, à comparer à l'application JK constructeur avant toute utilisation plus poussée.
+
+## 0.2.1-dev — accès extérieur avec VPN privé
+
+- Un panneau **« Accès extérieur — VPN privé »** permet d'activer les tentatives automatiques et de tester la connexion sur réseau mobile, après établissement d'un VPN sécurisé avec accès au LAN domestique.
+- L'APK continue à parler à l'ESP32 sur son **adresse privée du domicile** ; elle interdit les IP publiques. La connexion VPN n'est pas fournie par l'ESP32 et nécessite une passerelle de sous-réseau fonctionnant à la maison.
+- Depuis le VPN, la communication est en **lecture seule** (informations, liste des BMS, télémétrie, paramètres). Les commandes qui changent la configuration restent interdites.
+- Les requêtes publiques `/api/v1/info` ne contiennent désormais plus l'en-tête secret. Ne jamais faire de redirection de port HTTP/80 vers l'ESP32.
+- Le mode VPN ne prouve pas à lui seul l'existence d'une route vers la maison. Il faut approuver `192.168.1.0/24` (exemple) côté Tailscale et activer le VPN sur Android.
+- La technologie est **indépendante de Home Assistant** : un routeur Linux, un PC permanent ou un équipement routeur compatible peut relayer le sous-réseau privé. Tailscale est un choix, WireGuard ou une autre solution VPN privée routée conviennent également.
+- Le téléphone avait précédemment une connexion VPN susceptible d'empêcher la découverte mDNS et le transport local ; on utilise ici directement l'IP privée enregistrée.
+
+Voir `docs/ACCES-DISTANT-VPN.md`.
