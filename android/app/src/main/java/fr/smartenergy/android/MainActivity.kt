@@ -103,10 +103,14 @@ class MainActivity : Activity() {
         drawUi()
         selectedDeviceId = prefs.getString("device_id", "") ?: ""
         val savedIp = prefs.getString("local_ip", "") ?: ""
-        if (allowedLocalIp(savedIp) && storedCode().isNotBlank()) {
-            localHost = savedIp
-            lanIp.setText(savedIp)
-            connectHomeLan()
+        if (storedCode().isNotBlank()) {
+            if (allowedLocalIp(savedIp)) {
+                localHost = savedIp
+                lanIp.setText(savedIp)
+                connectHomeLan()
+            } else {
+                discoverHomeLan()
+            }
         }
     }
 
