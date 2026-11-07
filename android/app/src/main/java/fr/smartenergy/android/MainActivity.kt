@@ -46,9 +46,10 @@ import org.json.JSONObject
 import java.net.HttpURLConnection
 import java.net.URL
 import java.util.concurrent.Executors
+import java.util.Locale
 
 /**
- * Smart Energy Android 0.1.5-dev.
+ * Smart Energy Android 0.1.6-dev.
  * Initial provisioning over ESP32's setup AP, subsequent management over home Wi-Fi.
  * Credentials kept encrypted in Android Keystore-backed local preferences.
  * DEVELOPMENT-ONLY HTTP local transport; NOT safe for remote/public use.
@@ -87,6 +88,15 @@ class MainActivity : Activity() {
     private lateinit var homeSsid: EditText
     private lateinit var homePassword: EditText
     private lateinit var scanPanel: LinearLayout
+    private lateinit var telemetryPanel: LinearLayout
+    private lateinit var telemetryStatus: TextView
+    @Volatile private var telemetryBusy = false
+    private val telemetryTicker = object : Runnable {
+        override fun run() {
+            if (lanVerified || (setupTransport && apNetwork != null)) refreshTelemetry()
+            uiHandler.postDelayed(this, 8000)
+        }
+    }
     private lateinit var scanBtn: Button
     private lateinit var saveBtn: Button
     private lateinit var wifiBtn: Button
@@ -298,10 +308,15 @@ class MainActivity : Activity() {
         accessCodeBtn = action("Changer le code de ma passerelle") { changeDeviceCode() }
         add(access, accessCodeBtn)
 
-        val d = section(root, "6. Tableau de bord JK")
-        add(d, label("En attente du décodeur JK V19. Aucune valeur fictive n'est affichée.", color = subdued))
+        val d = section(root, "6. Tableau de bord JK — mesures expérimentales")
+        telemetryStatus = label("Sélectionne ton JK et connecte-toi à l'ESP32. Les mesures seront visibles uniquement si une trame valide est reçue.", 13f, color = subdued)
+        add(d, telemetryStatus)
+        add(d, action("Actualiser les mesures JK") { refreshTelemetry() })
+        telemetryPanel = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        add(d, telemetryPanel)
+        add(d, label("Lecture seule. Format JK02 24S/32S en cours de validation : ne pas utiliser pour une protection batterie.", 12f, color = subdued))
         val e = section(root, "Prochainement")
-        add(e, label("Lecture SOC/cellules · OTA ESP32 · notifications APK · accès distant sécurisé.", color = subdued))
+        add(e, label("Validation sur tes JK V19 · résistance des cellules · OTA ESP32 · accès distant sécurisé.", color = subdued))
 
         val enabled = false
         scanBtn.isEnabled = enabled
@@ -518,6 +533,7 @@ class MainActivity : Activity() {
                 scanBtn.isEnabled = true
                 saveBtn.isEnabled = true
                 wifiBtn.isEnabled = true
+                refreshTelemetry()
                 state("Connecté automatiquement à " + returnedId + " (" + ip + "). " +
                     chosen.size + " batteries mémorisées.")
             }
@@ -766,6 +782,7 @@ class MainActivity : Activity() {
         val json = JSONObject().put("bms", array)
         val response = httpCall("PUT", "/api/v1/bms", json)
         state("${response.optInt("saved")} adresses enregistrées dans l'ESP32 (persistantes).")
+        refreshTelemetry()
     }
 
     private fun sendHomeWifi() {
@@ -826,7 +843,123 @@ class MainActivity : Activity() {
         }
     }
 
+    private fun formatValue(value: Double, decimals: Int = 2): String =
+        String.format(Locale.FRANCE, "%." + decimals + "f", value)
+
+    private fun readerStatus(raw: String): String = when (raw) {
+        "waiting_first_poll" -> "En attente de la première connexion Bluetooth"
+        "searching_ble" -> "Recherche du JK en Bluetooth"
+        "ble_not_seen" -> "JK hors de portée ou déjà connecté à un autre appareil"
+        "connecting_ble" -> "Connexion Bluetooth en cours"
+        "ble_connect_failed" -> "Échec de la connexion Bluetooth"
+        "ble_client_unavailable" -> "Bluetooth indisponible sur l'ESP32"
+        "ffe1_unavailable" -> "Service Bluetooth FFE1 non trouvé"
+        "ble_subscribe_failed" -> "Notifications Bluetooth indisponibles"
+        "waiting_frames" -> "En attente des trames JK"
+        "no_valid_jk_frame" -> "Aucune trame JK valide reçue"
+        "unknown_jk_layout" -> "Trames reçues, mais format JK non reconnu"
+        "valid_sample" -> "Mesures reçues"
+        "stale" -> "Mesures trop anciennes, connexion JK à vérifier"
+        else -> raw.ifBlank { "En attente" }
+    }
+
+    private fun refreshTelemetry() {
+        if (telemetryBusy) return
+        if (!lanVerified && !(setupTransport && apNetwork != null)) {
+            telemetryStatus.text = "Connecte d'abord ton ESP32. Aucune mesure disponible."
+            return
+        }
+        telemetryBusy = true
+        io.execute {
+            try {
+                val reply = httpCall("GET", "/api/v1/telemetry")
+                runOnUiThread { showTelemetry(reply) }
+            } catch (ex: Exception) {
+                runOnUiThread {
+                    telemetryStatus.text = "Lecture JK impossible : " +
+                        (ex.message ?: ex.javaClass.simpleName)
+                }
+            } finally {
+                telemetryBusy = false
+            }
+        }
+    }
+
+    private fun showTelemetry(response: JSONObject) {
+        telemetryPanel.removeAllViews()
+        val devices = response.optJSONArray("devices")
+        if (devices == null) {
+            telemetryStatus.text = if (response.optString("reason") == "jk_decoder_not_implemented") {
+                "Le firmware ESP32 ne dispose pas encore du lecteur JK. La mise à jour 0.1.6-dev est nécessaire."
+            } else {
+                "Lecteur JK non disponible sur ce firmware."
+            }
+            return
+        }
+        if (devices.length() == 0) {
+            telemetryStatus.text = "Aucune batterie JK mémorisée dans l'ESP32."
+            return
+        }
+        telemetryStatus.text = "${devices.length()} batterie(s) configurée(s). Mise à jour automatique toutes les 8 secondes."
+        for (i in 0 until devices.length()) {
+            val item = devices.optJSONObject(i) ?: continue
+            val mac = item.optString("mac")
+            val available = item.optBoolean("available")
+            val title = label("JK " + (i + 1) + " · " + mac, 15f, true, mint)
+            add(telemetryPanel, title, 12)
+            if (!available) {
+                add(telemetryPanel, label(readerStatus(item.optString("state")), 13f, color = subdued))
+                val errors = item.optInt("bad_crc_count") + item.optInt("rejected_measurements")
+                if (errors > 0) add(telemetryPanel, label("Trames invalides ou non reconnues : " + errors, 12f, color = subdued))
+                continue
+            }
+            val m = item.optJSONObject("values") ?: continue
+            val soc = m.optInt("soc_pct")
+            val voltage = formatValue(m.optDouble("voltage_v"))
+            val current = formatValue(m.optDouble("current_a"))
+            val power = formatValue(m.optDouble("power_w"), 1)
+            add(telemetryPanel, label("$soc % SOC  ·  $voltage V", 21f, true))
+            add(telemetryPanel, label("$current A  ·  $power W", 15f))
+            val min = formatValue(m.optDouble("cell_min_v"), 3)
+            val max = formatValue(m.optDouble("cell_max_v"), 3)
+            add(telemetryPanel, label("Cellules : " + m.optInt("cell_count") +
+                "  |  min. " + min + " V  |  max. " + max + " V"))
+            add(telemetryPanel, label("Écart : " + m.optInt("cell_delta_mv") +
+                " mV  ·  Cycles : " + m.optInt("cycles")))
+            val tempLine = listOf(
+                Pair("T1", "temp1_c"), Pair("T2", "temp2_c"), Pair("MOS", "mos_temp_c")
+            ).joinToString("  ·  ") { (title, key) ->
+                title + " : " + (if (m.has(key) && !m.isNull(key))
+                    formatValue(m.optDouble(key), 1) + " °C" else "indisponible")
+            }
+            add(telemetryPanel, label(tempLine, 12f, color = subdued))
+            add(telemetryPanel, label("Format " + m.optString("frame_layout") +
+                " · Mesure datant de " + item.optInt("age_seconds") + " s",
+                12f, color = subdued))
+            val cells = m.optJSONArray("cells") ?: JSONArray()
+            for (index in 0 until cells.length()) {
+                val cell = cells.optJSONObject(index) ?: continue
+                add(telemetryPanel, label("Cellule " + cell.optInt("number") +
+                    "   " + formatValue(cell.optDouble("voltage_v"), 3) + " V",
+                    13f, color = subdued), 2)
+            }
+            add(telemetryPanel, label("Données expérimentales, ne pas utiliser pour commander le BMS.",
+                12f, color = subdued), 8)
+        }
+    }
+
+    override fun onResume() {
+        super.onResume()
+        uiHandler.removeCallbacks(telemetryTicker)
+        uiHandler.postDelayed(telemetryTicker, 3000)
+    }
+    override fun onPause() {
+        uiHandler.removeCallbacks(telemetryTicker)
+        super.onPause()
+    }
+
     override fun onDestroy() {
+        uiHandler.removeCallbacks(telemetryTicker)
         discoverListener?.let { listener ->
             try { (getSystemService(Context.NSD_SERVICE) as NsdManager).stopServiceDiscovery(listener) }
             catch (_: Exception) {}
