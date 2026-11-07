@@ -1,5 +1,14 @@
 # Journal des modifications
 
+## 0.1.8-dev — récupération physique sans ancien code (2026-11-07)
+
+- ESP32 : confirmation par BOOT 4 secondes et fenêtre d'association LAN de 45 secondes ; aucun code ancien révélé par le réseau.
+- API de réassociation limitée dans le temps, un seul changement de code par confirmation, sans effacer Wi-Fi ni JK.
+- APK : bouton « Code perdu ? Réassocier avec BOOT », générateur sécurisé de nouveau code, sauvegarde Android Keystore après vérification.
+- BOOT maintenu 10 secondes ouvre désormais le mode point d'accès ; l'usage du bouton change à partir de ce firmware.
+- Requiert un premier flash pour les anciennes versions : **pas d'OTA**. Fonction test local seulement, **HTTP non chiffré**.
+- Les APK debug ne sont pas encore signées avec la clé permanente de production.
+
 ## 0.1.6-dev — première télémétrie JK Bluetooth autonome (2026-11-07)
 
 - Acquisition Bluetooth GATT `FFE0/FFE1` en tâche indépendante ESP32, requêtes de lecture `0x97/0x96` uniquement.
