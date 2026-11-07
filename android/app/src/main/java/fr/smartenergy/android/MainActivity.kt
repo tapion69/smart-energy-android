@@ -372,7 +372,7 @@ class MainActivity : Activity() {
         // Authenticated request: do NOT save a code merely because /info answers.
         httpCall("GET", "/api/v1/bms")
         val deviceId = info.optString("device_id")
-        if (!Regex("^smartjk-[A-F0-9]{6}$").matches(deviceId, RegexOption.IGNORE_CASE)) {
+        if (!Regex("^smartjk-[A-F0-9]{6}$", RegexOption.IGNORE_CASE).matches(deviceId)) {
             state("Identifiant ESP32 invalide.")
             return@async
         }
