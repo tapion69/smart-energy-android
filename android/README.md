@@ -1,16 +1,36 @@
-# Android Studio — application Smart Energy
+# Smart Energy Android — première version de développement
 
-**État : conception. Aucun projet Android exécutable n'est encore présent dans ce dépôt.**
+Un projet Android Studio **réel**, en Kotlin natif, ciblant Android 10+.
 
-Cible : application Android native en Kotlin, avec un assistant d'appairage et de provisionnement, connexion locale, gestion de plusieurs passerelles et écrans JK / Voltronic indépendants.
+## Fonctionnalités codées (0.1.0-dev)
 
-### Première livraison de code exigée
+- Formulaire pour SSID `SmartJK-Setup-XXXXXX` et code unique de l'ESP32.
+- Demande de connexion au Wi-Fi de l'ESP32 via la boîte de dialogue système Android (WifiNetworkSpecifier). Le téléphone ne doit pas être configuré manuellement dans les réglages.
+- Lecture de l'identité du firmware à `192.168.4.1`.
+- Scan BLE effectué **par l'ESP32** et affichage MAC/nom/RSSI.
+- Sélection multiple de BMS, stockage dans l'ESP32, sans YAML.
+- Saisie et transfert Wi-Fi maison, puis redémarrage de l'ESP32.
+- Aucune fausse mesure ou commande critique.
 
-- Parcours « Ajouter une passerelle JK » qui fonctionne avec un vrai ESP32 de test.
-- Provisionnement Wi-Fi depuis le téléphone **sans YAML**.
-- Scan des BMS depuis l'ESP32 ; sélection et sauvegarde des adresses dans la passerelle.
-- Mesures et état de fraîcheur vrais ; aucun chiffre de démonstration sur l'écran opérationnel.
-- Enregistrement des passerelles, y compris identification matérielle stable.
-- Écran des mises à jour (état « non publié » tant qu'aucune release n'existe).
+## Limites
 
-La première version **ne doit pas** demander à l'utilisateur d'éditer une MAC ou un mot de passe dans du code.
+- Cette version ne lit **pas encore** les valeurs JK V19. Le firmware renvoie `available:false` pour la télémétrie.
+- Le secret de l'ESP32 neuf est fourni par le moniteur série USB pendant la phase de test. Le provisionnement QR/étiquette sera conçu avant publication publique.
+- Transport HTTP local provisoire limité au Wi-Fi de configuration : pas d'accès distant, pas d'OTA ni de mise à jour APK active.
+- La sélection de BMS s'applique à un ESP32 à la fois ; capacité BLE réelle encore à tester.
+- Ni compilation Android, ni flash ESP32, ni test matériel effectués automatiquement lors de ce commit.
+
+## Ouvrir le projet
+
+1. Dans Android Studio : **File > Open** puis choisir le dossier `android` (celui qui contient `settings.gradle.kts`).
+2. Attendre **Gradle Sync** (JDK 17, Android SDK Platform 35).
+3. **Build > Build APK(s)** puis installer sur le téléphone Android.
+4. Installer sur un ESP32 *supplémentaire* le firmware du dossier `firmware/jk-esp32`, depuis VS Code + PlatformIO.
+5. Lire SSID / code de la passerelle dans le moniteur série à 115200.
+6. Démarrer l'APK, accorder les autorisations demandées et suivre les trois étapes.
+
+**Important :** l'ESP32 actuellement utilisé en Bluetooth Proxy HA n'est pas compatible avec cette APK et ne doit pas être reflashé pour ce premier essai.
+
+## Suite
+
+Après validation de ce parcours sur matériel réel, intégrer le décodeur JK V19, la reconnexion multi-BMS, les mises à jour OTA authentifiées, et la vérification des Releases APK.
