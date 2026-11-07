@@ -44,3 +44,14 @@ Après validation de ce parcours sur matériel réel, intégrer le décodeur JK 
 - Après confirmation de l'ESP32, l'APK indique clairement le redémarrage. Si l'enregistrement échoue, l'APK affiche le message d'erreur dans la même section.
 
 **Limites :** le lien local est en HTTP non chiffré sur un réseau privé de test. Ne pas publier comme produit commercial. Les APK debug GitHub Actions peuvent être signées avec des clés différentes : une désinstallation peut être nécessaire et fait perdre l'association mémorisée sur le téléphone ; il faut une clé de signature Android stable pour éviter ce problème.
+
+## 0.1.4-dev — Configuration assistée par l'application
+
+- Recherche automatique **des ESP32 en mode appairage** à partir des points d'accès Wi-Fi proches sur le téléphone ; peut nécessiter l'autorisation de localisation et que la localisation Android soit activée. Le mode d'association utilise encore le code unique **une seule fois**.
+- Recherche **par l'ESP32** des réseaux Wi-Fi **2,4 GHz uniquement** et sélection dans une liste. L'utilisateur n'entre que le mot de passe Wi-Fi du réseau choisi.
+- Le même bouton de découverte mDNS continue à retrouver les passerelles déjà associées sur le LAN.
+- Trafic HTTP dirigé explicitement vers le réseau Wi-Fi approprié ; erreurs VPN et réseau temporaire interrompu mieux expliquées.
+- Changement du code ESP32 depuis l'APK (8–32 caractères, conservé dans Keystore). Un code universel `1234` n'est **pas** employé : WPA2 requiert au moins huit caractères et un code par défaut public permettrait un accès non autorisé.
+- Transport local HTTP non chiffré **réservé aux tests**, pas de sortie WAN, pas d'OTA, pas encore de télémétrie JK.
+
+**Séquence** : installer firmware ESP32 0.1.4-dev et APK 0.1.4-dev → trouver la passerelle sur le LAN ou en mode BOOT → associer une seule fois → « Rechercher les réseaux Wi-Fi disponibles » → sélectionner le SSID 2,4 GHz → saisir son mot de passe → « Enregistrer ». Quand la passerelle est déjà connectée à la box et que l'on ne veut pas changer de réseau, passer directement au scan BLE.
