@@ -22,6 +22,7 @@ String setupSsid;
 String setupCode;
 bool setupMode = false;
 bool mdnsRunning = false;
+uint32_t nextMdnsAttemptAt = 0;
 uint32_t restartAt = 0;
 uint32_t buttonPressedAt = 0;
 uint32_t wifiAttemptAt = 0;
@@ -73,6 +74,7 @@ void onWifiEvent(WiFiEvent_t event, WiFiEventInfo_t info) {
 }
 void startSetup() {
   wifiAttemptAt = 0;
+  nextMdnsAttemptAt = 0;
   if (mdnsRunning) {
     MDNS.end();
     mdnsRunning = false;
