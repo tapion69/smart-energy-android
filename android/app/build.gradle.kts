@@ -9,8 +9,8 @@ android {
         applicationId = "fr.smartenergy.android"
         minSdk = 29
         targetSdk = 35
-        versionCode = 3
-        versionName = "0.1.3-dev"
+        versionCode = 4
+        versionName = "0.1.4-dev"
     }
     buildTypes {
         release {
