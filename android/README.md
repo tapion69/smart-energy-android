@@ -1,4 +1,4 @@
-# Smart Energy Android — prototype Android v0.1.6-dev
+# Smart Energy Android — prototype Android v0.1.8-dev
 
 Un projet Android Studio **réel**, en Kotlin natif, ciblant Android 10+.
 
@@ -74,3 +74,11 @@ Après validation de ce parcours sur matériel réel, intégrer le décodeur JK 
 - Le moteur BLE **n'a pas encore été testé sur la batterie physique**. Les tests automatiques portent uniquement sur des trames synthétiques, leur checksum et les fragments.
 
 **Installation :** firmware ESP32 0.1.6-dev et APK Android 0.1.6-dev nécessaires pour obtenir les premières mesures. L'ESP32 relit la liste de MAC mémorisées ; il n'est normalement pas nécessaire de sélectionner à nouveau le JK **si la mise à jour du firmware préserve NVS**. Lors des premiers tests, éviter une seconde connexion BLE simultanée au même JK.
+
+## 0.1.8-dev — Code ESP32 perdu : bouton BOOT, sans reconfigurer le Wi-Fi
+
+Dans la section 1, saisir l'adresse locale de l'ESP32 et appuyer sur **« Code perdu ? Réassocier avec BOOT »**. Sur l'ESP32 équipé de la v0.1.8, maintenir BOOT **4 secondes, puis relâcher**. Valider dans l'APK dans les **45 secondes**. L'APK crée un nouveau code de 20 caractères aléatoires, le fait enregistrer par l'ESP32, vérifie l'accès à sa liste de BMS puis conserve le code avec Android Keystore. Le Wi-Fi, les batteries JK et leurs adresses MAC **restent enregistrés**.
+
+Si l'ESP32 utilise encore la v0.1.6, il n'existe pas de récupération distante sans authentification. Rechercher d'abord le code dans les anciens journaux USB ou flasher une fois la v0.1.8. **Ne jamais ajouter de route HTTP exposant l'ancien code.** La fonction expérimentale s'utilise sur un réseau local privé de confiance, pas à distance via un port ouvert.
+
+La signature Android permanente est traitée séparément dans `docs/APK-SIGNATURE-PERMANENTE.md` et nécessite les secrets GitHub avant de produire un artifact signé. Les APK debug peuvent toujours nécessiter une réinstallation.
