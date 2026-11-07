@@ -1,5 +1,15 @@
 # Journal des modifications
 
+## 0.1.9-dev — connexion BLE persistante et tableau de bord JK (2026-11-07)
+
+- ESP32 : connexion JK maintenue tant que le BLE est actif, plus de déconnexion volontaire à chaque échantillon.
+- Cache HTTP non bloquant ; reconnexion progressive après perte, lectures `0x96` limitées en cas d'absence de nouvelles trames.
+- Télémétrie : statut BLE, compteurs de connexions/déconnexions, refus d'afficher une mesure vieille de plus de 20 s.
+- APK : mise à jour des valeurs toutes les 2,5 s, sans recréer la totalité des vues ; interface native moderne avec jauge SOC, cellules en 2 colonnes, températures et cycles.
+- Masquage du format JK technique dans l'interface, conservation de l'accès aux réglages derrière « Configuration et association ».
+- Maintien de la réassociation par bouton BOOT déjà développée.
+- Compilation automatisée et tests synthétiques ; **réduction des bips et rapidité réelles à confirmer sur le JK**.
+
 ## 0.1.8-dev — récupération physique sans ancien code (2026-11-07)
 
 - ESP32 : confirmation par BOOT 4 secondes et fenêtre d'association LAN de 45 secondes ; aucun code ancien révélé par le réseau.
