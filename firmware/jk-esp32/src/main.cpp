@@ -8,6 +8,7 @@
 #include <ESPmDNS.h>
 #include <NimBLEDevice.h>
 #include <ArduinoJson.h>
+#include <ctype.h>
 
 static const char *VERSION = "0.1.0-dev";
 static const int SETUP_BUTTON = 0; // Hold BOOT for 4 s AFTER startup to reopen setup
@@ -233,10 +234,9 @@ void setup() {
   http.on("/api/v1/wifi", HTTP_POST, onSetWifi);
   http.on("/api/v1/telemetry", HTTP_GET, onTelemetry);
   http.onNotFound([] { error(404, "unknown_route"); });
-  http.begin();
-
   if (prefs.getString("ssid", "").isEmpty()) startSetup();
   else connectHome();
+  http.begin();
 }
 void loop() {
   http.handleClient();
