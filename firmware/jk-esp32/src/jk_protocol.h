@@ -132,12 +132,15 @@ inline bool decodeFrame(const uint8_t *frame, Reading &out) {
 
 class Assembler {
  public:
+  using FrameCallback = void (*)(const uint8_t *frame,
+                                 const Reading *validTelemetry, void *context);
   void reset() { used_ = 0; badCrc = validFrames = rejectedMeasurements = 0; }
   uint32_t badCrc = 0;
   uint32_t validFrames = 0;
   uint32_t rejectedMeasurements = 0;
   // Returns true only when one or more full, validated telemetry frames decoded.
-  bool append(const uint8_t *data, size_t size, Reading &latest) {
+  bool append(const uint8_t *data, size_t size, Reading &latest,
+              FrameCallback onFrame = nullptr, void *context = nullptr) {
     if (!data || !size) return false;
     bool decoded = false;
     for (size_t k = 0; k < size; ++k) {
@@ -172,9 +175,12 @@ class Assembler {
           if (decodeFrame(buffer_, reading)) {
             latest = reading;
             decoded = true;
+            if (onFrame) onFrame(buffer_, &reading, context);
           } else {
             ++rejectedMeasurements;
           }
+        } else if (onFrame && (buffer_[4] == 1 || buffer_[4] == 3)) {
+          onFrame(buffer_, nullptr, context);
         }
         used_ -= FRAME_LEN;
         if (used_) memmove(buffer_, buffer_ + FRAME_LEN, used_);
