@@ -42,7 +42,7 @@ import java.net.URL
 import java.util.concurrent.Executors
 
 /**
- * Smart Energy Android 0.1.2-dev.
+ * Smart Energy Android 0.1.3-dev.
  * Initial provisioning over ESP32's setup AP, subsequent management over home Wi-Fi.
  * Credentials kept encrypted in Android Keystore-backed local preferences.
  * DEVELOPMENT-ONLY HTTP local transport; NOT safe for remote/public use.
@@ -63,6 +63,7 @@ class MainActivity : Activity() {
     @Volatile private var activeSetupCode = ""
     @Volatile private var activeSetupSsid = ""
     @Volatile private var localHost = ""
+    @Volatile private var lanVerified = false
     @Volatile private var selectedDeviceId = ""
     private val uiHandler = Handler(Looper.getMainLooper())
     private lateinit var lanIp: EditText
@@ -81,6 +82,7 @@ class MainActivity : Activity() {
     private lateinit var scanBtn: Button
     private lateinit var saveBtn: Button
     private lateinit var wifiBtn: Button
+    private lateinit var wifiStatus: TextView
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -254,9 +256,11 @@ class MainActivity : Activity() {
         homePassword = input("Mot de passe Wi-Fi", true)
         add(c, homeSsid)
         add(c, homePassword)
-        wifiBtn = action("Enregistrer le Wi-Fi dans l'ESP32") { sendHomeWifi() }
+        wifiBtn = action("Enregistrer / modifier le Wi-Fi") { sendHomeWifi() }
         add(c, wifiBtn)
-        add(c, label("Après validation, l'ESP32 redémarre et rejoint le réseau de la maison. Le téléphone quitte alors son Wi-Fi temporaire.", 12f, color = subdued))
+        wifiStatus = label("Si ton ESP32 est déjà connecté à ta box, inutile de remplir cette section. Ce bouton sert à changer le réseau Wi-Fi.", 13f, color = subdued)
+        add(c, wifiStatus)
+        add(c, label("Réseau local de confiance uniquement (HTTP non chiffré dans ce prototype). Le firmware doit être en v0.1.3-dev pour modifier le Wi-Fi depuis la box.", 12f, color = subdued))
 
         val d = section(root, "5. Tableau de bord JK")
         add(d, label("En attente du décodeur JK V19. Aucune valeur fictive n'est affichée.", color = subdued))
@@ -266,10 +270,15 @@ class MainActivity : Activity() {
         val enabled = false
         scanBtn.isEnabled = enabled
         saveBtn.isEnabled = enabled
-        wifiBtn.isEnabled = enabled
+        wifiBtn.isEnabled = true // Toujours cliquable pour expliquer les prérequis.
     }
 
     private fun state(message: String) = runOnUiThread { status.text = message }
+
+    private fun wifiState(message: String) = runOnUiThread {
+        wifiStatus.text = message
+        status.text = message
+    }
 
     private fun connectSetupAp() {
         if (Build.VERSION.SDK_INT >= 33 &&
@@ -290,6 +299,7 @@ class MainActivity : Activity() {
             return
         }
         releaseConnection()
+        lanVerified = false
         activeSetupCode = password
         activeSetupSsid = ssid
         localHost = ""
@@ -389,6 +399,7 @@ class MainActivity : Activity() {
     }
 
     private fun connectHomeLan() {
+        lanVerified = false
         releaseConnection()
         val ip = lanIp.text.toString().trim()
         if (!allowedLocalIp(ip)) {
@@ -418,10 +429,11 @@ class MainActivity : Activity() {
             chosen.clear()
             for (i in 0 until storedBms.length()) chosen.add(storedBms.optString(i))
             prefs.edit().putString("local_ip", ip).apply()
+            lanVerified = true
             runOnUiThread {
                 scanBtn.isEnabled = true
                 saveBtn.isEnabled = true
-                wifiBtn.isEnabled = false
+                wifiBtn.isEnabled = true
                 state("Connecté automatiquement à " + returnedId + " (" + ip + "). " +
                     chosen.size + " batteries mémorisées.")
             }
@@ -528,25 +540,58 @@ class MainActivity : Activity() {
     }
 
     private fun sendHomeWifi() {
-        val ssid = homeSsid.text.toString()
+        val ssid = homeSsid.text.toString().trim()
         val pass = homePassword.text.toString()
         if (ssid.isBlank() || ssid.length > 32 || pass.length !in 8..63) {
-            state("SSID requis ; mot de passe Wi-Fi de 8 à 63 caractères.")
+            wifiState("Renseigne un SSID et un mot de passe Wi-Fi de 8 à 63 caractères.")
             return
         }
+        val viaSetup = apNetwork != null
+        if (!viaSetup && !lanVerified) {
+            wifiState("Connecte d'abord la passerelle dans la section 1 (Wi-Fi maison), ou utilise le mode configuration dans la section 2.")
+            return
+        }
+        wifiBtn.isEnabled = false
         async {
-            state("Enregistrement du Wi-Fi de la maison…")
-            val response = httpCall("POST", "/api/v1/wifi",
-                JSONObject().put("ssid", ssid).put("password", pass))
-            if (response.optBoolean("ok")) {
-                switchingToHome = true
+            try {
+                wifiState("Vérification de l'ESP32 et enregistrement Wi-Fi en cours…")
+                if (!viaSetup) {
+                    val info = httpCall("GET", "/api/v1/info")
+                    if (info.optString("product") != "smart-jk-esp32" ||
+                        info.optString("device_id") != prefs.getString("device_id", "") ||
+                        !info.optBoolean("wifi_connected")) {
+                        throw IllegalStateException("L'ESP32 local ne correspond pas à celui associé.")
+                    }
+                    if (!info.optString("version").startsWith("0.1.3")) {
+                        throw IllegalStateException("Le firmware ESP32 doit être en v0.1.3 pour changer le Wi-Fi depuis le réseau de la maison. L'ancien firmware ne le permet qu'en mode configuration.")
+                    }
+                }
+                val response = httpCall("POST", "/api/v1/wifi",
+                    JSONObject().put("ssid", ssid).put("password", pass))
+                if (!response.optBoolean("ok")) {
+                    throw IllegalStateException("L'ESP32 n'a pas confirmé l'enregistrement.")
+                }
                 runOnUiThread {
                     homePassword.text.clear()
                     setupCode.text.clear()
-                    state("Wi-Fi enregistré. L'ESP32 redémarre : reconnecte le téléphone à ta box.")
                 }
-                releaseConnection()
-                runOnUiThread { discoverHomeLan() }
+                if (viaSetup) {
+                    switchingToHome = true
+                    releaseConnection()
+                    wifiState("Wi-Fi enregistré. L'ESP32 redémarre. Reconnecte ton téléphone à la box ; la passerelle sera ensuite retrouvée sur le réseau local.")
+                    uiHandler.postDelayed({ discoverHomeLan() }, 9000)
+                } else {
+                    lanVerified = false
+                    wifiState("Wi-Fi enregistré. L'ESP32 redémarre : vérification de sa reconnexion au réseau de la maison…")
+                    uiHandler.postDelayed({
+                        if (allowedLocalIp(localHost)) connectHomeLan() else discoverHomeLan()
+                    }, 9000)
+                }
+            } catch (ex: Exception) {
+                wifiState("Enregistrement Wi-Fi impossible : " +
+                    (ex.message ?: ex.javaClass.simpleName) + ". Aucun succès confirmé.")
+            } finally {
+                runOnUiThread { wifiBtn.isEnabled = true }
             }
         }
     }
