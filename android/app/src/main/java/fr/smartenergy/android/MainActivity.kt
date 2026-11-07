@@ -13,6 +13,11 @@ import android.net.Network
 import android.net.NetworkCapabilities
 import android.net.NetworkRequest
 import android.net.wifi.WifiNetworkSpecifier
+import android.net.wifi.WifiManager
+import android.location.LocationManager
+import android.widget.RadioButton
+import android.widget.RadioGroup
+import android.view.View
 import android.net.nsd.NsdManager
 import android.net.nsd.NsdServiceInfo
 import android.os.Handler
@@ -42,7 +47,7 @@ import java.net.URL
 import java.util.concurrent.Executors
 
 /**
- * Smart Energy Android 0.1.3-dev.
+ * Smart Energy Android 0.1.4-dev.
  * Initial provisioning over ESP32's setup AP, subsequent management over home Wi-Fi.
  * Credentials kept encrypted in Android Keystore-backed local preferences.
  * DEVELOPMENT-ONLY HTTP local transport; NOT safe for remote/public use.
@@ -64,6 +69,8 @@ class MainActivity : Activity() {
     @Volatile private var activeSetupSsid = ""
     @Volatile private var localHost = ""
     @Volatile private var lanVerified = false
+    @Volatile private var setupTransport = false
+    @Volatile private var lastLanFirmwareVersion = ""
     @Volatile private var selectedDeviceId = ""
     private val uiHandler = Handler(Looper.getMainLooper())
     private lateinit var lanIp: EditText
@@ -83,6 +90,12 @@ class MainActivity : Activity() {
     private lateinit var saveBtn: Button
     private lateinit var wifiBtn: Button
     private lateinit var wifiStatus: TextView
+    private lateinit var wifiNetworks: RadioGroup
+    private lateinit var wifiScanBtn: Button
+    private lateinit var accessCodeNew: EditText
+    private lateinit var accessCodeBtn: Button
+    private lateinit var autoEspBtn: Button
+    private val wifiManager by lazy { applicationContext.getSystemService(Context.WIFI_SERVICE) as WifiManager }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -226,13 +239,15 @@ class MainActivity : Activity() {
         add(lan, lanIp)
         lanConnectBtn = action("Se connecter à ma passerelle") { connectHomeLan() }
         add(lan, lanConnectBtn)
-        lanDiscoverBtn = action("Rechercher automatiquement la passerelle") { discoverHomeLan() }
+        lanDiscoverBtn = action("Rechercher sur mon Wi-Fi") { discoverHomeLan() }
         add(lan, lanDiscoverBtn)
+        autoEspBtn = action("Trouver un ESP32 proche") { findNearbyEsp32() }
+        add(lan, autoEspBtn)
         add(lan, label("La recherche utilise mDNS ; si elle échoue, renseigne une fois l'adresse IP vue dans les journaux ESP32.", 12f, color = subdued))
 
         val a = section(root, "2. Première association / dépannage")
 
-        add(a, label("À utiliser seulement lors du premier appairage ou si le Wi-Fi de la box a changé.", color = subdued))
+        add(a, label("Le nom de l’ESP32 peut être trouvé automatiquement ci-dessus. Son code unique est à entrer une seule fois lors de la première association.", color = subdued))
         apName = input("SmartJK-Setup-XXXXXX")
         setupCode = input("Code unique de l'ESP32 (vide = code mémorisé)", true)
         apName.setText(prefs.getString("setup_ssid", "") ?: "")
@@ -251,10 +266,19 @@ class MainActivity : Activity() {
         add(b, saveBtn)
         add(b, label("Pour ce jalon, la sélection est conservée après redémarrage ; la lecture des mesures JK sera ajoutée ensuite.", 12f, color = subdued))
 
-        val c = section(root, "4. Changer le Wi-Fi de la maison")
+        val c = section(root, "4. Connecter l'ESP32 à un réseau Wi-Fi 2,4 GHz")
+        wifiScanBtn = action("Rechercher les réseaux Wi-Fi disponibles") { scanRouterWifi() }
+        add(c, wifiScanBtn)
+        wifiNetworks = RadioGroup(this).apply { orientation = RadioGroup.VERTICAL }
+        add(c, wifiNetworks)
+        add(c, label("Choisis un réseau dans la liste. Seuls les réseaux 2,4 GHz accessibles à l'ESP32 sont proposés.", 12f, color = subdued))
         homeSsid = input("Nom de ton réseau Wi-Fi (SSID)")
         homePassword = input("Mot de passe Wi-Fi", true)
+        homeSsid.visibility = View.GONE
         add(c, homeSsid)
+        add(c, action("Saisir un nom de réseau manuellement") {
+            homeSsid.visibility = if (homeSsid.visibility == View.VISIBLE) View.GONE else View.VISIBLE
+        })
         add(c, homePassword)
         wifiBtn = action("Enregistrer / modifier le Wi-Fi") { sendHomeWifi() }
         add(c, wifiBtn)
@@ -262,7 +286,14 @@ class MainActivity : Activity() {
         add(c, wifiStatus)
         add(c, label("Réseau local de confiance uniquement (HTTP non chiffré dans ce prototype). Le firmware doit être en v0.1.3-dev pour modifier le Wi-Fi depuis la box.", 12f, color = subdued))
 
-        val d = section(root, "5. Tableau de bord JK")
+        val access = section(root, "5. Code d'accès de l'ESP32")
+        add(access, label("Modifie le code personnel de la passerelle après association. Minimum 8 caractères pour protéger aussi son point d'accès Wi-Fi.", 13f, color = subdued))
+        accessCodeNew = input("Nouveau code ESP32 (8 à 32 caractères)", true)
+        add(access, accessCodeNew)
+        accessCodeBtn = action("Changer le code de ma passerelle") { changeDeviceCode() }
+        add(access, accessCodeBtn)
+
+        val d = section(root, "6. Tableau de bord JK")
         add(d, label("En attente du décodeur JK V19. Aucune valeur fictive n'est affichée.", color = subdued))
         val e = section(root, "Prochainement")
         add(e, label("Lecture SOC/cellules · OTA ESP32 · notifications APK · accès distant sécurisé.", color = subdued))
@@ -270,7 +301,9 @@ class MainActivity : Activity() {
         val enabled = false
         scanBtn.isEnabled = enabled
         saveBtn.isEnabled = enabled
-        wifiBtn.isEnabled = true // Toujours cliquable pour expliquer les prérequis.
+        wifiBtn.isEnabled = true // Always show actionable diagnostics.
+        wifiScanBtn.isEnabled = true
+        accessCodeBtn.isEnabled = true
     }
 
     private fun state(message: String) = runOnUiThread { status.text = message }
@@ -294,12 +327,13 @@ class MainActivity : Activity() {
         }
         val ssid = apName.text.toString().trim()
         val password = setupCode.text.toString().trim().uppercase().ifBlank { storedCode() }
-        if (!Regex("^SmartJK-Setup-[A-F0-9]{6}$").matches(ssid) || password.length != 12) {
-            state("Vérifie le SSID SmartJK-Setup-XXXXXX et son code à 12 caractères.")
+        if (!Regex("^SmartJK-Setup-[A-F0-9]{6}$").matches(ssid) || password.length !in 8..32) {
+            state("Vérifie le réseau SmartJK détecté et son code personnel (8 à 32 caractères).")
             return
         }
         releaseConnection()
         lanVerified = false
+        setupTransport = true
         activeSetupCode = password
         activeSetupSsid = ssid
         localHost = ""
@@ -319,7 +353,7 @@ class MainActivity : Activity() {
                 fetchInfo()
             }
             override fun onLost(network: Network) {
-                apNetwork = null
+                if (apNetwork == network) apNetwork = null
                 if (!switchingToHome) state("Connexion à l'ESP32 perdue.")
             }
             override fun onUnavailable() { state("Connexion refusée ou ESP32 introuvable. Vérifie le code.") }
@@ -331,6 +365,7 @@ class MainActivity : Activity() {
     }
 
     private fun releaseConnection() {
+        setupTransport = false
         apNetwork = null
         callback?.let {
             try { connectivity.unregisterNetworkCallback(it) } catch (_: Exception) {}
@@ -340,13 +375,20 @@ class MainActivity : Activity() {
 
     private fun httpCall(method: String, path: String, payload: JSONObject? = null): JSONObject {
         require(path.startsWith("/api/v1/"))
-        val network = apNetwork
-        val conn = if (network != null) {
+        val conn = if (setupTransport) {
+            val network = apNetwork ?: throw IllegalStateException("Connexion temporaire ESP32 perdue. Relance l'association dans la section 2.")
+            if (connectivity.getNetworkCapabilities(network)?.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) != true) {
+                throw IllegalStateException("Connexion Wi-Fi temporaire inactive. Vérifie le VPN et relance la connexion à l'ESP32.")
+            }
             network.openConnection(URL("http://192.168.4.1" + path)) as HttpURLConnection
         } else {
             val host = localHost
-            if (!allowedLocalIp(host)) throw IllegalStateException("Associe d'abord l'ESP32 ou indique une adresse locale.")
-            URL("http://" + host + path).openConnection() as HttpURLConnection
+            if (!allowedLocalIp(host)) throw IllegalStateException("Retrouve l'ESP32 sur ton réseau local.")
+            // Route to a live Wi-Fi Network, not through a stale setup Network or mobile data/VPN.
+            val wifiNetwork = connectivity.allNetworks.firstOrNull { network ->
+                connectivity.getNetworkCapabilities(network)?.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) == true
+            } ?: throw IllegalStateException("Téléphone non connecté au Wi-Fi de la maison. Vérifie le VPN et le Wi-Fi.")
+            wifiNetwork.openConnection(URL("http://" + host + path)) as HttpURLConnection
         }
         return try {
             conn.connectTimeout = 8000
@@ -400,6 +442,7 @@ class MainActivity : Activity() {
 
     private fun connectHomeLan() {
         lanVerified = false
+        lastLanFirmwareVersion = ""
         releaseConnection()
         val ip = lanIp.text.toString().trim()
         if (!allowedLocalIp(ip)) {
@@ -430,6 +473,7 @@ class MainActivity : Activity() {
             for (i in 0 until storedBms.length()) chosen.add(storedBms.optString(i))
             prefs.edit().putString("local_ip", ip).apply()
             lanVerified = true
+            lastLanFirmwareVersion = info.optString("version")
             runOnUiThread {
                 scanBtn.isEnabled = true
                 saveBtn.isEnabled = true
@@ -467,7 +511,9 @@ class MainActivity : Activity() {
             override fun onDiscoveryStopped(serviceType: String) { discoverListener = null }
             override fun onServiceLost(serviceInfo: NsdServiceInfo) {}
             override fun onServiceFound(serviceInfo: NsdServiceInfo) {
-                if (found || !serviceInfo.serviceName.startsWith("smartjk-", true)) return
+                val expected = prefs.getString("device_id", "") ?: ""
+                if (found || !serviceInfo.serviceName.startsWith("smartjk-", true) ||
+                    (expected.isNotBlank() && !serviceInfo.serviceName.equals(expected, true))) return
                 nsd.resolveService(serviceInfo, object : NsdManager.ResolveListener {
                     override fun onResolveFailed(serviceInfo: NsdServiceInfo, errorCode: Int) {}
                     override fun onServiceResolved(serviceInfo: NsdServiceInfo) {
