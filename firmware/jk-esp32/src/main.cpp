@@ -7,10 +7,11 @@
 #include <Preferences.h>
 #include <ESPmDNS.h>
 #include <NimBLEDevice.h>
+#include "jk_reader.h"
 #include <ArduinoJson.h>
 #include <ctype.h>
 
-static const char *VERSION = "0.1.4-dev";
+static const char *VERSION = "0.1.6-dev";
 static const uint32_t WIFI_JOIN_TIMEOUT_MS = 30000; // Return to setup after 30s
 static const int SETUP_BUTTON = 0; // Hold BOOT for 4 s AFTER startup to reopen setup
 static const uint32_t HOLD_MS = 4000;
@@ -130,7 +131,8 @@ void onInfo() {
   doc["lan_management"] = true;
   doc["wifi_scan"] = true;
   doc["change_code"] = true;
-  doc["telemetry"] = false;
+  doc["telemetry"] = true;
+  doc["telemetry_experimental"] = true;
   doc["ota"] = false;
   respond(200, doc);
 }
@@ -146,6 +148,7 @@ void onConfiguredBms() {
 }
 void onScan() {
   if (!requireControl()) return;
+  if (!jkreader::acquireRadio(1800)) { error(503, "ble_radio_busy_retry"); return; }
   NimBLEScan *scan = NimBLEDevice::getScan();
   scan->setActiveScan(true);
   scan->setMaxResults(40);
@@ -165,6 +168,7 @@ void onScan() {
     // Scan results are nearby BLE devices, not guaranteed JK BMS.
   }
   scan->clearResults();
+  jkreader::releaseRadio();
   respond(200, doc);
 }
 void onSaveBms() {
@@ -201,6 +205,7 @@ void onSaveBms() {
     error(500, "storage_failed");
     return;
   }
+  jkreader::setConfigured(target);
   JsonDocument resp;
   resp["ok"] = true;
   resp["saved"] = target.size();
@@ -211,8 +216,10 @@ void onSaveBms() {
 // Only 2.4 GHz networks can be seen by classic ESP32.
 void onWifiScan() {
   if (!requireControl()) return;
+  if (!jkreader::acquireRadio(2000)) { error(503, "radio_busy_retry"); return; }
   int count = WiFi.scanNetworks(false, true);
   if (count < 0) {
+    jkreader::releaseRadio();
     error(503, "wifi_scan_failed");
     return;
   }
@@ -239,6 +246,7 @@ void onWifiScan() {
     network["secured"] = WiFi.encryptionType(i) != WIFI_AUTH_OPEN;
   }
   WiFi.scanDelete();
+  jkreader::releaseRadio();
   doc["count"] = networks.size();
   respond(200, doc);
 }
@@ -307,10 +315,9 @@ void onSetWifi() {
   restartAt = millis() + 2200;
 }
 void onTelemetry() {
+  if (!requireControl()) return;
   JsonDocument doc;
-  doc["available"] = false;
-  doc["reason"] = "jk_decoder_not_implemented";
-  doc["samples"] = 0;
+  jkreader::fillTelemetry(doc);
   respond(200, doc);
 }
 void setup() {
@@ -333,6 +340,7 @@ void setup() {
     prefs.putString("setupCode", setupCode);
   }
   NimBLEDevice::init("");
+  jkreader::loadConfigured(prefs.getString("bmsList", "[]"));
   WiFi.onEvent(onWifiEvent);
 
   const char *headerKeys[] = {"X-Setup-Code"};
@@ -349,6 +357,7 @@ void setup() {
   if (prefs.getString("ssid", "").isEmpty()) startSetup();
   else connectHome();
   http.begin();
+  jkreader::begin();
 }
 void loop() {
   http.handleClient();
