@@ -1,6 +1,6 @@
 # Smart Energy Android
 
-**Projet en développement — aucune APK ni aucun firmware Smart Energy n'est encore publié.**
+**Projet en développement — un premier code source de test est présent, mais aucune APK de release ni firmware validé n'est publié.**
 
 Application Android autonome (sans Home Assistant) pour consulter les données des **JK BMS** et des **onduleurs Voltronic/Axpert** par l'intermédiaire de passerelles ESP32 dédiées.
 
@@ -37,7 +37,11 @@ Après un premier flash USB du firmware sur un ESP32 vierge (ou avec une passere
 
 ## État actuel
 
-Ce dépôt contient **le socle documentaire et les contrats de développement uniquement**. La configuration dynamique du JK, l'appairage, l'APK compilable, l'OTA et l'accès distant restent à implémenter et à tester sur matériel réel.
+Ce dépôt contient maintenant **un premier prototype de configuration JK** : application Android Kotlin (`android/`) et firmware ESP32 (`firmware/jk-esp32/`). La configuration Wi-Fi et la liste de MAC sont codées, mais **la compilation et les tests matériels restent à confirmer**. Le protocole de lecture des valeurs JK, l'OTA, l'appairage grand public et l'accès distant restent à implémenter.
+
+**Essai développeur :** voir [guide Android Studio](android/README.md) et [guide de flash ESP32](firmware/jk-esp32/README.md).
+
+[Compilation automatique de développement (GitHub Actions)](https://github.com/tapion69/smart-energy-android/actions/workflows/build-dev.yml) : lorsqu'une compilation réussit, les fichiers de test apparaissent dans les *Artifacts* du workflow ; **ce ne sont pas des Releases**.
 
 ➡️ Voir [feuille de route](docs/ROADMAP.md), [architecture](docs/ARCHITECTURE.md) et [sécurité](docs/SECURITY.md).
 
