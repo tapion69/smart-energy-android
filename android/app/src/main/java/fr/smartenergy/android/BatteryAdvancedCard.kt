@@ -192,7 +192,13 @@ class BatteryAdvancedCard(context: Context) : LinearLayout(context) {
         val info=device.optJSONObject("info")
         val p=panel("Informations du BMS","Trame JK 0x03 confirmée")
         if(info==null||!info.optBoolean("available")) {
-            row(p,"État","Informations non reçues ou périmées")
+            row(p,"État",
+                if(info?.optString("reason")=="unrecognized_type3_identity_layout")
+                    "Trame BMS non reconnue — valeurs invalides masquées"
+                else "Informations non reçues ou périmées")
+            if((info?.optInt("unrecognized_frames") ?: 0) > 0)
+                row(p,"Trames d'identité non reconnues",
+                    (info?.optInt("unrecognized_frames") ?: 0).toString())
         } else {
             for((label,key) in listOf(
                 "Modèle" to "model","Nom" to "name",
