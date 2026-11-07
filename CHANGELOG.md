@@ -1,5 +1,15 @@
 # Journal des modifications
 
+## 0.2.0-dev — télémétrie étendue, paramètres JK en lecture seule (2026-11-07)
+
+- Décodeurs JK02 type 0x01 et 0x03 validés CRC, en plus des mesures type 0x02.
+- Catalogue read-only de 47 paramètres, informations BMS filtrées, résistance et tension par cellule, sondes supplémentaires, SOH, capacités, équilibrage et alarmes quand disponibles.
+- API de paramètres `/api/v1/details` séparée de la télémétrie rapide pour conserver la fluidité.
+- Trois écrans natifs Android : Batterie, Détails, Paramètres. Absence de données explicitement signalée.
+- Conservations des fonctionnalités Wi-Fi, association BOOT et connexion BLE persistante.
+- Tests synthétiques et compilations ; **validation sur le JK V19 physique encore nécessaire**.
+- Aucune fonction d'écriture des protections ou paramètres batterie.
+
 ## 0.1.9-dev — connexion BLE persistante et tableau de bord JK (2026-11-07)
 
 - ESP32 : connexion JK maintenue tant que le BLE est actif, plus de déconnexion volontaire à chaque échantillon.
