@@ -118,7 +118,7 @@ class BatteryAdvancedCard(context: Context) : LinearLayout(context) {
             Triple("Courant équilibrage","balance_current_a","A"),
             Triple("Puissance charge","charge_power_w","W"),
             Triple("Puissance décharge","discharge_power_w","W")
-        ))if(values.has(key))row(energy,label,num(values,key,if(unit=="%")0:2,unit))
+        ))if(values.has(key))row(energy,label,num(values,key,if(unit=="%") 0 else 2,unit))
         if(values.has("runtime_s")) {
             val s=values.optLong("runtime_s")
             row(energy,"Fonctionnement",(s/86400).toString()+" j "+
@@ -182,8 +182,8 @@ class BatteryAdvancedCard(context: Context) : LinearLayout(context) {
                         if(p.optBoolean("value"))"Activé" else "Désactivé"
                     } else {
                         val unit=p.optString("unit")
-                        num(p,"value",if(unit=="V"||unit=="A"||unit=="Ah")3:
-                            if(unit=="°C")1:0,unit)
+                        num(p,"value",if(unit=="V"||unit=="A"||unit=="Ah") 3 else
+                            if(unit=="°C") 1 else 0,unit)
                     }
                     row(panel,title,result)
                 }
