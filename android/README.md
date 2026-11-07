@@ -1,4 +1,4 @@
-# Smart Energy Android — première version de développement
+# Smart Energy Android — prototype Android v0.1.3-dev
 
 Un projet Android Studio **réel**, en Kotlin natif, ciblant Android 10+.
 
@@ -34,3 +34,13 @@ Un projet Android Studio **réel**, en Kotlin natif, ciblant Android 10+.
 ## Suite
 
 Après validation de ce parcours sur matériel réel, intégrer le décodeur JK V19, la reconnexion multi-BMS, les mises à jour OTA authentifiées, et la vérification des Releases APK.
+
+## Correction v0.1.3-dev — Wi-Fi
+
+- Le bouton **Enregistrer / modifier le Wi-Fi** est désormais toujours cliquable. Il affiche une explication sous le bouton lorsque la passerelle n'est pas encore associée ou connectée.
+- Si le Wi-Fi actuel fonctionne déjà, **inutile de le réenregistrer** : passer directement au scan BLE.
+- Pour **changer** de Wi-Fi depuis le réseau domestique, le firmware JK **0.1.3-dev** et la connexion authentifiée à la passerelle sont nécessaires. L'APK vérifie la version avant d'envoyer des identifiants.
+- La configuration initiale depuis le réseau temporaire fonctionne aussi.
+- Après confirmation de l'ESP32, l'APK indique clairement le redémarrage. Si l'enregistrement échoue, l'APK affiche le message d'erreur dans la même section.
+
+**Limites :** le lien local est en HTTP non chiffré sur un réseau privé de test. Ne pas publier comme produit commercial. Les APK debug GitHub Actions peuvent être signées avec des clés différentes : une désinstallation peut être nécessaire et fait perdre l'association mémorisée sur le téléphone ; il faut une clé de signature Android stable pour éviter ce problème.
