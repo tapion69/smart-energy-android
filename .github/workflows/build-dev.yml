@@ -25,7 +25,48 @@ jobs:
       - name: Build Android debug APK
         working-directory: android
         run: ./gradlew --no-daemon assembleDebug
-      - name: Upload debug APK (not a release)
+      - name: Load permanent APK signing key (GitHub secrets)
+        id: signing
+        shell: bash
+        env:
+          SE_KEYSTORE_B64: ${{ secrets.SMART_ENERGY_ANDROID_KEYSTORE_BASE64 }}
+          SE_STORE_PASSWORD: ${{ secrets.SMART_ENERGY_ANDROID_STORE_PASSWORD }}
+          SE_KEY_ALIAS: ${{ secrets.SMART_ENERGY_ANDROID_KEY_ALIAS }}
+          SE_KEY_PASSWORD: ${{ secrets.SMART_ENERGY_ANDROID_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          if [[ -z "$SE_KEYSTORE_B64" || -z "$SE_STORE_PASSWORD" || -z "$SE_KEY_ALIAS" || -z "$SE_KEY_PASSWORD" ]]; then
+            echo "configured=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::Permanent APK signing not configured: set the 4 SMART_ENERGY_ANDROID_* GitHub secrets before distributing/installing future updates."
+            exit 0
+          fi
+          printf '%s' "$SE_KEYSTORE_B64" | base64 --decode > "$RUNNER_TEMP/smart-energy-android-signing.jks"
+          chmod 600 "$RUNNER_TEMP/smart-energy-android-signing.jks"
+          echo "SMART_ENERGY_ANDROID_KEYSTORE_FILE=$RUNNER_TEMP/smart-energy-android-signing.jks" >> "$GITHUB_ENV"
+          echo "SMART_ENERGY_ANDROID_STORE_PASSWORD=$SE_STORE_PASSWORD" >> "$GITHUB_ENV"
+          echo "SMART_ENERGY_ANDROID_KEY_ALIAS=$SE_KEY_ALIAS" >> "$GITHUB_ENV"
+          echo "SMART_ENERGY_ANDROID_KEY_PASSWORD=$SE_KEY_PASSWORD" >> "$GITHUB_ENV"
+          echo "configured=true" >> "$GITHUB_OUTPUT"
+      - name: Build permanently signed APK (only when secrets configured)
+        if: steps.signing.outputs.configured == 'true'
+        working-directory: android
+        run: ./gradlew --no-daemon assembleRelease
+      - name: Verify signed APK
+        if: steps.signing.outputs.configured == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -s android/app/build/outputs/apk/release/app-release.apk
+          APKSIGNER=$(find "$ANDROID_HOME/build-tools" -type f -name apksigner | sort -V | tail -n 1)
+          "$APKSIGNER" verify --verbose android/app/build/outputs/apk/release/app-release.apk
+      - name: Upload permanently signed APK
+        if: steps.signing.outputs.configured == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: smart-energy-android-signed
+          path: android/app/build/outputs/apk/release/app-release.apk
+          retention-days: 30
+      - name: Upload debug APK (not suitable for upgrades)
         if: success()
         uses: actions/upload-artifact@v4
         with:
