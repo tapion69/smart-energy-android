@@ -1,5 +1,14 @@
 # Journal des modifications
 
+## 0.2.1-dev — identité JK plus robuste et accès Android via VPN privé (2026-11-07)
+
+- Corrige l'affichage de caractères et fragments JSON parasites dans « Informations du BMS » : un checksum de trame 0x03 ne suffit plus, le modèle et chaque champ doivent être plausibles.
+- Ajoute des tests de non-régression incluant des trames 0x03 à pseudo-JSON malgré leur checksum valide.
+- Ajoute un mode **VPN privé** dans l'APK (lecture seule, adresse LAN privée, réessais automatiques lorsque le VPN est disponible).
+- Accès à distance seulement après configuration d'un routeur VPN vers le réseau domestique ; ne met pas en place de cloud ni d'ouverture de port, ne dépend pas de Home Assistant.
+- L'APK n'envoie plus de code d'authentification à la route publique `/api/v1/info`.
+- Connexion BLE persistante conservée ; compilation et tests unitaires, à vérifier sur le matériel réel.
+
 ## 0.2.0-dev — télémétrie étendue, paramètres JK en lecture seule (2026-11-07)
 
 - Décodeurs JK02 type 0x01 et 0x03 validés CRC, en plus des mesures type 0x02.
