@@ -5,12 +5,14 @@
 // Runtime measurements are provisional and MUST NOT control safety logic.
 #include "jk_reader.h"
 #include "jk_protocol.h"
+#include "jk_extended.h"
 #include <NimBLEDevice.h>
 #include <WiFi.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/semphr.h>
 #include <freertos/task.h>
 #include <string.h>
+#include <new>
 
 extern bool setupMode; // main.cpp manages Wi-Fi provisioning state.
 namespace jkreader {
@@ -21,6 +23,11 @@ struct Device {
   char mac[18] = {};
   char state[30] = {};
   smartjk::Reading reading{};
+  jkextra::Reading extra{};
+  jkextra::Settings settings{};
+  jkextra::Info info{};
+  uint32_t lastSettingsMs = 0;
+  uint32_t lastInfoMs = 0;
   uint32_t lastReadingMs = 0;
   uint32_t lastAttemptMs = 0;
   uint32_t badFrames = 0;
@@ -49,20 +56,49 @@ void updateState(int index, const char *mac, const char *message) {
   portEXIT_CRITICAL(&stateMux);
 }
 
-void onNotify(NimBLERemoteCharacteristic *, uint8_t *data, size_t len, bool) {
-  if (activeIndex < 0 || !data || !len) return;
-  smartjk::Reading decoded{};
-  if (!assembler.append(data, len, decoded)) return;
+// Callback gets ONLY a frame with a verified 300-byte header and checksum.
+// Never preserve raw frames, as type 3 includes JK device passcodes.
+void onValidatedFrame(const uint8_t *frame, const smartjk::Reading *basic, void *) {
+  const int index = activeIndex;
+  if (index < 0) return;
+  const uint8_t type = frame[4];
+  jkextra::Reading extra{};
+  jkextra::Settings settings{};
+  jkextra::Info info{};
+  if (type == 2 && basic) {
+    if (!jkextra::decode(frame, *basic, extra)) return;
+  } else if (type == 1) {
+    if (!jkextra::decodeSettings(frame, settings)) return;
+  } else if (type == 3) {
+    if (!jkextra::decodeInfo(frame, info)) return;
+  } else {
+    return;
+  }
   const uint32_t now = millis();
   portENTER_CRITICAL(&stateMux);
-  if (activeIndex < configured &&
-      strcmp(devices[activeIndex].mac, activeMac) == 0) {
-    Device &item = devices[activeIndex];
-    item.reading = decoded;
-    item.lastReadingMs = now;
-    strncpy(item.state, "valid_sample", sizeof(item.state) - 1);
+  if (index < configured &&
+      strcmp(devices[index].mac, activeMac) == 0) {
+    Device &item = devices[index];
+    if (type == 2 && basic) {
+      item.reading = *basic;
+      item.extra = extra;
+      item.lastReadingMs = now;
+      strncpy(item.state, "valid_sample", sizeof(item.state) - 1);
+    } else if (type == 1) {
+      item.settings = settings;
+      item.lastSettingsMs = now;
+    } else if (type == 3) {
+      item.info = info;
+      item.lastInfoMs = now;
+    }
   }
   portEXIT_CRITICAL(&stateMux);
+}
+
+void onNotify(NimBLERemoteCharacteristic *, uint8_t *data, size_t len, bool) {
+  if (activeIndex < 0 || !data || !len) return;
+  smartjk::Reading ignored{};
+  assembler.append(data, len, ignored, onValidatedFrame);
 }
 
 void sendReadCommand(NimBLERemoteCharacteristic *characteristic, uint8_t command,
@@ -152,6 +188,8 @@ void pollOne(int index, const char *mac) {
   vTaskDelay(pdMS_TO_TICKS(650));
   if (client->isConnected()) sendReadCommand(characteristic, 0x96, withResponse);
   uint32_t lastRefreshAt = millis();
+  uint32_t lastSettingsRequestAt = millis();
+  uint32_t lastInfoRequestAt = millis();
   const uint32_t sessionStartedAt = millis();
   bool interruptedForMaintenance = false;
   bool rotation = false;
@@ -180,6 +218,16 @@ void pollOne(int index, const char *mac) {
       break;
     }
     const uint32_t now = millis();
+    // Keep settings and info reasonably fresh for the read-only UI even if
+    // somebody else changed the BMS configuration via the official app.
+    if ((uint32_t)(now-lastSettingsRequestAt) >= 300000) {
+      sendReadCommand(characteristic, 0x96, withResponse);
+      lastSettingsRequestAt = now;
+    }
+    if ((uint32_t)(now-lastInfoRequestAt) >= 900000) {
+      sendReadCommand(characteristic, 0x97, withResponse);
+      lastInfoRequestAt = now;
+    }
     // JK02 usually pushes type-2 updates automatically. Only ask for 0x96 if
     // no validated sample arrived for >= 8 s, throttled to one request / 8 s.
     // Never disconnect a healthy BLE link just to refresh values.
@@ -289,7 +337,11 @@ void releaseRadio() {
 }
 
 void setConfigured(JsonArrayConst macs) {
-  Device updated[MAX_BMS] = {};
+  Device *updated = new (std::nothrow) Device[MAX_BMS]();
+  if (!updated) {
+    Serial.println("[JK] Memory allocation failed while reconfiguring BMS");
+    return;
+  }
   uint8_t count = 0;
   for (JsonVariantConst value : macs) {
     if (count >= MAX_BMS) break;
@@ -314,6 +366,7 @@ void setConfigured(JsonArrayConst macs) {
   memcpy(devices, updated, sizeof devices);
   configured = count;
   portEXIT_CRITICAL(&stateMux);
+  delete[] updated;
 }
 void loadConfigured(const String &saved) {
   JsonDocument config;
@@ -323,11 +376,9 @@ void loadConfigured(const String &saved) {
 }
 
 void fillTelemetry(JsonDocument &out) {
-  Device snapshot[MAX_BMS];
   uint8_t count = 0;
   portENTER_CRITICAL(&stateMux);
   count = configured;
-  memcpy(snapshot, devices, sizeof devices);
   portEXIT_CRITICAL(&stateMux);
   out["available"] = false;
   out["source"] = "jk02-ffe1-read-only";
@@ -339,7 +390,10 @@ void fillTelemetry(JsonDocument &out) {
   const uint32_t now = millis();
   JsonArray list = out["devices"].to<JsonArray>();
   for (uint8_t i = 0; i < count; ++i) {
-    const Device &item = snapshot[i];
+    Device item{};
+    portENTER_CRITICAL(&stateMux);
+    item = devices[i];
+    portEXIT_CRITICAL(&stateMux);
     JsonObject device = list.add<JsonObject>();
     device["mac"] = item.mac;
     device["state"] = item.state;
@@ -373,6 +427,39 @@ void fillTelemetry(JsonDocument &out) {
     values["charging_mos"] = m.chargingMos;
     values["discharging_mos"] = m.dischargingMos;
     values["error_mask"] = m.errorMask;
+    values["alarm_active"] = (m.errorMask & ~(uint32_t(1) << 4)) != 0;
+    values["cell_avg_v"] = m.cellCount ?
+        (m.voltageV / m.cellCount) : 0;
+    values["charge_power_w"] = m.powerW > 0 ? m.powerW : 0;
+    values["discharge_power_w"] = m.powerW < 0 ? -m.powerW : 0;
+    values["settings_received"] = item.settings.confirmed;
+    values["info_received"] = item.info.confirmed;
+    const jkextra::Reading &e = item.extra;
+    if (e.valid) {
+      if (e.balanceCurrentAvailable) values["balance_current_a"] = e.balanceCurrentA;
+      values["balance_action"] = e.balanceAction;
+      values["wire_warning_mask"] = e.wireWarningMask;
+      values["runtime_s"] = e.runtimeSeconds;
+      if (e.capacityRemainingAvailable) values["capacity_remaining_ah"] = e.capacityRemainingAh;
+      if (e.cycledCapacityAvailable) values["total_cycle_capacity_ah"] = e.cycledCapacityAh;
+      if (e.sohAvailable) values["soh_pct"] = e.soh;
+      values["precharging"] = e.precharging;
+      values["heating"] = e.heating;
+      if (m.layout == 32) {
+        values["dry1_contact"] = e.dry1;
+        values["dry2_contact"] = e.dry2;
+        if (e.chargeStatusAvailable) values["charge_status"] = e.chargeStatus;
+        if (e.chargeStatusTimeAvailable)
+          values["charge_status_time_s"] = e.chargeStatusTimeS;
+        values["emergency_countdown_s"] = e.emergencyCountdownS;
+        for (int t = 0; t < 3; ++t) {
+          if (!e.temperatureAvailable[t]) continue;
+          if (t == 0) values["temp3_c"] = e.temperatureC[t];
+          if (t == 1) values["temp4_c"] = e.temperatureC[t];
+          if (t == 2) values["temp5_c"] = e.temperatureC[t];
+        }
+      }
+    }
     if (m.tempAvailable[0]) values["temp1_c"] = m.tempC[0];
     if (m.tempAvailable[1]) values["temp2_c"] = m.tempC[1];
     if (m.tempAvailable[2]) values["mos_temp_c"] = m.tempC[2];
@@ -382,9 +469,76 @@ void fillTelemetry(JsonDocument &out) {
       JsonObject v = cells.add<JsonObject>();
       v["number"] = cell + 1;
       v["voltage_v"] = m.cellVoltage[cell];
+      if (e.valid && e.resistanceAvailable[cell])
+        v["resistance_ohm"] = e.resistanceOhm[cell];
+      if (e.valid && (e.wireWarningMask & (uint32_t(1) << cell)))
+        v["wire_warning"] = true;
     }
   }
 }
+void fillDetails(JsonDocument &out) {
+  uint8_t count = 0;
+  portENTER_CRITICAL(&stateMux);
+  count = configured;
+  portEXIT_CRITICAL(&stateMux);
+  out["read_only"] = true;
+  JsonArray list = out["devices"].to<JsonArray>();
+  const uint32_t now = millis();
+  for (uint8_t i = 0; i < count; ++i) {
+    Device item{};
+    portENTER_CRITICAL(&stateMux);
+    item = devices[i];
+    portEXIT_CRITICAL(&stateMux);
+    JsonObject d = list.add<JsonObject>();
+    d["mac"] = item.mac;
+    JsonObject settings = d["settings"].to<JsonObject>();
+    const bool available = item.settings.confirmed && item.lastSettingsMs &&
+      (uint32_t)(now - item.lastSettingsMs) < 1800000;
+    settings["available"] = available;
+    if (available) {
+      settings["age_seconds"] = (now - item.lastSettingsMs) / 1000;
+      JsonArray items = settings["items"].to<JsonArray>();
+      for (size_t p = 0; p < jkextra::PARAM_COUNT; ++p) {
+        if (!item.settings.available[p]) continue;
+        const jkextra::Param &def = jkextra::PARAMS[p];
+        JsonObject value = items.add<JsonObject>();
+        value["key"] = def.key;
+        value["label"] = def.label;
+        value["group"] = def.group;
+        if (def.unit[0]) value["unit"] = def.unit;
+        if (def.kind == jkextra::BOOL1 || def.kind == jkextra::BIT16) {
+          value["type"] = "bool";
+          value["value"] = item.settings.value[p] > 0.5f;
+        } else {
+          value["type"] = "number";
+          value["value"] = item.settings.value[p];
+        }
+      }
+    } else {
+      settings["reason"] = "no_fresh_crc_checked_settings_frame";
+    }
+    JsonObject info = d["info"].to<JsonObject>();
+    const bool infoAvailable = item.info.confirmed && item.lastInfoMs &&
+      (uint32_t)(now - item.lastInfoMs) < 3600000;
+    info["available"] = infoAvailable;
+    if (infoAvailable) {
+      info["age_seconds"] = (now - item.lastInfoMs) / 1000;
+      const jkextra::Info &v = item.info;
+      if (v.vendor[0]) info["model"] = v.vendor;
+      if (v.deviceName[0]) info["name"] = v.deviceName;
+      if (v.hardware[0]) info["hardware_version"] = v.hardware;
+      if (v.software[0]) info["software_version"] = v.software;
+      if (v.manufactureDate[0]) info["manufacturing_date"] = v.manufactureDate;
+      // Never include passcodes or user data; serial is local read-only.
+      if (v.serialNumber[0]) info["serial_number"] = v.serialNumber;
+      info["power_on_count"] = v.powerOnCount;
+      info["uptime_hours"] = v.uptimeS / 3600.0f;
+    } else {
+      info["reason"] = "no_fresh_crc_checked_device_info_frame";
+    }
+  }
+}
+
 void begin() {
   radioMutex = xSemaphoreCreateMutex();
   if (!radioMutex) {
