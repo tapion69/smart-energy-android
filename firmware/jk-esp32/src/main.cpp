@@ -265,10 +265,33 @@ void setup() {
 }
 void loop() {
   http.handleClient();
-  if (!setupMode && WiFi.status() == WL_CONNECTED && !mdnsRunning) {
-    mdnsRunning = MDNS.begin(hostName.c_str());
-    if (mdnsRunning) MDNS.addService("http", "tcp", 80);
-    Serial.printf("Smart JK local: http://%s.local or %s\n", hostName.c_str(), WiFi.localIP().toString().c_str());
+  if (!setupMode && WiFi.status() == WL_CONNECTED) {
+    if (!everConnected) {
+      everConnected = true;
+      wifiIssue = "";
+      Serial.printf("[WiFi] Connected: %s\n", WiFi.localIP().toString().c_str());
+    }
+    wifiAttemptAt = 0;
+    if (!mdnsRunning) {
+      mdnsRunning = MDNS.begin(hostName.c_str());
+      if (mdnsRunning) MDNS.addService("http", "tcp", 80);
+      Serial.printf("Smart JK local: http://%s.local or %s\n",
+                    hostName.c_str(), WiFi.localIP().toString().c_str());
+    }
+  }
+  if (!setupMode && WiFi.status() != WL_CONNECTED) {
+    if (!wifiAttemptAt) {
+      wifiAttemptAt = millis();
+      if (mdnsRunning) { MDNS.end(); mdnsRunning = false; }
+      Serial.println("[WiFi] Link lost; retrying before returning to setup.");
+    }
+    if ((uint32_t)(millis() - wifiAttemptAt) >= WIFI_JOIN_TIMEOUT_MS) {
+      wifiIssue = everConnected ? "link_lost_timeout" : "join_timeout";
+      Serial.printf("[WiFi] Failed after %lu seconds: status=%d reason=%u. Reopening setup AP.\n",
+                    (unsigned long)(WIFI_JOIN_TIMEOUT_MS / 1000), (int)WiFi.status(),
+                    (unsigned)disconnectReason);
+      startSetup(); // Credentials + selected JK remain in Preferences.
+    }
   }
   if (restartAt && (int32_t)(millis() - restartAt) >= 0) {
     delay(150);
@@ -279,6 +302,7 @@ void loop() {
     if (!buttonPressedAt) buttonPressedAt = millis();
     if (!setupMode && millis() - buttonPressedAt >= HOLD_MS) {
       buttonPressedAt = 0;
+      wifiIssue = "manual_setup";
       startSetup();
     }
   } else {
