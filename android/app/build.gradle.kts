@@ -2,6 +2,17 @@ plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
 }
+// Stable APK signing is enabled only when all four secrets are configured
+// in GitHub Actions or injected by the local developer. Never commit the key.
+val signingStorePath = System.getenv("SMART_ENERGY_ANDROID_KEYSTORE_FILE")
+val signingStorePassword = System.getenv("SMART_ENERGY_ANDROID_STORE_PASSWORD")
+val signingKeyAlias = System.getenv("SMART_ENERGY_ANDROID_KEY_ALIAS")
+val signingKeyPassword = System.getenv("SMART_ENERGY_ANDROID_KEY_PASSWORD")
+val hasStableSigning = !signingStorePath.isNullOrBlank() &&
+    !signingStorePassword.isNullOrBlank() &&
+    !signingKeyAlias.isNullOrBlank() &&
+    !signingKeyPassword.isNullOrBlank()
+
 android {
     namespace = "fr.smartenergy.android"
     compileSdk = 35
@@ -12,9 +23,20 @@ android {
         versionCode = 6
         versionName = "0.1.6-dev"
     }
+    signingConfigs {
+        if (hasStableSigning) {
+            create("stable") {
+                storeFile = file(signingStorePath!!)
+                storePassword = signingStorePassword
+                keyAlias = signingKeyAlias
+                keyPassword = signingKeyPassword
+            }
+        }
+    }
     buildTypes {
         release {
             isMinifyEnabled = false
+            if (hasStableSigning) signingConfig = signingConfigs.getByName("stable")
         }
     }
     compileOptions {
