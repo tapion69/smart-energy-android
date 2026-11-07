@@ -72,6 +72,28 @@ int main() {
   assert(!strcmp(i.deviceName,"JK pack"));
   assert(!strstr(i.vendor,"ACCESS") && !strstr(i.deviceName,"SECRET"));
   assert(i.powerOnCount==137 && i.uptimeS==3600);
+  // Field issue observed in real firmware: some checksum-valid JK 0x03
+  // payloads contain JSON-like fragments rather than model/hardware data.
+  // Never display those strings as trusted identity or serial number.
+  uint8_t alien[300] = {0x55,0xAA,0xEB,0x90,0x03};
+  memcpy(alien+6,  "\"name\":\"fake\"",13);
+  memcpy(alien+22, "on\":\"ion",8);
+  memcpy(alien+46, "\"name\":\"",8);
+  memcpy(alien+86, "abc?x?y?",8);
+  sign(alien);
+  jkextra::Info rejected{};
+  assert(!jkextra::decodeInfo(alien,rejected));
+  uint8_t validButDirty[300] = {0x55,0xAA,0xEB,0x90,0x03};
+  memcpy(validButDirty+6,"JK-BMS",6);
+  memcpy(validButDirty+22,"V19",3);
+  memcpy(validButDirty+30,"11.23",5);
+  memcpy(validButDirty+46,"\"name\":",7);
+  memcpy(validButDirty+86,"Serial?XYZ",10);
+  sign(validButDirty);
+  jkextra::Info sanitized{};
+  assert(jkextra::decodeInfo(validButDirty,sanitized));
+  assert(sanitized.deviceName[0] == 0);
+  assert(sanitized.serialNumber[0] == 0);
 
   uint8_t d[300]={0x55,0xAA,0xEB,0x90,0x02};
   for(int j=0;j<16;j++){ w16(d,6+j*2,3280);w16(d,80+j*2,40+j); }
