@@ -50,7 +50,7 @@ import java.util.Locale
 import java.security.SecureRandom
 
 /**
- * Smart Energy Android 0.1.9-dev.
+ * Smart Energy Android 0.2.0-dev.
  * Initial provisioning over ESP32's setup AP, subsequent management over home Wi-Fi.
  * Credentials kept encrypted in Android Keystore-backed local preferences.
  * DEVELOPMENT-ONLY HTTP local transport; NOT safe for remote/public use.
@@ -92,12 +92,27 @@ class MainActivity : Activity() {
     private lateinit var scanPanel: LinearLayout
     private lateinit var telemetryPanel: LinearLayout
     private val dashboardCards = linkedMapOf<String, BatteryDashboardCard>()
+    private val advancedCards = linkedMapOf<String, BatteryAdvancedCard>()
     private var dashboardMacs = emptyList<String>()
+    private var currentTab = 0 // 0 overview, 1 extended measurements, 2 read-only settings
+    private var mountedTab = -1
+    private var lastTelemetry: JSONObject? = null
+    private var lastDetails: JSONObject? = null
+    private var lastDetailsFetchedAt = 0L
+    @Volatile private var detailsBusy = false
+    private lateinit var tabOverview: Button
+    private lateinit var tabExtended: Button
+    private lateinit var tabSettings: Button
     private lateinit var telemetryStatus: TextView
     @Volatile private var telemetryBusy = false
     private val telemetryTicker = object : Runnable {
         override fun run() {
-            if (lanVerified || (setupTransport && apNetwork != null)) refreshTelemetry()
+            if (lanVerified || (setupTransport && apNetwork != null)) {
+                refreshTelemetry()
+                if (currentTab == 2 && android.os.SystemClock.elapsedRealtime() - lastDetailsFetchedAt > 30000L) {
+                    refreshDetails()
+                }
+            }
             uiHandler.postDelayed(this, 2500)
         }
     }
@@ -260,6 +275,18 @@ class MainActivity : Activity() {
         add(root, status, 8)
         telemetryStatus = label("En attente des mesures réelles du JK", 13f, false, subdued)
         add(root, telemetryStatus, 10)
+        val tabs = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+        tabOverview = action("Batterie") { switchDashboardTab(0) }
+        tabExtended = action("Détails") { switchDashboardTab(1) }
+        tabSettings = action("Paramètres") { switchDashboardTab(2) }
+        for (button in listOf(tabOverview, tabExtended, tabSettings)) {
+            button.textSize = 12f
+            tabs.addView(button, LinearLayout.LayoutParams(0, d(52), 1f).apply {
+                leftMargin = d(2); rightMargin = d(2)
+            })
+        }
+        add(root, tabs, 8)
+        highlightActiveTab()
         telemetryPanel = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         add(root, telemetryPanel, 8)
         add(root, action("⟳ Actualiser les mesures") { refreshTelemetry() }, 8)
@@ -1012,33 +1039,98 @@ class MainActivity : Activity() {
         }
     }
 
+    private fun highlightActiveTab() {
+        val active = ColorStateList.valueOf(mint)
+        val inactive = ColorStateList.valueOf(Color.rgb(38, 57, 77))
+        for ((i,button) in listOf(tabOverview,tabExtended,tabSettings).withIndex()) {
+            button.backgroundTintList = if (i == currentTab) active else inactive
+            button.setTextColor(if (i == currentTab) background else normal)
+        }
+    }
+
+    private fun switchDashboardTab(tab: Int) {
+        if (tab == currentTab) {
+            if (tab == 2) refreshDetails()
+            return
+        }
+        currentTab = tab
+        highlightActiveTab()
+        mountedTab = -1
+        lastTelemetry?.let { showTelemetry(it) }
+        if (tab == 2) refreshDetails()
+    }
+
+    private fun refreshDetails() {
+        if (detailsBusy || !lanVerified && !(setupTransport && apNetwork != null)) return
+        detailsBusy = true
+        io.execute {
+            try {
+                val response = httpCall("GET", "/api/v1/details")
+                lastDetailsFetchedAt = android.os.SystemClock.elapsedRealtime()
+                runOnUiThread {
+                    lastDetails = response
+                    if (currentTab == 2) lastTelemetry?.let { showTelemetry(it) }
+                }
+            } catch (ex: Exception) {
+                lastDetailsFetchedAt = android.os.SystemClock.elapsedRealtime()
+                runOnUiThread {
+                    if (currentTab == 2)
+                        telemetryStatus.text = "Lecture des paramètres indisponible : " +
+                            (ex.message ?: ex.javaClass.simpleName)
+                }
+            } finally {
+                detailsBusy = false
+            }
+        }
+    }
+
+    private fun detailForMac(mac: String): JSONObject? {
+        val devices = lastDetails?.optJSONArray("devices") ?: return null
+        for (i in 0 until devices.length()) {
+            val item = devices.optJSONObject(i) ?: continue
+            if (item.optString("mac") == mac) return item
+        }
+        return null
+    }
+
     private fun showTelemetry(response: JSONObject) {
+        lastTelemetry = response
         val devices = response.optJSONArray("devices")
         if (devices == null) {
-            telemetryStatus.text = "Ce firmware ne propose pas encore la télémétrie JK."
+            telemetryStatus.text = "Ce firmware ne prend pas en charge les mesures JK."
             telemetryPanel.removeAllViews()
             dashboardCards.clear()
+            advancedCards.clear()
             dashboardMacs = emptyList()
             return
         }
         if (devices.length() == 0) {
-            telemetryStatus.text = "Aucun JK enregistré. Ouvre « Configuration et association » pour choisir un JK."
+            telemetryStatus.text = "Aucun JK enregistré. Ouvre « Configuration et association »."
             telemetryPanel.removeAllViews()
             dashboardCards.clear()
+            advancedCards.clear()
             dashboardMacs = emptyList()
             return
         }
         val macs = (0 until devices.length()).mapNotNull { i ->
             devices.optJSONObject(i)?.optString("mac")?.takeIf { it.isNotBlank() }
         }
-        if (macs != dashboardMacs) {
+        if (macs != dashboardMacs || mountedTab != currentTab) {
             dashboardMacs = macs
+            mountedTab = currentTab
             telemetryPanel.removeAllViews()
             dashboardCards.clear()
+            advancedCards.clear()
             for (mac in macs) {
-                val card = BatteryDashboardCard(this)
-                dashboardCards[mac] = card
-                telemetryPanel.addView(card, LinearLayout.LayoutParams(-1, -2))
+                if (currentTab == 0) {
+                    val card = BatteryDashboardCard(this)
+                    dashboardCards[mac] = card
+                    telemetryPanel.addView(card, LinearLayout.LayoutParams(-1, -2))
+                } else {
+                    val card = BatteryAdvancedCard(this)
+                    advancedCards[mac] = card
+                    telemetryPanel.addView(card, LinearLayout.LayoutParams(-1, -2))
+                }
             }
         }
         var validCount = 0
@@ -1046,10 +1138,19 @@ class MainActivity : Activity() {
             val item = devices.optJSONObject(i) ?: continue
             val mac = item.optString("mac")
             if (item.optBoolean("available")) validCount++
-            dashboardCards[mac]?.bind(i, item)
+            when (currentTab) {
+                0 -> dashboardCards[mac]?.bind(i, item)
+                1 -> advancedCards[mac]?.measurements(i, item)
+                2 -> advancedCards[mac]?.settings(i, detailForMac(mac))
+            }
+        }
+        val suffix = when(currentTab) {
+            0 -> "Vue d'ensemble"
+            1 -> "Mesures détaillées"
+            else -> "Paramètres BMS · lecture seule"
         }
         telemetryStatus.text = validCount.toString() + "/" + devices.length() +
-            " JK avec mesures récentes  ·  Actualisation toutes les 2,5 s"
+            " JK en ligne · " + suffix
     }
 
     override fun onResume() {
