@@ -1,5 +1,14 @@
 # Journal des modifications
 
+## 0.1.6-dev — première télémétrie JK Bluetooth autonome (2026-11-07)
+
+- Acquisition Bluetooth GATT `FFE0/FFE1` en tâche indépendante ESP32, requêtes de lecture `0x97/0x96` uniquement.
+- Assembleur JK02 (trames 300 octets, CRC) + décodeur provisoire des profils 24S/32S avec validations strictes.
+- API authentifiée `/api/v1/telemetry`, vérification de fraîcheur, états d'erreur et lecture des BMS sauvegardés.
+- APK : tableau de bord des tensions/courant/SOC/températures/cellules, sans valeurs fictives, rafraîchissement automatique.
+- Tests unitaires synthétiques intégrés à GitHub Actions ; **validation BLE sur matériel réel encore nécessaire**.
+- Aucun réglage batterie modifié, aucune OTA ou publication grand public.
+
 ## 0.1.3-dev — correction enregistrement Wi-Fi (2026-11-07)
 
 - Corrige le bouton Wi-Fi qui restait désactivé après la connexion au LAN.
