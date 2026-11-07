@@ -11,7 +11,7 @@
 #include <ArduinoJson.h>
 #include <ctype.h>
 
-static const char *VERSION = "0.1.9-dev";
+static const char *VERSION = "0.2.0-dev";
 static const uint32_t WIFI_JOIN_TIMEOUT_MS = 30000; // Return to setup after 30s
 static const int SETUP_BUTTON = 0; // BOOT is physical proof for pairing recovery.
 static const uint32_t RECOVERY_HOLD_MS = 4000; // open short LAN recovery window
@@ -384,6 +384,12 @@ void onTelemetry() {
   jkreader::fillTelemetry(doc);
   respond(200, doc);
 }
+void onDetails() {
+  if (!requireControl()) return;
+  JsonDocument doc;
+  jkreader::fillDetails(doc);
+  respond(200, doc);
+}
 void setup() {
   Serial.begin(115200);
   pinMode(SETUP_BUTTON, INPUT_PULLUP);
@@ -418,6 +424,7 @@ void setup() {
   http.on("/api/v1/access", HTTP_POST, onChangeCode);
   http.on("/api/v1/pair/recover", HTTP_POST, onPhysicalRecovery);
   http.on("/api/v1/telemetry", HTTP_GET, onTelemetry);
+  http.on("/api/v1/details", HTTP_GET, onDetails);
   http.onNotFound([] { error(404, "unknown_route"); });
   if (prefs.getString("ssid", "").isEmpty()) startSetup();
   else connectHome();
