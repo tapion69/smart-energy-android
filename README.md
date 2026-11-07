@@ -37,7 +37,7 @@ Après un premier flash USB du firmware sur un ESP32 vierge (ou avec une passere
 
 ## État actuel
 
-Ce dépôt contient maintenant **un premier prototype de configuration JK** : application Android Kotlin (`android/`) et firmware ESP32 (`firmware/jk-esp32/`). La configuration Wi-Fi et la liste de MAC sont codées, mais **la compilation et les tests matériels restent à confirmer**. Le protocole de lecture des valeurs JK, l'OTA, l'appairage grand public et l'accès distant restent à implémenter.
+Ce dépôt contient maintenant **un premier prototype de configuration JK** : application Android Kotlin (`android/`) et firmware ESP32 (`firmware/jk-esp32/`). La configuration Wi-Fi et la liste de MAC sont codées, mais **les deux projets compilent via GitHub Actions, mais les tests matériels restent à réaliser**. Le protocole de lecture des valeurs JK, l'OTA, l'appairage grand public et l'accès distant restent à implémenter.
 
 **Essai développeur :** voir [guide Android Studio](android/README.md) et [guide de flash ESP32](firmware/jk-esp32/README.md).
 
