@@ -1,4 +1,4 @@
-# Smart Energy Android — prototype Android v0.1.3-dev
+# Smart Energy Android — prototype Android v0.1.6-dev
 
 Un projet Android Studio **réel**, en Kotlin natif, ciblant Android 10+.
 
@@ -14,9 +14,9 @@ Un projet Android Studio **réel**, en Kotlin natif, ciblant Android 10+.
 
 ## Limites
 
-- Cette version ne lit **pas encore** les valeurs JK V19. Le firmware renvoie `available:false` pour la télémétrie.
+- La lecture JK V19 vient d'être ajoutée **à titre expérimental** dans le firmware 0.1.6-dev. Les mesures ne sont affichées que si leur trame a été validée ; le matériel réel n'a pas encore été testé.
 - Le secret de l'ESP32 neuf est fourni par le moniteur série USB pendant la phase de test. Le provisionnement QR/étiquette sera conçu avant publication publique.
-- Transport HTTP local provisoire limité au Wi-Fi de configuration : pas d'accès distant, pas d'OTA ni de mise à jour APK active.
+- Transport HTTP local provisoire sur Wi-Fi domestique ou réseau temporaire, **non chiffré** : pas d'accès distant, pas d'OTA ni de mise à jour APK active.
 - La sélection de BMS s'applique à un ESP32 à la fois ; capacité BLE réelle encore à tester.
 - Ni compilation Android, ni flash ESP32, ni test matériel effectués automatiquement lors de ce commit.
 
@@ -62,3 +62,15 @@ Après validation de ce parcours sur matériel réel, intégrer le décodeur JK 
 - Le **réseau de configuration ESP32** (`192.168.4.1`) continue de nécessiter un `Network.openConnection()` dédié car il provient de `WifiNetworkSpecifier`. Si un VPN ou un mode « bloquer les connexions sans VPN » refuse le réseau local, l'APK affiche un diagnostic explicite ; elle ne contourne pas la politique Android du téléphone.
 - Aucun firmware à reflasher : l'ESP32 0.1.4-dev ou 0.1.3-dev reste compatible pour la gestion LAN correspondante. Scan des réseaux à distance : nécessite firmware 0.1.4-dev.
 - Test recommandé : connecter le téléphone au Wi-Fi habituel, **désactiver temporairement le VPN** et son option de blocage si nécessaire, puis ouvrir l'APK. Le mode « VPN actif » ne doit pas faire l'objet d'une tentative de contournement silencieuse.
+
+## 0.1.6-dev — Lecture des mesures JK en temps réel (test)
+
+- Le tableau de bord demande `GET /api/v1/telemetry` toutes les **8 secondes** quand la connexion LAN ou setup est active.
+- Si une trame JK02 valide est reçue : affichage SOC, tension batterie, courant signé, puissance, températures disponibles, min./max. cellule, écart en mV, cycles et **tensions individuelles**.
+- Si l'acquisition BLE échoue : affichage de l'état (`JK hors de portée`, `connexion BLE échouée`, `trames non reconnues`, `mesures trop anciennes`), **jamais de valeurs inventées**.
+- `JK02_24S` et `JK02_32S` sont des profils de structure de trame, pas le nombre de cellules. Le décodage est provisoire et doit être comparé à l'outil JK constructeur.
+- Les résistances par cellule **ne sont pas encore transmises**.
+- Le firmware ne modifie aucun paramètre de batterie : lecture seule.
+- Le moteur BLE **n'a pas encore été testé sur la batterie physique**. Les tests automatiques portent uniquement sur des trames synthétiques, leur checksum et les fragments.
+
+**Installation :** firmware ESP32 0.1.6-dev et APK Android 0.1.6-dev nécessaires pour obtenir les premières mesures. L'ESP32 relit la liste de MAC mémorisées ; il n'est normalement pas nécessaire de sélectionner à nouveau le JK **si la mise à jour du firmware préserve NVS**. Lors des premiers tests, éviter une seconde connexion BLE simultanée au même JK.
