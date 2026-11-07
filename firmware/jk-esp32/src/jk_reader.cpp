@@ -506,7 +506,7 @@ void fillDetails(JsonDocument &out) {
         value["label"] = def.label;
         value["group"] = def.group;
         if (def.unit[0]) value["unit"] = def.unit;
-        if (def.kind == jkextra::BOOL1 || def.kind == jkextra::BIT16) {
+        if (def.kind == jkextra::BOOL1 || def.kind == jkextra::FLAG16) {
           value["type"] = "bool";
           value["value"] = item.settings.value[p] > 0.5f;
         } else {
