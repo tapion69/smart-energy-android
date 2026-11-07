@@ -46,6 +46,7 @@ class MainActivity : Activity() {
     @Volatile private var apNetwork: Network? = null
     private var callback: ConnectivityManager.NetworkCallback? = null
     private var switchingToHome = false
+    @Volatile private var activeSetupCode = ""
     private val chosen = mutableSetOf<String>()
     private val scanChoices = mutableListOf<CheckBox>()
 
@@ -190,6 +191,7 @@ class MainActivity : Activity() {
             return
         }
         releaseConnection()
+        activeSetupCode = password
         switchingToHome = false
         val spec = WifiNetworkSpecifier.Builder()
             .setSsid(ssid)
@@ -234,7 +236,7 @@ class MainActivity : Activity() {
             conn.readTimeout = 15000
             conn.requestMethod = method
             conn.setRequestProperty("Accept", "application/json")
-            conn.setRequestProperty("X-Setup-Code", setupCode.text.toString().trim().uppercase())
+            conn.setRequestProperty("X-Setup-Code", activeSetupCode)
             if (payload != null) {
                 conn.doOutput = true
                 conn.setRequestProperty("Content-Type", "application/json")
