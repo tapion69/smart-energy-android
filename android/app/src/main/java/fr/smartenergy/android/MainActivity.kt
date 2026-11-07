@@ -50,7 +50,7 @@ import java.util.Locale
 import java.security.SecureRandom
 
 /**
- * Smart Energy Android 0.1.8-dev.
+ * Smart Energy Android 0.1.9-dev.
  * Initial provisioning over ESP32's setup AP, subsequent management over home Wi-Fi.
  * Credentials kept encrypted in Android Keystore-backed local preferences.
  * DEVELOPMENT-ONLY HTTP local transport; NOT safe for remote/public use.
@@ -91,12 +91,14 @@ class MainActivity : Activity() {
     private lateinit var homePassword: EditText
     private lateinit var scanPanel: LinearLayout
     private lateinit var telemetryPanel: LinearLayout
+    private val dashboardCards = linkedMapOf<String, BatteryDashboardCard>()
+    private var dashboardMacs = emptyList<String>()
     private lateinit var telemetryStatus: TextView
     @Volatile private var telemetryBusy = false
     private val telemetryTicker = object : Runnable {
         override fun run() {
             if (lanVerified || (setupTransport && apNetwork != null)) refreshTelemetry()
-            uiHandler.postDelayed(this, 8000)
+            uiHandler.postDelayed(this, 2500)
         }
     }
     private lateinit var scanBtn: Button
@@ -252,13 +254,26 @@ class MainActivity : Activity() {
         scroll.addView(root)
         setContentView(scroll)
 
-        add(root, label("SMART ENERGY", 13f, true, mint))
-        add(root, label("Mes passerelles JK", 25f, true))
-        add(root, label("Wi-Fi maison en priorité. Configuration initiale seulement si nécessaire.", 13f, color = subdued))
-        status = label("ESP32 non connecté", 14f, true)
-        add(root, status, 14)
+        add(root, label("⚡ SMART ENERGY", 14f, true, mint))
+        add(root, label("Tableau de bord JK", 25f, true), 18)
+        status = label("Connexion à la passerelle…", 13f, false, subdued)
+        add(root, status, 8)
+        telemetryStatus = label("En attente des mesures réelles du JK", 13f, false, subdued)
+        add(root, telemetryStatus, 10)
+        telemetryPanel = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        add(root, telemetryPanel, 8)
+        add(root, action("⟳ Actualiser les mesures") { refreshTelemetry() }, 8)
+        add(root, label("Données expérimentales en lecture seule. Ne pas utiliser pour une protection batterie.", 12f, color = subdued), 8)
+        val advanced = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            visibility = if (storedCode().isBlank()) View.VISIBLE else View.GONE
+        }
+        add(root, action("⚙ Configuration et association") {
+            advanced.visibility = if (advanced.visibility == View.VISIBLE) View.GONE else View.VISIBLE
+        }, 20)
+        root.addView(advanced)
 
-        val lan = section(root, "1. Connexion quotidienne — Wi-Fi maison")
+        val lan = section(advanced, "Connexion quotidienne — Wi-Fi maison")
         add(lan, label("L’application mémorise le code après association. Si une réinstallation l’a effacé, renseigne le code dans la section 2 puis clique ici : pas besoin de reconfigurer la box.", color = subdued))
         lanIp = input("Adresse IP locale de l'ESP32 (ex. 192.168.1.50)")
         lanIp.setText(prefs.getString("local_ip", "") ?: "")
@@ -274,7 +289,7 @@ class MainActivity : Activity() {
         add(lan, autoEspBtn)
         add(lan, label("La recherche utilise mDNS ; si elle échoue, renseigne une fois l'adresse IP vue dans les journaux ESP32.", 12f, color = subdued))
 
-        val a = section(root, "2. Première association / dépannage")
+        val a = section(advanced, "2. Première association / dépannage")
 
         add(a, label("Si l’APK a perdu son association, saisis ici le code original de l’ESP32 puis clique sur « Se connecter à ma passerelle » dans la section 1. Inutile de modifier le Wi-Fi ou le JK.", color = subdued))
         apName = input("SmartJK-Setup-XXXXXX")
@@ -285,7 +300,7 @@ class MainActivity : Activity() {
         add(a, action("Connecter l'ESP32") { connectSetupAp() }, 12)
         add(a, label("Android demandera l'autorisation de rejoindre ce Wi-Fi temporaire. Pas besoin d'aller dans les paramètres Wi-Fi.", 12f, color = subdued))
 
-        val b = section(root, "3. Détecter les JK BMS")
+        val b = section(advanced, "3. Détecter les JK BMS")
         add(b, label("La recherche Bluetooth est exécutée par l'ESP32, pas par le téléphone. Vérifie la MAC avant de sélectionner un appareil.", 13f, color = subdued))
         scanBtn = action("Rechercher les appareils BLE") { scanBle() }
         add(b, scanBtn)
@@ -295,7 +310,7 @@ class MainActivity : Activity() {
         add(b, saveBtn)
         add(b, label("Pour ce jalon, la sélection est conservée après redémarrage ; la lecture des mesures JK sera ajoutée ensuite.", 12f, color = subdued))
 
-        val c = section(root, "4. Connecter l'ESP32 à un réseau Wi-Fi 2,4 GHz")
+        val c = section(advanced, "4. Connecter l'ESP32 à un réseau Wi-Fi 2,4 GHz")
         wifiScanBtn = action("Rechercher les réseaux Wi-Fi disponibles") { scanRouterWifi() }
         add(c, wifiScanBtn)
         wifiNetworks = RadioGroup(this).apply { orientation = RadioGroup.VERTICAL }
@@ -315,22 +330,14 @@ class MainActivity : Activity() {
         add(c, wifiStatus)
         add(c, label("Réseau local de confiance uniquement (HTTP non chiffré dans ce prototype). Le firmware doit être en v0.1.3-dev pour modifier le Wi-Fi depuis la box.", 12f, color = subdued))
 
-        val access = section(root, "5. Code d'accès de l'ESP32")
+        val access = section(advanced, "5. Code d'accès de l'ESP32")
         add(access, label("Modifie le code personnel de la passerelle après association. Minimum 8 caractères pour protéger aussi son point d'accès Wi-Fi.", 13f, color = subdued))
         accessCodeNew = input("Nouveau code ESP32 (8 à 32 caractères)", true)
         add(access, accessCodeNew)
         accessCodeBtn = action("Changer le code de ma passerelle") { changeDeviceCode() }
         add(access, accessCodeBtn)
 
-        val d = section(root, "6. Tableau de bord JK — mesures expérimentales")
-        telemetryStatus = label("Sélectionne ton JK et connecte-toi à l'ESP32. Les mesures seront visibles uniquement si une trame valide est reçue.", 13f, color = subdued)
-        add(d, telemetryStatus)
-        add(d, action("Actualiser les mesures JK") { refreshTelemetry() })
-        telemetryPanel = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
-        add(d, telemetryPanel)
-        add(d, label("Lecture seule. Format JK02 24S/32S en cours de validation : ne pas utiliser pour une protection batterie.", 12f, color = subdued))
-        val e = section(root, "Prochainement")
-        add(e, label("Validation sur tes JK V19 · résistance des cellules · OTA ESP32 · accès distant sécurisé.", color = subdued))
+        add(advanced, label("BLE multi-batteries, OTA et accès distant : fonctions en développement.", 12f, color = subdued), 12)
 
         val enabled = false
         scanBtn.isEnabled = enabled
@@ -1006,72 +1013,49 @@ class MainActivity : Activity() {
     }
 
     private fun showTelemetry(response: JSONObject) {
-        telemetryPanel.removeAllViews()
         val devices = response.optJSONArray("devices")
         if (devices == null) {
-            telemetryStatus.text = if (response.optString("reason") == "jk_decoder_not_implemented") {
-                "Le firmware ESP32 ne dispose pas encore du lecteur JK. La mise à jour 0.1.6-dev est nécessaire."
-            } else {
-                "Lecteur JK non disponible sur ce firmware."
-            }
+            telemetryStatus.text = "Ce firmware ne propose pas encore la télémétrie JK."
+            telemetryPanel.removeAllViews()
+            dashboardCards.clear()
+            dashboardMacs = emptyList()
             return
         }
         if (devices.length() == 0) {
-            telemetryStatus.text = "Aucune batterie JK mémorisée dans l'ESP32."
+            telemetryStatus.text = "Aucun JK enregistré. Ouvre « Configuration et association » pour choisir un JK."
+            telemetryPanel.removeAllViews()
+            dashboardCards.clear()
+            dashboardMacs = emptyList()
             return
         }
-        telemetryStatus.text = "${devices.length()} batterie(s) configurée(s). Mise à jour automatique toutes les 8 secondes."
+        val macs = (0 until devices.length()).mapNotNull { i ->
+            devices.optJSONObject(i)?.optString("mac")?.takeIf { it.isNotBlank() }
+        }
+        if (macs != dashboardMacs) {
+            dashboardMacs = macs
+            telemetryPanel.removeAllViews()
+            dashboardCards.clear()
+            for (mac in macs) {
+                val card = BatteryDashboardCard(this)
+                dashboardCards[mac] = card
+                telemetryPanel.addView(card, LinearLayout.LayoutParams(-1, -2))
+            }
+        }
+        var validCount = 0
         for (i in 0 until devices.length()) {
             val item = devices.optJSONObject(i) ?: continue
             val mac = item.optString("mac")
-            val available = item.optBoolean("available")
-            val title = label("JK " + (i + 1) + " · " + mac, 15f, true, mint)
-            add(telemetryPanel, title, 12)
-            if (!available) {
-                add(telemetryPanel, label(readerStatus(item.optString("state")), 13f, color = subdued))
-                val errors = item.optInt("bad_crc_count") + item.optInt("rejected_measurements")
-                if (errors > 0) add(telemetryPanel, label("Trames invalides ou non reconnues : " + errors, 12f, color = subdued))
-                continue
-            }
-            val m = item.optJSONObject("values") ?: continue
-            val soc = m.optInt("soc_pct")
-            val voltage = formatValue(m.optDouble("voltage_v"))
-            val current = formatValue(m.optDouble("current_a"))
-            val power = formatValue(m.optDouble("power_w"), 1)
-            add(telemetryPanel, label("$soc % SOC  ·  $voltage V", 21f, true))
-            add(telemetryPanel, label("$current A  ·  $power W", 15f))
-            val min = formatValue(m.optDouble("cell_min_v"), 3)
-            val max = formatValue(m.optDouble("cell_max_v"), 3)
-            add(telemetryPanel, label("Cellules : " + m.optInt("cell_count") +
-                "  |  min. " + min + " V  |  max. " + max + " V"))
-            add(telemetryPanel, label("Écart : " + m.optInt("cell_delta_mv") +
-                " mV  ·  Cycles : " + m.optInt("cycles")))
-            val tempLine = listOf(
-                Pair("T1", "temp1_c"), Pair("T2", "temp2_c"), Pair("MOS", "mos_temp_c")
-            ).joinToString("  ·  ") { (title, key) ->
-                title + " : " + (if (m.has(key) && !m.isNull(key))
-                    formatValue(m.optDouble(key), 1) + " °C" else "indisponible")
-            }
-            add(telemetryPanel, label(tempLine, 12f, color = subdued))
-            add(telemetryPanel, label("Format " + m.optString("frame_layout") +
-                " · Mesure datant de " + item.optInt("age_seconds") + " s",
-                12f, color = subdued))
-            val cells = m.optJSONArray("cells") ?: JSONArray()
-            for (index in 0 until cells.length()) {
-                val cell = cells.optJSONObject(index) ?: continue
-                add(telemetryPanel, label("Cellule " + cell.optInt("number") +
-                    "   " + formatValue(cell.optDouble("voltage_v"), 3) + " V",
-                    13f, color = subdued), 2)
-            }
-            add(telemetryPanel, label("Données expérimentales, ne pas utiliser pour commander le BMS.",
-                12f, color = subdued), 8)
+            if (item.optBoolean("available")) validCount++
+            dashboardCards[mac]?.bind(i, item)
         }
+        telemetryStatus.text = validCount.toString() + "/" + devices.length() +
+            " JK avec mesures récentes  ·  Actualisation toutes les 2,5 s"
     }
 
     override fun onResume() {
         super.onResume()
         uiHandler.removeCallbacks(telemetryTicker)
-        uiHandler.postDelayed(telemetryTicker, 3000)
+        uiHandler.postDelayed(telemetryTicker, 500)
     }
     override fun onPause() {
         uiHandler.removeCallbacks(telemetryTicker)
