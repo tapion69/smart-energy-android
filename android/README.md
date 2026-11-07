@@ -1,4 +1,4 @@
-# Smart Energy Android — prototype Android v0.1.9-dev
+# Smart Energy Android — prototype Android v0.2.0-dev
 
 Un projet Android Studio **réel**, en Kotlin natif, ciblant Android 10+.
 
@@ -94,3 +94,11 @@ La signature Android permanente est traitée séparément dans `docs/APK-SIGNATU
 - « Configuration et association » ouvre/referme les sections Wi-Fi, JK, code et récupération BOOT.
 - La connexion BLE persistante et les barres de cellules sont **à valider sur batterie physique**. Les temps de mise à jour de 2,5 s concernent **le rafraîchissement de l'APK** ; la fréquence des trames dépend du JK.
 - Les APK debug GitHub Actions ont toujours une signature éphémère : une réinstallation peut perdre l'association Android. La signature permanente est préparée, mais les secrets GitHub doivent encore être configurés pour publier des APK signées.
+
+## 0.2.0-dev — Paramètres JK en lecture seule
+
+- Trois onglets Android : **Batterie** (jauge et cellules), **Détails** (mesures étendues, jusqu'à 6 températures si disponibles, résistances par cellule, alarmes, MOS, équilibrage, capacités, SOH, diagnostic BLE), **Paramètres** (47 seuils/commutateurs JK et informations d'identité).
+- L'ESP32 décode les trames 0x02 de mesures, 0x01 de réglages et 0x03 d'information (checksum confirmé) ; aucun champ de mots de passe BMS n'est exposé.
+- Les valeurs absentes/invalides sont affichées indisponibles, pas à 0 ; les paramètres non encore reçus affichent leur état d'attente.
+- L'APK interroge la télémétrie toutes les 2,5 s et le cache des paramètres seulement à la consultation, puis toutes les 30 s au maximum. Cela ne déclenche pas de reconnexion BLE.
+- Lecture strictement seule : **aucun paramètre ne peut être modifié depuis cette version**. L'affichage et le décodeur restent expérimentaux, à comparer à l'application JK constructeur avant toute utilisation plus poussée.
