@@ -54,3 +54,9 @@ Les mises à jour suivantes : augmenter `versionCode`, compiler avec les quatre 
 - Cette procédure **ne récupère pas** un code déjà supprimé du stockage Android. Le code est encore présent sur l'ESP32.
 - Une réinitialisation de l'application par l'utilisateur ou le système peut également effacer les données.
 - La première version Bluetooth JK est expérimentale, en lecture seule.
+
+## Option de récupération v0.1.8-dev sans câble USB (après la première mise à jour du firmware)
+
+Sur le **même réseau Wi-Fi domestique**, ouvrir l'APK, renseigner l'IP de l'ESP32 et appuyer sur « Code perdu ? Réassocier avec BOOT ». Maintenir le bouton BOOT du périphérique 4 secondes et relâcher. Valider dans l'APK moins de 45 secondes après. L'application génère un **nouveau** code ; elle ne demande pas et ne révèle pas l'ancien. Cette méthode ne modifie ni le Wi-Fi ni la liste JK.
+
+**Limites :** ce bouton ne peut pas fonctionner sur un ancien firmware 0.1.6-dev, qui n'a pas cette route. Première installation du firmware 0.1.8-dev par USB nécessaire, sans effacer NVS si l'outil sait flasher `app-only` à `0x10000`. Méthode réservée à un LAN de confiance, car la communication du prototype n'est pas encore chiffrée.
