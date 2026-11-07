@@ -227,22 +227,63 @@ inline void readPrintable(const uint8_t *f, size_t offset, size_t len,
   }
   dest[n] = 0;
 }
+// JK variants may send a CRC-valid type-03 frame with different content
+// layouts (including printable JSON fragments). A valid checksum proves the
+// frame arrived intact, NOT that these fixed offsets contain identity data.
+// Fail CLOSED unless the vendor/model prefix is recognizable, then validate
+// each independent field. Never decode/access password regions.
+inline bool identifierCharacter(char ch, bool allowSpaces = false) {
+  return (ch >= 'A' && ch <= 'Z') ||
+         (ch >= 'a' && ch <= 'z') ||
+         (ch >= '0' && ch <= '9') ||
+         ch == '_' || ch == '-' || ch == '.' ||
+         (allowSpaces && ch == ' ');
+}
+inline bool safeIdentifier(const char *str, size_t minimum,
+                           bool allowSpaces = false) {
+  const size_t n = strlen(str);
+  if (n < minimum) return false;
+  for (size_t i=0; i<n; ++i)
+    if (!identifierCharacter(str[i], allowSpaces)) return false;
+  return true;
+}
+inline bool likelyJKModel(const char *v) {
+  return safeIdentifier(v, 3, true) &&
+     ((v[0]=='J' && v[1]=='K') ||
+      (v[0]=='P' && v[1]=='B') ||
+      (v[0]=='J' && v[1]=='i' && v[2]=='k'));
+}
 inline bool decodeInfo(const uint8_t *f, Info &out) {
   if (!smartjk::frameValid(f) || f[4] != 3) return false;
   Info info{};
   readPrintable(f, 6,16,info.vendor,sizeof(info.vendor));
+  // A binary payload or JSON fragment must NEVER be displayed as BMS identity.
+  if (!likelyJKModel(info.vendor)) return false;
   readPrintable(f,22,8,info.hardware,sizeof(info.hardware));
   readPrintable(f,30,8,info.software,sizeof(info.software));
   readPrintable(f,46,16,info.deviceName,sizeof(info.deviceName));
   readPrintable(f,78,8,info.manufactureDate,sizeof(info.manufactureDate));
   readPrintable(f,86,11,info.serialNumber,sizeof(info.serialNumber));
-  info.powerOnCount = smartjk::u32(f,42);
-  info.uptimeS = smartjk::u32(f,38);
+
+  if (!safeIdentifier(info.hardware, 2)) info.hardware[0] = 0;
+  if (!safeIdentifier(info.software, 2)) info.software[0] = 0;
+  if (!safeIdentifier(info.deviceName, 2, true)) info.deviceName[0] = 0;
+  if (!safeIdentifier(info.serialNumber, 5)) info.serialNumber[0] = 0;
+  // Date is usually YYMMDD. If not precisely recognized, omit it.
+  const size_t dateLen = strlen(info.manufactureDate);
+  bool dateOk = dateLen==6 || dateLen==8;
+  for (size_t i=0; i<dateLen; ++i)
+    if (info.manufactureDate[i]<'0' || info.manufactureDate[i]>'9')
+      dateOk=false;
+  if (!dateOk) info.manufactureDate[0] = 0;
+  const uint32_t uptimeS = smartjk::u32(f,38);
+  const uint32_t powerOn = smartjk::u32(f,42);
+  // A dubious field must not be presented as a confirmed counter.
+  info.uptimeS = uptimeS < 315360000u ? uptimeS : 0u;
+  info.powerOnCount = powerOn < 1000000u ? powerOn : 0u;
   info.uart1Protocol = f[184];
   info.canProtocol = f[185];
-  // Deliberately ignore any user passcode fields at [62,78), [118,134).
-  if (info.hardware[0] == 0 && info.software[0] == 0 &&
-      info.vendor[0] == 0) return false;
+  // Explicitly ignore secret areas [62,78) and [118,134).
   info.confirmed = true;
   out = info;
   return true;
