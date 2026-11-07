@@ -1,4 +1,4 @@
-# Smart JK ESP32 — firmware de test (0.1.6-dev)
+# Smart JK ESP32 — firmware de test (0.1.8-dev)
 
 **Fonctions actuellement codées** : diagnostic Wi-Fi et retour automatique au mode configuration après 30 secondes d'échec, point d'accès Wi-Fi de configuration, secret unique par appareil, lecture de l'identité, scan BLE, sélection et enregistrement persistant des MAC JK, configuration du Wi-Fi, retour au réseau local, et **première acquisition BLE expérimentale en lecture seule**.
 
@@ -17,7 +17,7 @@
 
 ## Mode configuration après un premier appairage
 
-Sur une carte équipée du bouton BOOT (GPIO0), après le démarrage, le maintenir **4 secondes** pour réactiver le point d'accès. Ne pas maintenir BOOT pendant la mise sous tension : GPIO0 est une broche de démarrage.
+Sur une carte équipée du bouton BOOT (GPIO0), après le démarrage, le maintenir **10 secondes** pour réactiver le point d'accès avec le nouveau firmware 0.1.8. Une pression de **4 secondes** ouvre uniquement la fenêtre de réassociation sur le Wi-Fi domestique. Ne pas maintenir BOOT pendant la mise sous tension : GPIO0 est une broche de démarrage.
 
 ## Sécurité / limites du prototype
 
@@ -75,3 +75,16 @@ L'intégration Bluetooth et le décodeur sont **en cours de validation sur les v
 Si le JK est simultanément connecté en Bluetooth à un téléphone, Home Assistant ou un autre proxy, le nouvel ESP32 peut ne pas arriver à le joindre. Pendant les premiers essais, utiliser un JK de test ou interrompre temporairement **la connexion BLE concurrente de ce JK**, sans reflasher ni changer l'ESP32 Home Assistant existant.
 
 **Attention flash :** une image `factory.bin` complète est destinée à l'adresse `0x0000` et peut réinitialiser NVS. Un fichier `app-only` peut mettre à jour le programme à l'adresse `0x10000` seulement avec un outil de flash explicitement compatible avec cette adresse ; ce n'est **pas** une OTA. Si le code de première association ou la liste de JK est effacée, refaire l'association une fois dans l'APK.
+
+## 0.1.8-dev — Réassociation sur le Wi-Fi sans connaître l'ancien code
+
+**Ne jamais publier directement l'ancien code depuis `/api/v1/info`.** Il reste secret.
+
+Après installation du nouveau firmware sur ESP32, appuyer sur BOOT **4 secondes (après le démarrage)** pour ouvrir pendant **45 secondes** une fenêtre de récupération locale. L'application peut alors envoyer un **nouveau code aléatoire de 20 caractères** à `POST /api/v1/pair/recover`, en fournissant l'identité exacte de l'ESP32. L'ESP32 remplace le code stocké et ferme immédiatement la fenêtre : ni le Wi-Fi sauvegardé ni les MAC JK ne sont modifiés.
+
+- Hors fenêtre physique, l'API répond `403`. Trois requêtes invalides au maximum ; ensuite la fenêtre se referme.
+- **BOOT maintenu 10 secondes**, et non 4, ouvre désormais le point d'accès temporaire SmartJK (action de dépannage). Ne pas maintenir BOOT pendant le démarrage.
+- Ce mécanisme ne fonctionne **pas sur les versions 0.1.6-dev déjà installées**. Un premier flash ESP32 0.1.8 est nécessaire par USB / adresse `0x10000`, car l'OTA n'est pas encore développée.
+- Aucun ancien code n'est renvoyé par le réseau. L'application stocke le nouveau code dans Android Keystore après vérification.
+- **Sécurité du prototype :** authentification par présence physique, mais transport LAN encore en HTTP clair. Un appareil malveillant sur le réseau local pourrait tenter de profiter de la fenêtre de récupération. Désactiver l'option en production tant qu'elle n'est pas protégée par un protocole chiffré avec confirmation de l'identité du téléphone.
+- Il s'agit d'une récupération de proximité (bouton physique), **pas d'un accès à distance depuis Internet**.
