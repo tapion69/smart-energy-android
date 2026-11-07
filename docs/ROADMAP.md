@@ -3,7 +3,7 @@
 | Étape | Livrable | Critère d'acceptation | Statut |
 | --- | --- | --- | --- |
 | 0 | Dépôt structuré et contrat produit | README, architecture, sécurité, canaux de mises à jour | En cours |
-| 1 | Firmware JK autonome | ESP32 se configure sur Wi-Fi, scanne le JK, sauvegarde une MAC sans recompiler | **Code initial disponible, compilation et tests matériels non réalisés** |
+| 1 | Firmware JK autonome | ESP32 se configure sur Wi-Fi, scanne le JK, sauvegarde une MAC sans recompiler | **Code initial compilé en CI, tests matériels non réalisés** |
 | 2 | APK Android Studio | Détection/appairage ESP32, Wi-Fi, recherche BLE par l'ESP32 et sélection JK dans l'APK | Non commencé |
 | 3 | Télémétrie réelle | SOC, V, A, cellules, alarmes, valeurs datées sur un JK V19 et reconnexion après coupure | Non commencé |
 | 4 | Plusieurs JK | Deux puis trois JK et, si nécessaire, plusieurs ESP32 ; stabilité et consommation mesurées | Non commencé |
@@ -35,6 +35,6 @@ Le prototype statique YAML + lecteur HTTP précédent est conservé hors de la v
 
 - Première application Android Kotlin avec connexion Wi-Fi Android au point d’accès de l’ESP32, scan BLE, sélection d’adresses, configuration Wi-Fi maison.
 - Firmware ESP32 PlatformIO dédié, mode setup protégé par un code unique fourni via le moniteur série USB pour les premiers tests.
-- **Aucun firmware ou APK compilé, flashé ni validé en conditions réelles à ce stade**.
+- **Firmware ESP32 et APK Android compilés avec succès en GitHub Actions ; aucun flash ni essai matériel validé à ce stade**.
 - Scan BLE = tous les appareils détectés, pas encore reconnaissance certifiée JK. Les mesures ne sont pas décodées.
 - La première version grand public exigera un provisionnement sans PC après flash d’usine ou fourniture d’un code par QR.
