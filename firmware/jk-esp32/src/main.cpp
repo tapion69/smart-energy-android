@@ -257,8 +257,9 @@ void onChangeCode() {
     error(400, "code_length_8_to_32_required");
     return;
   }
-  for (char ch : newCode) {
-    if ((unsigned char)ch < 33 || (unsigned char)ch > 126) {
+  for (size_t i = 0; i < newCode.length(); ++i) {
+    unsigned char ch = (unsigned char)newCode[i];
+    if (ch < 33 || ch > 126) {
       error(400, "code_ascii_printable_no_spaces");
       return;
     }
