@@ -8,4 +8,5 @@ namespace jkreader {
   bool acquireRadio(uint32_t waitMs);
   void releaseRadio();
   void fillTelemetry(JsonDocument &out);
+  void fillDetails(JsonDocument &out);
 }
