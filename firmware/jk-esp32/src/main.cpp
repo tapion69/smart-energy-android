@@ -10,7 +10,7 @@
 #include <ArduinoJson.h>
 #include <ctype.h>
 
-static const char *VERSION = "0.1.2-dev";
+static const char *VERSION = "0.1.3-dev";
 static const uint32_t WIFI_JOIN_TIMEOUT_MS = 30000; // Return to setup after 30s
 static const int SETUP_BUTTON = 0; // Hold BOOT for 4 s AFTER startup to reopen setup
 static const uint32_t HOLD_MS = 4000;
@@ -204,7 +204,9 @@ void onSaveBms() {
   respond(200, resp);
 }
 void onSetWifi() {
-  if (!requireSetup()) return;
+  // The same paired device can update Wi-Fi from the trusted home LAN.
+  // Prototype uses plaintext HTTP and MUST NOT be exposed to the Internet.
+  if (!requireControl()) return;
   JsonDocument request;
   if (deserializeJson(request, http.arg("plain"))) {
     error(400, "invalid_json");
@@ -225,7 +227,7 @@ void onSetWifi() {
   JsonDocument resp;
   resp["ok"] = true;
   resp["restart_required"] = true;
-  resp["note"] = "ESP32 will switch to home Wi-Fi. Reconnect phone to home Wi-Fi.";
+  resp["note"] = "Wi-Fi accepted; restarting ESP32. Configuration stays in NVS.";
   respond(200, resp);
   restartAt = millis() + 2200;
 }
