@@ -10,7 +10,7 @@
 #include <ArduinoJson.h>
 #include <ctype.h>
 
-static const char *VERSION = "0.1.1-dev";
+static const char *VERSION = "0.1.2-dev";
 static const uint32_t WIFI_JOIN_TIMEOUT_MS = 30000; // Return to setup after 30s
 static const int SETUP_BUTTON = 0; // Hold BOOT for 4 s AFTER startup to reopen setup
 static const uint32_t HOLD_MS = 4000;
