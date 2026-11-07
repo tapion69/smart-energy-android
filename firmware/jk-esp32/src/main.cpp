@@ -1,4 +1,4 @@
-// Smart Energy JK - provisioning test firmware 0.1.0-dev
+// Smart Energy JK - provisioning test firmware 0.1.1-dev
 // IMPORTANT: Wi-Fi setup and BLE discovery only, JK data decoding NOT included yet.
 // Target: classic ESP32 DevKit (esp32dev), flash a spare unit, not the HA proxy.
 #include <Arduino.h>
@@ -10,7 +10,8 @@
 #include <ArduinoJson.h>
 #include <ctype.h>
 
-static const char *VERSION = "0.1.0-dev";
+static const char *VERSION = "0.1.1-dev";
+static const uint32_t WIFI_JOIN_TIMEOUT_MS = 30000; // Return to setup after 30s
 static const int SETUP_BUTTON = 0; // Hold BOOT for 4 s AFTER startup to reopen setup
 static const uint32_t HOLD_MS = 4000;
 
@@ -23,6 +24,10 @@ bool setupMode = false;
 bool mdnsRunning = false;
 uint32_t restartAt = 0;
 uint32_t buttonPressedAt = 0;
+uint32_t wifiAttemptAt = 0;
+bool everConnected = false;
+String wifiIssue = "";
+volatile uint8_t disconnectReason = 0;
 
 void respond(int status, JsonDocument &doc) {
   String json;
@@ -60,7 +65,14 @@ String normalizedMac(const String &input) {
   }
   return value;
 }
+void onWifiEvent(WiFiEvent_t event, WiFiEventInfo_t info) {
+  if (event == ARDUINO_EVENT_WIFI_STA_DISCONNECTED) {
+    disconnectReason = info.wifi_sta_disconnected.reason;
+    Serial.printf("[WiFi] STA disconnected; reason=%u\\n", (unsigned)disconnectReason);
+  }
+}
 void startSetup() {
+  wifiAttemptAt = 0;
   if (mdnsRunning) {
     MDNS.end();
     mdnsRunning = false;
@@ -68,7 +80,9 @@ void startSetup() {
   WiFi.disconnect(true);
   WiFi.mode(WIFI_AP);
   setupMode = true;
-  WiFi.softAP(setupSsid.c_str(), setupCode.c_str(), 1, false, 1);
+  const bool started = WiFi.softAP(setupSsid.c_str(), setupCode.c_str(), 1, false, 1);
+  Serial.printf("[WiFi] Setup AP %s, diagnostic=%s, last_reason=%u\\n",
+                started ? "started" : "FAILED", wifiIssue.c_str(), (unsigned)disconnectReason);
   Serial.println();
   Serial.println("========= SMART JK SETUP =========");
   Serial.printf("SSID: %s\n", setupSsid.c_str());
@@ -79,12 +93,18 @@ void startSetup() {
 }
 void connectHome() {
   setupMode = false;
+  everConnected = false;
+  disconnectReason = 0;
+  wifiIssue = "";
   String ssid = prefs.getString("ssid", "");
   String password = prefs.getString("wifiPass", "");
   WiFi.mode(WIFI_STA);
   WiFi.setHostname(hostName.c_str());
   WiFi.setAutoReconnect(true);
   WiFi.begin(ssid.c_str(), password.c_str());
+  wifiAttemptAt = millis();
+  Serial.println("[WiFi] Trying saved Wi-Fi (2.4 GHz required)...");
+  // Never log SSIDs or passwords in diagnostic outputs.
 }
 void onInfo() {
   JsonDocument doc;
@@ -93,6 +113,10 @@ void onInfo() {
   doc["device_id"] = hostName;
   doc["setup_mode"] = setupMode;
   doc["wifi_connected"] = WiFi.status() == WL_CONNECTED;
+  doc["wifi_status_code"] = (int)WiFi.status();
+  doc["wifi_saved"] = prefs.getString("ssid", "").length() > 0;
+  doc["wifi_issue"] = wifiIssue;
+  doc["last_disconnect_reason"] = disconnectReason;
   doc["ip"] = WiFi.localIP().toString();
   doc["ble_scan"] = true;
   doc["telemetry"] = false;
@@ -224,6 +248,7 @@ void setup() {
     prefs.putString("setupCode", setupCode);
   }
   NimBLEDevice::init("");
+  WiFi.onEvent(onWifiEvent);
 
   const char *headerKeys[] = {"X-Setup-Code"};
   http.collectHeaders(headerKeys, 1);
