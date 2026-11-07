@@ -1,6 +1,6 @@
-# Smart JK ESP32 — premier firmware de test (0.1.0-dev)
+# Smart JK ESP32 — firmware de test (0.1.1-dev)
 
-**Fonctions actuellement codées** : point d'accès Wi-Fi de configuration, secret unique par appareil, lecture de l'identité, scan BLE, sélection et enregistrement persistant des MAC JK, configuration du Wi-Fi, retour au réseau local et état « pas encore de télémétrie ».
+**Fonctions actuellement codées** : diagnostic Wi-Fi et retour automatique au mode configuration après 30 secondes d'échec, point d'accès Wi-Fi de configuration, secret unique par appareil, lecture de l'identité, scan BLE, sélection et enregistrement persistant des MAC JK, configuration du Wi-Fi, retour au réseau local et état « pas encore de télémétrie ».
 
 **Pas encore codés** : connexion GATT aux JK, décodage des données V19, appairage définitif de production, OTA, accès Internet. Ne pas considérer un appareil scanné comme un JK sans vérification.
 
@@ -39,3 +39,19 @@ Sur une carte équipée du bouton BOOT (GPIO0), après le démarrage, le mainten
 | `/api/v1/telemetry` | GET | LAN / Setup | `available:false` jusqu'au décodeur JK |
 
 Le scan BLE s'appuie sur l'API NimBLE-Arduino 2.x ; il peut trouver d'autres périphériques à proximité.
+
+## Dépannage Wi-Fi avec la version 0.1.1-dev
+
+La configuration Wi-Fi maison est enregistrée en NVS. Après le redémarrage :
+
+- La série (115200) affiche `[WiFi] Trying saved Wi-Fi (2.4 GHz required)...`.
+- Si connexion réussie : `[WiFi] Connected: ...` puis `Smart JK local: ...`.
+- Si impossible après 30 secondes : `[WiFi] Failed ... status=... reason=...` et **le réseau SmartJK-Setup-XXXXXX réapparaît automatiquement**.
+- Pour corriger immédiatement les paramètres sur l'ancienne version 0.1.0, maintenir **BOOT 4 s après démarrage** (pas pendant l'allumage), puis reconnecter l'APK.
+- Les paramètres sauvegardés n'ont pas de SSID/mot de passe imprimés dans les logs ; ne pas poster le code de 12 caractères.
+
+Causes possibles : réseau limité au 5 GHz, mot de passe mal saisi, SSID erroné, WPA3-only sur routeur, filtrage MAC ou signal trop faible. Vérifier la connexion sur 2,4 GHz avec WPA2/WPA2+WPA3 et le mot de passe exact avant de conclure à un bug.
+
+### Attention en reflashant
+
+Le binaire `*-factory.bin` est une image **complète** destinée à une installation USB depuis l'adresse `0x0000` : elle peut **effacer les données NVS**, notamment le Wi-Fi et le code d'appairage. Le fichier `firmware.bin` (app-only) se flashe à l'adresse `0x10000`, avec un outil supportant explicitement cette adresse, et n'est **pas** une image factory. Ce prototype ne dispose pas encore d'OTA.
