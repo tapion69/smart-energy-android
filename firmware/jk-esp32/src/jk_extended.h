@@ -103,7 +103,7 @@ inline bool decode(const uint8_t *f, const smartjk::Reading &basic, Reading &out
 // Catalog must be synchronized with read_settings() in original JK add-on.
 // Kind: unsigned 4B, signed 4B, unsigned 1B, signed 1B, full-byte switch,
 // bit in 16-bit flags field at 282 (no writes of any kind).
-enum Kind: uint8_t { UINT4, INT4, UINT1, INT1, BOOL1, BIT16 };
+enum Kind: uint8_t { UINT4, INT4, UINT1, INT1, BOOL1, FLAG16 };
 struct Param {
   const char *key;
   const char *label;
@@ -150,13 +150,13 @@ static constexpr Param PARAMS[] = {
   {"short_circuit_delay_us","Délai protection court-circuit","Courants","µs",134,UINT4,1,0,500000},
   {"balance_start_v","Tension début équilibrage","Équilibrage","V",138,UINT4,1000,1.2f,4.35f},
   {"precharge_time_s","Durée précharge","Énergie","s",274,UINT1,1,0,255},
-  {"heating_enabled","Chauffage autorisé","Interrupteurs","",282,BIT16,1,0,1,0},
-  {"disable_temperature_sensors","Surveillance températures désactivée","Interrupteurs","",282,BIT16,1,0,1,1},
-  {"display_always_on","Écran toujours allumé","Interrupteurs","",282,BIT16,1,0,1,4},
-  {"smart_sleep_enabled","Veille intelligente","Interrupteurs","",282,BIT16,1,0,1,6},
-  {"disable_pcl_module","Module PCL désactivé","Interrupteurs","",282,BIT16,1,0,1,7},
-  {"timed_stored_data","Enregistrement périodique","Interrupteurs","",282,BIT16,1,0,1,8},
-  {"charging_float_mode","Mode flottement","Interrupteurs","",282,BIT16,1,0,1,9},
+  {"heating_enabled","Chauffage autorisé","Interrupteurs","",282,FLAG16,1,0,1,0},
+  {"disable_temperature_sensors","Surveillance températures désactivée","Interrupteurs","",282,FLAG16,1,0,1,1},
+  {"display_always_on","Écran toujours allumé","Interrupteurs","",282,FLAG16,1,0,1,4},
+  {"smart_sleep_enabled","Veille intelligente","Interrupteurs","",282,FLAG16,1,0,1,6},
+  {"disable_pcl_module","Module PCL désactivé","Interrupteurs","",282,FLAG16,1,0,1,7},
+  {"timed_stored_data","Enregistrement périodique","Interrupteurs","",282,FLAG16,1,0,1,8},
+  {"charging_float_mode","Mode flottement","Interrupteurs","",282,FLAG16,1,0,1,9},
   {"heating_start_c","Démarrage chauffage","Températures protection","°C",284,INT1,1,-30,90},
   {"heating_stop_c","Arrêt chauffage","Températures protection","°C",285,INT1,1,-30,90},
   {"smart_sleep_delay_h","Délai veille","Énergie","h",286,UINT1,1,0,24},
@@ -179,7 +179,7 @@ inline bool decodeSettings(const uint8_t *f, Settings &out) {
     else if (p.kind == INT4) raw = smartjk::i32(f, p.offset);
     else if (p.kind == UINT1 || p.kind == BOOL1) raw = f[p.offset];
     else if (p.kind == INT1) raw = int8_t(f[p.offset]);
-    else if (p.kind == BIT16) raw = ((smartjk::u16(f,p.offset) & (uint16_t(1) << p.bit)) != 0);
+    else if (p.kind == FLAG16) raw = ((smartjk::u16(f,p.offset) & (uint16_t(1) << p.bit)) != 0);
     if (p.kind == BOOL1 && raw != 0 && raw != 1) continue;
     float val = float(raw) / p.scale;
     if (!isfinite(val) || val < p.minimum || val > p.maximum) continue;
