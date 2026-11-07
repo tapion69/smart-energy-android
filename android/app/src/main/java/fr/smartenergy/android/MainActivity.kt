@@ -48,7 +48,7 @@ import java.net.URL
 import java.util.concurrent.Executors
 
 /**
- * Smart Energy Android 0.1.4-dev.
+ * Smart Energy Android 0.1.5-dev.
  * Initial provisioning over ESP32's setup AP, subsequent management over home Wi-Fi.
  * Credentials kept encrypted in Android Keystore-backed local preferences.
  * DEVELOPMENT-ONLY HTTP local transport; NOT safe for remote/public use.
@@ -380,20 +380,30 @@ class MainActivity : Activity() {
 
     private fun httpCall(method: String, path: String, payload: JSONObject? = null): JSONObject {
         require(path.startsWith("/api/v1/"))
-        val conn = if (setupTransport) {
-            val network = apNetwork ?: throw IllegalStateException("Connexion temporaire ESP32 perdue. Relance l'association dans la section 2.")
-            if (connectivity.getNetworkCapabilities(network)?.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) != true) {
-                throw IllegalStateException("Connexion Wi-Fi temporaire inactive. Vérifie le VPN et relance la connexion à l'ESP32.")
+        // Do not bind home LAN requests to a selected Network. On some Android
+        // devices or under a VPN, Network.openConnection binds a socket to a
+        // network the app is not permitted to use (EPERM).
+        //
+        // Setup AP is different: WifiNetworkSpecifier creates a dedicated local
+        // network that is not the system default and must be used explicitly.
+        val conn: HttpURLConnection = try {
+            if (setupTransport) {
+                val network = apNetwork
+                    ?: throw IllegalStateException("Connexion temporaire ESP32 perdue. Relance l'association.")
+                if (connectivity.getNetworkCapabilities(network)
+                        ?.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) != true) {
+                    throw IllegalStateException("Connexion Wi-Fi temporaire inactive.")
+                }
+                network.openConnection(URL("http://192.168.4.1" + path)) as HttpURLConnection
+            } else {
+                val host = localHost
+                if (!allowedLocalIp(host)) {
+                    throw IllegalStateException("Retrouve d'abord l'ESP32 sur le Wi-Fi local.")
+                }
+                URL("http://" + host + path).openConnection() as HttpURLConnection
             }
-            network.openConnection(URL("http://192.168.4.1" + path)) as HttpURLConnection
-        } else {
-            val host = localHost
-            if (!allowedLocalIp(host)) throw IllegalStateException("Retrouve l'ESP32 sur ton réseau local.")
-            // Route to a live Wi-Fi Network, not through a stale setup Network or mobile data/VPN.
-            val wifiNetwork = connectivity.allNetworks.firstOrNull { network ->
-                connectivity.getNetworkCapabilities(network)?.let { cap -> cap.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) && !cap.hasTransport(NetworkCapabilities.TRANSPORT_VPN) } == true
-            } ?: throw IllegalStateException("Téléphone non connecté au Wi-Fi de la maison. Vérifie le VPN et le Wi-Fi.")
-            wifiNetwork.openConnection(URL("http://" + host + path)) as HttpURLConnection
+        } catch (ex: Exception) {
+            throw networkError(ex)
         }
         return try {
             conn.connectTimeout = 8000
@@ -412,7 +422,32 @@ class MainActivity : Activity() {
             val json = JSONObject(body)
             if (code !in 200..299) throw IllegalStateException(json.optString("error", "HTTP $code"))
             json
+        } catch (ex: Exception) {
+            throw networkError(ex)
         } finally { conn.disconnect() }
+    }
+
+    private fun networkError(ex: Exception): Exception {
+        val message = ex.message ?: ""
+        if (message.contains("EPERM", true) ||
+            message.contains("Binding socket to network", true) ||
+            message.contains("Operation not permitted", true)) {
+            return IllegalStateException(
+                "Android refuse l'accès au réseau local (EPERM). Désactive temporairement le VPN et l'option « Bloquer les connexions sans VPN », " +
+                "vérifie que le téléphone est sur le Wi-Fi de la maison, puis relance Smart Energy.", ex
+            )
+        }
+        val vpnActive = connectivity.activeNetwork?.let {
+            connectivity.getNetworkCapabilities(it)?.hasTransport(NetworkCapabilities.TRANSPORT_VPN)
+        } == true
+        if (vpnActive && (ex is java.net.SocketException ||
+                           ex is java.net.UnknownHostException ||
+                           ex is java.net.SocketTimeoutException)) {
+            return IllegalStateException(
+                "Connexion locale inaccessible avec le VPN actif. Autorise le réseau local dans ton VPN, ou désactive-le temporairement pour ce test.", ex
+            )
+        }
+        return ex
     }
 
     private fun async(task: () -> Unit) {
