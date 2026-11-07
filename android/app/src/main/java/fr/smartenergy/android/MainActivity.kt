@@ -111,13 +111,13 @@ class MainActivity : Activity() {
     private fun action(title: String, block: () -> Unit) = Button(this).apply {
         text = title
         isAllCaps = false
-        setTextColor(background)
+        setTextColor(this@MainActivity.background)
         backgroundTintList = ColorStateList.valueOf(mint)
         setOnClickListener { block() }
     }
 
     private fun drawUi() {
-        val scroll = ScrollView(this).apply { setBackgroundColor(background) }
+        val scroll = ScrollView(this).apply { setBackgroundColor(this@MainActivity.background) }
         val root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(d(16), d(24), d(16), d(30))
