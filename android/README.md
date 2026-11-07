@@ -55,3 +55,10 @@ Après validation de ce parcours sur matériel réel, intégrer le décodeur JK 
 - Transport local HTTP non chiffré **réservé aux tests**, pas de sortie WAN, pas d'OTA, pas encore de télémétrie JK.
 
 **Séquence** : installer firmware ESP32 0.1.4-dev et APK 0.1.4-dev → trouver la passerelle sur le LAN ou en mode BOOT → associer une seule fois → « Rechercher les réseaux Wi-Fi disponibles » → sélectionner le SSID 2,4 GHz → saisir son mot de passe → « Enregistrer ». Quand la passerelle est déjà connectée à la box et que l'on ne veut pas changer de réseau, passer directement au scan BLE.
+
+## 0.1.5-dev — Correctif Android EPERM (sans changement ESP32)
+
+- Sur le **Wi-Fi maison**, l'APK utilise désormais le routage réseau Android normal via `URL.openConnection()` au lieu de sélectionner puis forcer arbitrairement un objet `Network`. Sous certains VPN et certaines politiques Android, `Network.openConnection()` échouait avec `Binding socket to network ... EPERM`.
+- Le **réseau de configuration ESP32** (`192.168.4.1`) continue de nécessiter un `Network.openConnection()` dédié car il provient de `WifiNetworkSpecifier`. Si un VPN ou un mode « bloquer les connexions sans VPN » refuse le réseau local, l'APK affiche un diagnostic explicite ; elle ne contourne pas la politique Android du téléphone.
+- Aucun firmware à reflasher : l'ESP32 0.1.4-dev ou 0.1.3-dev reste compatible pour la gestion LAN correspondante. Scan des réseaux à distance : nécessite firmware 0.1.4-dev.
+- Test recommandé : connecter le téléphone au Wi-Fi habituel, **désactiver temporairement le VPN** et son option de blocage si nécessaire, puis ouvrir l'APK. Le mode « VPN actif » ne doit pas faire l'objet d'une tentative de contournement silencieuse.
