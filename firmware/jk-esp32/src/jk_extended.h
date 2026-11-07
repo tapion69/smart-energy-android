@@ -112,14 +112,14 @@ struct Param {
   uint16_t offset;
   Kind kind;
   float scale, minimum, maximum;
-  int bit;
+  int flagIndex;
   // ESP32 Arduino uses C++11. Default member initializers make an aggregate
   // in C++17 but not in C++11, so use an explicit constexpr constructor.
   constexpr Param(const char *k, const char *l, const char *g, const char *u,
                   uint16_t o, Kind type, float multiplier,
-                  float lo, float hi, int bitIndex = -1):
+                  float lo, float hi, int flagIndexValue = -1):
     key(k), label(l), group(g), unit(u), offset(o), kind(type),
-    scale(multiplier), minimum(lo), maximum(hi), bit(bitIndex) {}
+    scale(multiplier), minimum(lo), maximum(hi), flagIndex(flagIndexValue) {}
 };
 static constexpr Param PARAMS[] = {
   {"smart_sleep_voltage","Tension veille intelligente","Énergie","V",6,UINT4,1000,0.003f,3.65f},
@@ -186,7 +186,7 @@ inline bool decodeSettings(const uint8_t *f, Settings &out) {
     else if (p.kind == INT4) raw = smartjk::i32(f, p.offset);
     else if (p.kind == UINT1 || p.kind == BOOL1) raw = f[p.offset];
     else if (p.kind == INT1) raw = int8_t(f[p.offset]);
-    else if (p.kind == FLAG16) raw = ((smartjk::u16(f,p.offset) & (uint16_t(1) << p.bit)) != 0);
+    else if (p.kind == FLAG16) raw = ((smartjk::u16(f,p.offset) & (uint16_t(1) << p.flagIndex)) != 0);
     if (p.kind == BOOL1 && raw != 0 && raw != 1) continue;
     float val = float(raw) / p.scale;
     if (!isfinite(val) || val < p.minimum || val > p.maximum) continue;
