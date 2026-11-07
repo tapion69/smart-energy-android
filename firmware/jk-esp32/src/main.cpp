@@ -1,5 +1,5 @@
-// Smart Energy JK - provisioning test firmware 0.1.4-dev
-// IMPORTANT: Wi-Fi setup and BLE discovery only, JK data decoding NOT included yet.
+// Smart Energy JK - standalone telemetry and physical recovery 0.1.8-dev
+// JK02 telemetry is experimental. LAN recovery requires physical BOOT confirmation.
 // Target: classic ESP32 DevKit (esp32dev), flash a spare unit, not the HA proxy.
 #include <Arduino.h>
 #include <WiFi.h>
@@ -11,10 +11,12 @@
 #include <ArduinoJson.h>
 #include <ctype.h>
 
-static const char *VERSION = "0.1.6-dev";
+static const char *VERSION = "0.1.8-dev";
 static const uint32_t WIFI_JOIN_TIMEOUT_MS = 30000; // Return to setup after 30s
-static const int SETUP_BUTTON = 0; // Hold BOOT for 4 s AFTER startup to reopen setup
-static const uint32_t HOLD_MS = 4000;
+static const int SETUP_BUTTON = 0; // BOOT is physical proof for pairing recovery.
+static const uint32_t RECOVERY_HOLD_MS = 4000; // open short LAN recovery window
+static const uint32_t SETUP_HOLD_MS = 10000;  // long hold enters setup AP
+static const uint32_t RECOVERY_WINDOW_MS = 45000;
 
 Preferences prefs;
 WebServer http(80);
@@ -26,6 +28,10 @@ bool mdnsRunning = false;
 uint32_t nextMdnsAttemptAt = 0;
 uint32_t restartAt = 0;
 uint32_t buttonPressedAt = 0;
+uint32_t recoveryWindowAt = 0; // nonzero only after BOOT pressed 4s
+uint8_t recoveryAttempts = 0;
+bool recoveryHoldTriggered = false;
+bool setupHoldTriggered = false;
 uint32_t wifiAttemptAt = 0;
 bool everConnected = false;
 String wifiIssue = "";
@@ -79,6 +85,7 @@ void onWifiEvent(WiFiEvent_t event, WiFiEventInfo_t info) {
   }
 }
 void startSetup() {
+  recoveryWindowAt = 0;
   wifiAttemptAt = 0;
   nextMdnsAttemptAt = 0;
   if (mdnsRunning) {
@@ -101,6 +108,7 @@ void startSetup() {
   Serial.println("==================================");
 }
 void connectHome() {
+  recoveryWindowAt = 0;
   setupMode = false;
   everConnected = false;
   disconnectReason = 0;
@@ -134,6 +142,7 @@ void onInfo() {
   doc["telemetry"] = true;
   doc["telemetry_experimental"] = true;
   doc["ota"] = false;
+  doc["physical_recovery"] = true; // does NOT reveal the old password.
   respond(200, doc);
 }
 void onConfiguredBms() {
@@ -286,6 +295,61 @@ void onChangeCode() {
   if (setupMode) restartAt = millis() + 2200;
 }
 
+// Developer prototype: remote LAN requests alone can NEVER reveal or rotate
+// the per-device secret. BOOT held physically for 4s creates a 45s window.
+// New code is user-device-specific random, not the old secret. Not production
+// transport: HTTP on LAN remains unencrypted; do NOT port-forward this API.
+bool physicalWindowOpen() {
+  return !setupMode && WiFi.status() == WL_CONNECTED &&
+         recoveryWindowAt != 0 &&
+         (uint32_t)(millis() - recoveryWindowAt) < RECOVERY_WINDOW_MS;
+}
+
+void onPhysicalRecovery() {
+  if (!physicalWindowOpen()) {
+    error(403, "press_boot_for_four_seconds_then_retry_within_45s");
+    return;
+  }
+  if (recoveryAttempts >= 3) {
+    recoveryWindowAt = 0;
+    error(429, "recovery_attempt_limit");
+    return;
+  }
+  recoveryAttempts++;
+  JsonDocument incoming;
+  if (deserializeJson(incoming, http.arg("plain"))) {
+    error(400, "invalid_json");
+    return;
+  }
+  String requestedDevice = incoming["device_id"].as<String>();
+  String newSecret = incoming["new_code"].as<String>();
+  if (requestedDevice != hostName || newSecret.length() < 16 || newSecret.length() > 32) {
+    error(400, "invalid_recovery_request");
+    return;
+  }
+  for (size_t i = 0; i < newSecret.length(); ++i) {
+    const unsigned char ch = (unsigned char)newSecret[i];
+    if (ch < 33 || ch > 126) {
+      error(400, "invalid_recovery_code");
+      return;
+    }
+  }
+  if (prefs.putString("setupCode", newSecret) != newSecret.length()) {
+    error(500, "recovery_storage_failed");
+    return;
+  }
+  setupCode = newSecret;
+  // One physical confirmation authorizes exactly one successful recovery.
+  recoveryWindowAt = 0;
+  JsonDocument result;
+  result["ok"] = true;
+  result["paired"] = true;
+  result["device_id"] = hostName;
+  result["restart_required"] = false;
+  respond(200, result);
+  Serial.println("[Pairing] Physical recovery approved; access code rotated. Wi-Fi and JK saved.");
+}
+
 void onSetWifi() {
   // The same paired device can update Wi-Fi from the trusted home LAN.
   // Prototype uses plaintext HTTP and MUST NOT be exposed to the Internet.
@@ -352,6 +416,7 @@ void setup() {
   http.on("/api/v1/wifi", HTTP_POST, onSetWifi);
   http.on("/api/v1/wifi/scan", HTTP_GET, onWifiScan);
   http.on("/api/v1/access", HTTP_POST, onChangeCode);
+  http.on("/api/v1/pair/recover", HTTP_POST, onPhysicalRecovery);
   http.on("/api/v1/telemetry", HTTP_GET, onTelemetry);
   http.onNotFound([] { error(404, "unknown_route"); });
   if (prefs.getString("ssid", "").isEmpty()) startSetup();
@@ -393,16 +458,32 @@ void loop() {
     delay(150);
     ESP.restart();
   }
-  // GPIO0 is a strapping pin; press BOOT AFTER startup for 4 seconds.
+  // GPIO0 is a strapping pin: press only AFTER startup.
+  // 4s opens recovery without disrupting Wi-Fi, 10s opens the setup AP.
+  // Neither action reveals setupCode over HTTP.
   if (digitalRead(SETUP_BUTTON) == LOW) {
     if (!buttonPressedAt) buttonPressedAt = millis();
-    if (!setupMode && millis() - buttonPressedAt >= HOLD_MS) {
-      buttonPressedAt = 0;
+    const uint32_t heldFor = (uint32_t)(millis() - buttonPressedAt);
+    if (!recoveryHoldTriggered && !setupMode && WiFi.status() == WL_CONNECTED &&
+        heldFor >= RECOVERY_HOLD_MS) {
+      recoveryHoldTriggered = true;
+      recoveryWindowAt = millis();
+      recoveryAttempts = 0;
+      Serial.println("[Pairing] Physical confirmation: LAN recovery open for 45 seconds.");
+    }
+    if (!setupHoldTriggered && !setupMode && heldFor >= SETUP_HOLD_MS) {
+      setupHoldTriggered = true;
+      recoveryWindowAt = 0;
       wifiIssue = "manual_setup";
       startSetup();
     }
   } else {
     buttonPressedAt = 0;
+    recoveryHoldTriggered = false;
+    setupHoldTriggered = false;
+  }
+  if (recoveryWindowAt && !physicalWindowOpen()) {
+    recoveryWindowAt = 0;
   }
   delay(2);
 }
