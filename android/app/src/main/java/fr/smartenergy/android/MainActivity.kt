@@ -2,6 +2,7 @@ package fr.smartenergy.android
 
 import android.Manifest
 import android.app.Activity
+import android.app.AlertDialog
 import android.content.Context
 import android.content.pm.PackageManager
 import android.content.res.ColorStateList
@@ -326,7 +327,7 @@ class MainActivity : Activity() {
             return
         }
         val ssid = apName.text.toString().trim()
-        val password = setupCode.text.toString().trim().uppercase().ifBlank { storedCode() }
+        val password = setupCode.text.toString().trim().ifBlank { storedCode() }
         if (!Regex("^SmartJK-Setup-[A-F0-9]{6}$").matches(ssid) || password.length !in 8..32) {
             state("Vérifie le réseau SmartJK détecté et son code personnel (8 à 32 caractères).")
             return
@@ -386,7 +387,7 @@ class MainActivity : Activity() {
             if (!allowedLocalIp(host)) throw IllegalStateException("Retrouve l'ESP32 sur ton réseau local.")
             // Route to a live Wi-Fi Network, not through a stale setup Network or mobile data/VPN.
             val wifiNetwork = connectivity.allNetworks.firstOrNull { network ->
-                connectivity.getNetworkCapabilities(network)?.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) == true
+                connectivity.getNetworkCapabilities(network)?.let { cap -> cap.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) && !cap.hasTransport(NetworkCapabilities.TRANSPORT_VPN) } == true
             } ?: throw IllegalStateException("Téléphone non connecté au Wi-Fi de la maison. Vérifie le VPN et le Wi-Fi.")
             wifiNetwork.openConnection(URL("http://" + host + path)) as HttpURLConnection
         }
@@ -546,6 +547,149 @@ class MainActivity : Activity() {
         }
     }
 
+    private fun findNearbyEsp32() {
+        if (checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION) != PackageManager.PERMISSION_GRANTED) {
+            requestPermissions(arrayOf(Manifest.permission.ACCESS_FINE_LOCATION), 41)
+            state("Autorise la localisation pour rechercher les Wi-Fi SmartJK proches.")
+            return
+        }
+        val location = getSystemService(Context.LOCATION_SERVICE) as LocationManager
+        if (!location.isLocationEnabled) {
+            state("Active la localisation Android pour rechercher les ESP32 proches (obligation du système Android).")
+            return
+        }
+        if (!wifiManager.isWifiEnabled) {
+            state("Active le Wi-Fi du téléphone avant de rechercher les ESP32.")
+            return
+        }
+        state("Recherche des réseaux SmartJK proches…")
+        try { wifiManager.startScan() } catch (_: SecurityException) {
+            state("Autorisation Wi-Fi insuffisante pour rechercher les ESP32.")
+            return
+        }
+        uiHandler.postDelayed({
+            try {
+                val devices = wifiManager.scanResults
+                    .filter { it.SSID.matches(Regex("^SmartJK-Setup-[A-Fa-f0-9]{6}$")) }
+                    .sortedByDescending { it.level }
+                    .map { it.SSID }
+                    .distinct()
+                when (devices.size) {
+                    0 -> {
+                        state("Aucun point d'accès SmartJK visible. Si l'ESP32 est déjà sur la box, utilise « Rechercher sur mon Wi-Fi ». Sinon maintiens BOOT 4 secondes.")
+                        discoverHomeLan()
+                    }
+                    1 -> useFoundEsp32(devices[0])
+                    else -> AlertDialog.Builder(this)
+                        .setTitle("Choisis ton ESP32")
+                        .setItems(devices.toTypedArray()) { _, index -> useFoundEsp32(devices[index]) }
+                        .show()
+                }
+            } catch (_: SecurityException) {
+                state("Vérifie les autorisations de localisation et le Wi-Fi Android.")
+            }
+        }, 2800)
+    }
+
+    private fun useFoundEsp32(ssid: String) {
+        apName.setText(ssid)
+        if (storedCode().isNotBlank() && prefs.getString("setup_ssid", "") == ssid) {
+            state("ESP32 déjà associé retrouvé : connexion en cours…")
+            connectSetupAp()
+        } else {
+            state("ESP32 trouvé : " + ssid + ". Entre son code unique une seule fois dans la section 2, puis clique sur « Connecter l'ESP32 ».")
+        }
+    }
+
+    private fun scanRouterWifi() {
+        if (!setupTransport && !lanVerified) {
+            wifiState("Connecte d'abord l'ESP32 dans la section 1 ou 2, afin qu'il recherche les réseaux Wi-Fi à sa portée.")
+            return
+        }
+        wifiScanBtn.isEnabled = false
+        async {
+            try {
+                wifiState("L'ESP32 recherche les réseaux Wi-Fi 2,4 GHz accessibles…")
+                val result = httpCall("GET", "/api/v1/wifi/scan")
+                val networks = result.optJSONArray("networks") ?: JSONArray()
+                val options = ArrayList<Pair<String, Int>>()
+                for (i in 0 until networks.length()) {
+                    val item = networks.getJSONObject(i)
+                    val ssid = item.optString("ssid")
+                    if (ssid.isNotBlank()) options.add(Pair(ssid, item.optInt("rssi")))
+                }
+                runOnUiThread {
+                    wifiNetworks.removeAllViews()
+                    if (options.isEmpty()) {
+                        homeSsid.visibility = View.VISIBLE
+                        wifiState("Aucun Wi-Fi 2,4 GHz trouvé. Vérifie la portée de la box ou saisis le nom manuellement.")
+                    } else {
+                        for ((index, entry) in options.withIndex()) {
+                            val (ssid, rssi) = entry
+                            val option = RadioButton(this).apply {
+                                text = "$ssid  ·  $rssi dBm"
+                                setTextColor(normal)
+                                id = View.generateViewId()
+                                setPadding(d(6), d(7), d(6), d(7))
+                                setOnClickListener {
+                                    homeSsid.setText(ssid)
+                                    wifiState("Réseau sélectionné : " + ssid + ". Renseigne seulement son mot de passe Wi-Fi.")
+                                }
+                            }
+                            wifiNetworks.addView(option)
+                            if (index == 0) {
+                                option.isChecked = true
+                                homeSsid.setText(ssid)
+                            }
+                        }
+                        wifiState("${options.size} réseaux 2,4 GHz trouvés. Choisis ton réseau puis renseigne son mot de passe.")
+                    }
+                }
+            } catch (ex: Exception) {
+                runOnUiThread { homeSsid.visibility = View.VISIBLE }
+                wifiState("Recherche Wi-Fi impossible : " +
+                    (ex.message ?: ex.javaClass.simpleName) +
+                    ". Vérifie que le firmware ESP32 est en v0.1.4-dev. Tu peux saisir le réseau manuellement.")
+            } finally {
+                runOnUiThread { wifiScanBtn.isEnabled = true }
+            }
+        }
+    }
+
+    private fun changeDeviceCode() {
+        val newCode = accessCodeNew.text.toString()
+        if (newCode.length !in 8..32 || newCode.any { it.code !in 33..126 }) {
+            state("Le code ESP32 doit contenir 8 à 32 caractères sans espaces. « 1234 » est trop court pour protéger son Wi-Fi.")
+            return
+        }
+        if (!setupTransport && !lanVerified) {
+            state("Connecte d'abord l'ESP32 avant de changer son code.")
+            return
+        }
+        accessCodeBtn.isEnabled = false
+        async {
+            try {
+                val info = httpCall("GET", "/api/v1/info")
+                if (!info.optBoolean("change_code")) {
+                    throw IllegalStateException("Mets le firmware ESP32 à jour vers la v0.1.4-dev.")
+                }
+                val deviceId = info.optString("device_id")
+                val saved = prefs.getString("device_id", "") ?: ""
+                if (saved.isNotBlank() && saved != deviceId) throw IllegalStateException("Passerelle différente de l'appareil associé.")
+                val response = httpCall("POST", "/api/v1/access", JSONObject().put("new_code", newCode))
+                if (!response.optBoolean("updated")) throw IllegalStateException("Changement non confirmé par l'ESP32.")
+                savePairing(deviceId, prefs.getString("setup_ssid", "") ?: "", newCode)
+                runOnUiThread { accessCodeNew.text.clear() }
+                state("Code ESP32 modifié et sauvegardé dans l'application. Tu n'auras pas à le retaper.")
+                if (setupTransport) releaseConnection()
+            } catch (ex: Exception) {
+                state("Échec du changement du code : " + (ex.message ?: ex.javaClass.simpleName))
+            } finally {
+                runOnUiThread { accessCodeBtn.isEnabled = true }
+            }
+        }
+    }
+
     private fun scanBle() = async {
         state("Scan BLE en cours sur l'ESP32 (environ 5 secondes)…")
         val response = httpCall("GET", "/api/v1/bms/scan")
@@ -592,7 +736,7 @@ class MainActivity : Activity() {
             wifiState("Renseigne un SSID et un mot de passe Wi-Fi de 8 à 63 caractères.")
             return
         }
-        val viaSetup = apNetwork != null
+        val viaSetup = setupTransport
         if (!viaSetup && !lanVerified) {
             wifiState("Connecte d'abord la passerelle dans la section 1 (Wi-Fi maison), ou utilise le mode configuration dans la section 2.")
             return
@@ -608,8 +752,9 @@ class MainActivity : Activity() {
                         !info.optBoolean("wifi_connected")) {
                         throw IllegalStateException("L'ESP32 local ne correspond pas à celui associé.")
                     }
-                    if (!info.optString("version").startsWith("0.1.3")) {
-                        throw IllegalStateException("Le firmware ESP32 doit être en v0.1.3 pour changer le Wi-Fi depuis le réseau de la maison. L'ancien firmware ne le permet qu'en mode configuration.")
+                    if (!info.optString("version").startsWith("0.1.3") &&
+                        !info.optString("version").startsWith("0.1.4")) {
+                        throw IllegalStateException("Le firmware ESP32 doit être en v0.1.3 ou supérieur pour changer le Wi-Fi depuis le réseau de la maison. L'ancien firmware ne le permet qu'en mode configuration.")
                     }
                 }
                 val response = httpCall("POST", "/api/v1/wifi",
