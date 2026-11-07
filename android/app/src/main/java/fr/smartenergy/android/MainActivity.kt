@@ -3,6 +3,8 @@ package fr.smartenergy.android
 import android.Manifest
 import android.app.Activity
 import android.app.AlertDialog
+import android.content.Intent
+import android.net.Uri
 import android.content.Context
 import android.content.pm.PackageManager
 import android.content.res.ColorStateList
@@ -50,10 +52,10 @@ import java.util.Locale
 import java.security.SecureRandom
 
 /**
- * Smart Energy Android 0.2.0-dev.
+ * Smart Energy Android 0.2.1-dev.
  * Initial provisioning over ESP32's setup AP, subsequent management over home Wi-Fi.
  * Credentials kept encrypted in Android Keystore-backed local preferences.
- * DEVELOPMENT-ONLY HTTP local transport; NOT safe for remote/public use.
+ * HTTP only inside the trusted LAN or encrypted VPN subnet route; never a public IP.
  */
 class MainActivity : Activity() {
     private val background = Color.rgb(10, 18, 29)
@@ -72,6 +74,11 @@ class MainActivity : Activity() {
     @Volatile private var activeSetupSsid = ""
     @Volatile private var localHost = ""
     @Volatile private var lanVerified = false
+    @Volatile private var remoteVpnConnection = false
+    @Volatile private var lanConnectionPending = false
+    private var lastRemoteAttempt = 0L
+    private lateinit var remoteStatus: TextView
+    private lateinit var remoteCheck: CheckBox
     @Volatile private var setupTransport = false
     @Volatile private var lastLanFirmwareVersion = ""
     @Volatile private var selectedDeviceId = ""
@@ -107,6 +114,15 @@ class MainActivity : Activity() {
     @Volatile private var telemetryBusy = false
     private val telemetryTicker = object : Runnable {
         override fun run() {
+            if (!lanVerified && !lanConnectionPending && !setupTransport &&
+                prefs.getBoolean("remote_vpn_enabled", false) && vpnConnected() &&
+                storedCode().isNotBlank()) {
+                val now = android.os.SystemClock.elapsedRealtime()
+                if (now - lastRemoteAttempt >= 20000L) {
+                    lastRemoteAttempt = now
+                    connectHomeLan(true)
+                }
+            }
             if (lanVerified || (setupTransport && apNetwork != null)) {
                 refreshTelemetry()
                 if (currentTab == 2 && android.os.SystemClock.elapsedRealtime() - lastDetailsFetchedAt > 30000L) {
@@ -136,7 +152,7 @@ class MainActivity : Activity() {
             if (allowedLocalIp(savedIp)) {
                 localHost = savedIp
                 lanIp.setText(savedIp)
-                connectHomeLan()
+                connectHomeLan(prefs.getBoolean("remote_vpn_enabled",false) && vpnConnected())
             } else {
                 discoverHomeLan()
             }
@@ -198,6 +214,12 @@ class MainActivity : Activity() {
         if (p[0] == 192 && p[1] == 168) return true
         if (p[0] == 172 && p[1] in 16..31) return true
         return false
+    }
+
+    private fun vpnConnected(): Boolean {
+        val active = connectivity.activeNetwork ?: return false
+        return connectivity.getNetworkCapabilities(active)
+            ?.hasTransport(NetworkCapabilities.TRANSPORT_VPN) == true
     }
 
     private fun supportsLanWifiUpdate(version: String): Boolean {
@@ -315,6 +337,38 @@ class MainActivity : Activity() {
         autoEspBtn = action("Trouver un ESP32 proche") { findNearbyEsp32() }
         add(lan, autoEspBtn)
         add(lan, label("La recherche utilise mDNS ; si elle échoue, renseigne une fois l'adresse IP vue dans les journaux ESP32.", 12f, color = subdued))
+
+        val remote = section(advanced, "Accès extérieur — VPN privé")
+        add(remote, label("Depuis la 4G/5G, utilise un VPN qui donne accès au réseau de la maison. Exemple : Tailscale avec un routeur de sous-réseau sur un appareil toujours allumé chez toi. Aucun port Internet à ouvrir et rien à installer sur l'ESP32.", 13f, color = subdued))
+        remoteStatus = label("Statut : " + if (vpnConnected()) "VPN détecté sur Android" else "VPN non connecté", 12f, color = subdued)
+        add(remote, remoteStatus, 8)
+        remoteCheck = CheckBox(this).apply {
+            text = "Reconnexion automatique quand mon VPN est actif"
+            setTextColor(normal)
+            isChecked = prefs.getBoolean("remote_vpn_enabled", false)
+            setOnCheckedChangeListener { _, checked ->
+                prefs.edit().putBoolean("remote_vpn_enabled", checked).apply()
+                remoteStatus.text = if (checked)
+                    "Mode VPN enregistré. Active le VPN de la maison pour tester."
+                    else "Reconnexion automatique à distance désactivée."
+            }
+        }
+        add(remote, remoteCheck)
+        add(remote, action("Tester ma connexion distante via VPN") {
+            if (!vpnConnected()) {
+                remoteStatus.text = "Aucun VPN Android détecté. Active d'abord un VPN configuré pour accéder au réseau de la maison."
+                state("Accès distant impossible sans VPN privé. Aucun secret n'a été transmis.")
+            } else {
+                remoteStatus.text = "VPN actif : essai de connexion à la passerelle domestique…"
+                lastRemoteAttempt = android.os.SystemClock.elapsedRealtime()
+                connectHomeLan(true)
+            }
+        }, 10)
+        add(remote, action("Guide : configurer le VPN de la maison") {
+            startActivity(Intent(Intent.ACTION_VIEW,
+                Uri.parse("https://tailscale.com/docs/features/subnet-routers/how-to/setup")))
+        }, 8)
+        add(remote, label("L'indicateur VPN ne garantit pas que le réseau 192.168.x.x est accessible : le routeur VPN doit annoncer la route correcte. Jamais d'IP publique ni de redirection du port 80 de l'ESP32.", 12f, color = subdued))
 
         val a = section(advanced, "2. Première association / dépannage")
 
@@ -443,6 +497,14 @@ class MainActivity : Activity() {
 
     private fun httpCall(method: String, path: String, payload: JSONObject? = null): JSONObject {
         require(path.startsWith("/api/v1/"))
+        if (remoteVpnConnection && !setupTransport) {
+            if (!vpnConnected()) throw IllegalStateException("VPN absent : aucun accès distant ni envoi de code.")
+            // VPN mode: read-only by construction. All other paths are blocked.
+            if (method != "GET" || path !in setOf(
+                "/api/v1/info", "/api/v1/bms", "/api/v1/telemetry", "/api/v1/details")) {
+                throw IllegalStateException("Réglages et réassociation interdits à distance.")
+            }
+        }
         // Do not bind home LAN requests to a selected Network. On some Android
         // devices or under a VPN, Network.openConnection binds a socket to a
         // network the app is not permitted to use (EPERM).
@@ -473,7 +535,7 @@ class MainActivity : Activity() {
             conn.readTimeout = 15000
             conn.requestMethod = method
             conn.setRequestProperty("Accept", "application/json")
-            conn.setRequestProperty("X-Setup-Code", activeSetupCode)
+            if (path != "/api/v1/info") conn.setRequestProperty("X-Setup-Code", activeSetupCode)
             if (payload != null) {
                 conn.doOutput = true
                 conn.setRequestProperty("Content-Type", "application/json")
@@ -543,59 +605,83 @@ class MainActivity : Activity() {
         }
     }
 
-    private fun connectHomeLan() {
+    private fun connectHomeLan(remote: Boolean = false) {
+        if (lanConnectionPending) return
+        val ip = lanIp.text.toString().trim()
+        if (!allowedLocalIp(ip)) {
+            state("Seules les adresses privées de ta passerelle sont autorisées. Aucune IP publique.")
+            return
+        }
+        if (remote && !vpnConnected()) {
+            state("Accès distant refusé : active un VPN donnant accès au réseau domestique.")
+            return
+        }
+        if (remote && setupTransport) {
+            state("Quitte le réseau de configuration ESP32 avant l'accès distant.")
+            return
+        }
+        // In remote mode, never allow writes (Wi-Fi, BOOT, JK configuration).
+        lanConnectionPending = true
         lanVerified = false
         lastLanFirmwareVersion = ""
         releaseConnection()
-        val ip = lanIp.text.toString().trim()
-        if (!allowedLocalIp(ip)) {
-            state("Indique une adresse IP privée de ton ESP32 (celle visible dans les journaux série).")
-            return
-        }
+        remoteVpnConnection = remote
         val savedCode = storedCode()
         val typedCode = setupCode.text.toString().trim()
-        val recovery = savedCode.isBlank()
-        val code = if (recovery) typedCode else savedCode
+        val recovering = savedCode.isBlank()
+        val code = if (recovering) typedCode else savedCode
         if (code.length !in 8..32) {
-            state("Le code mémorisé a disparu (probablement après réinstallation). Renseigne le code ORIGINAL de l'ESP32 dans la section 2 et clique sur « Se connecter à ma passerelle ». Aucun nouveau flash ni Wi-Fi à configurer.")
+            lanConnectionPending = false
+            state("Code ESP32 manquant : réassocie une fois sur ton réseau local avant l'accès distant.")
             return
         }
         activeSetupCode = code
         localHost = ip
-        state(if (recovery) "Réassociation sécurisée via le Wi-Fi de la maison…" else "Connexion locale à l'ESP32…")
+        state(if (remote) "Connexion via le VPN privé…" else
+            if (recovering) "Réassociation sur le réseau domestique…" else
+                "Connexion locale à l'ESP32…")
         async {
-            val info = httpCall("GET", "/api/v1/info")
-            val returnedId = info.optString("device_id")
-            val savedId = prefs.getString("device_id", "") ?: ""
-            if (info.optString("product") != "smart-jk-esp32" ||
-                !Regex("^smartjk-[A-F0-9]{6}$", RegexOption.IGNORE_CASE).matches(returnedId) ||
-                (savedId.isNotBlank() && returnedId != savedId) ||
-                !info.optBoolean("wifi_connected")) {
-                localHost = ""
-                state("L'ESP32 n'est pas reconnu ou ne correspond pas à l'appareil associé.")
-                return@async
-            }
-            // Verify device ownership *before* persisting user-provided credentials.
-            val configured = httpCall("GET", "/api/v1/bms")
-            val storedBms = configured.optJSONArray("bms") ?: JSONArray()
-            if (recovery) {
-                savePairing(returnedId,
-                    "SmartJK-Setup-" + returnedId.substringAfter("-").uppercase(Locale.ROOT),
-                    code)
-            }
-            chosen.clear()
-            for (i in 0 until storedBms.length()) chosen.add(storedBms.optString(i))
-            prefs.edit().putString("local_ip", ip).apply()
-            lanVerified = true
-            lastLanFirmwareVersion = info.optString("version")
-            runOnUiThread {
-                setupCode.text.clear()
-                scanBtn.isEnabled = true
-                saveBtn.isEnabled = true
-                wifiBtn.isEnabled = true
-                refreshTelemetry()
-                state((if (recovery) "Code récupéré et mémorisé. " else "Connecté automatiquement. ") +
-                    returnedId + " (" + ip + ") · " + chosen.size + " batterie(s) JK conservée(s).")
+            try {
+                // /info never receives the access secret. Verify identity first.
+                val info = httpCall("GET", "/api/v1/info")
+                val id = info.optString("device_id")
+                val expected = prefs.getString("device_id", "") ?: ""
+                if (info.optString("product") != "smart-jk-esp32" ||
+                    !Regex("^smartjk-[A-F0-9]{6}$", RegexOption.IGNORE_CASE).matches(id) ||
+                    (expected.isNotBlank() && id != expected) ||
+                    !info.optBoolean("wifi_connected")) {
+                    throw IllegalStateException("Passerelle non reconnue ou identité différente.")
+                }
+                if (remote && !vpnConnected()) {
+                    throw IllegalStateException("Connexion VPN interrompue : accès refusé.")
+                }
+                val configured = httpCall("GET", "/api/v1/bms")
+                val addresses = configured.optJSONArray("bms") ?: JSONArray()
+                if (recovering && !remote) {
+                    savePairing(id,
+                        "SmartJK-Setup-" + id.substringAfter("-").uppercase(Locale.ROOT),
+                        code)
+                }
+                chosen.clear()
+                for (i in 0 until addresses.length()) chosen.add(addresses.optString(i))
+                prefs.edit().putString("local_ip", ip).apply()
+                lanVerified = true
+                lastLanFirmwareVersion = info.optString("version")
+                runOnUiThread {
+                    setupCode.text.clear()
+                    scanBtn.isEnabled = true
+                    saveBtn.isEnabled = true
+                    wifiBtn.isEnabled = !remote
+                    if (remote) {
+                        remoteStatus.text = "VPN privé : passerelle accessible depuis le téléphone."
+                    }
+                    state((if (remote) "Accès distant VPN confirmé. " else
+                        if (recovering) "Code mémorisé. " else "Connecté automatiquement. ") +
+                        id + " · " + chosen.size + " JK mémorisé(s).")
+                    refreshTelemetry()
+                }
+            } finally {
+                lanConnectionPending = false
             }
         }
     }
@@ -1029,6 +1115,7 @@ class MainActivity : Activity() {
                 val reply = httpCall("GET", "/api/v1/telemetry")
                 runOnUiThread { showTelemetry(reply) }
             } catch (ex: Exception) {
+                if (remoteVpnConnection && !vpnConnected()) lanVerified = false
                 runOnUiThread {
                     telemetryStatus.text = "Lecture JK impossible : " +
                         (ex.message ?: ex.javaClass.simpleName)
