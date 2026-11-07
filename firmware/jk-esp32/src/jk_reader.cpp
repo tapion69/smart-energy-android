@@ -6,6 +6,7 @@
 #include "jk_reader.h"
 #include "jk_protocol.h"
 #include <NimBLEDevice.h>
+#include <WiFi.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/semphr.h>
 #include <freertos/task.h>
