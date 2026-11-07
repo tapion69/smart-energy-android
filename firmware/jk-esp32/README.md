@@ -1,4 +1,4 @@
-# Smart JK ESP32 — firmware de test (0.2.0-dev)
+# Smart JK ESP32 — firmware de test (0.2.1-dev)
 
 **Fonctions actuellement codées** : diagnostic Wi-Fi et retour automatique au mode configuration après 30 secondes d'échec, point d'accès Wi-Fi de configuration, secret unique par appareil, lecture de l'identité, scan BLE, sélection et enregistrement persistant des MAC JK, configuration du Wi-Fi, retour au réseau local, et **première acquisition BLE expérimentale en lecture seule**.
 
@@ -110,3 +110,7 @@ Le décodeur expérimental conserve la connexion BLE persistante de v0.1.9 et in
 L'API authentifiée `GET /api/v1/details` renvoie les paramètres et informations lus, avec état et ancienneté. `GET /api/v1/telemetry` reste optimisée pour les mesures rafraîchies rapidement. Les réglages sont relus sur le lien BLE toutes les cinq minutes et les informations toutes les quinze minutes, sans reconnecter le BMS.
 
 **Attention :** le catalogue est provisoire pour JK02 V19 et doit être comparé à l'application fabricant. Les résistances et sondes ne sont renvoyées que si présentes et plausibles ; n'utiliser aucune valeur pour la sécurité des batteries. Aucune écriture BMS n'a été intégrée.
+
+## 0.2.1-dev — validation stricte de l'identité BMS
+
+Certaines trames de type 0x03 ont un checksum correct, mais ne suivent pas le schéma des informations d'identité attendu. Le prototype affichait alors des fragments ressemblant à du JSON et des caractères erronés dans les champs nom/version/série. La v0.2.1 vérifie maintenant le préfixe du modèle JK/PB et les caractères autorisés dans chaque champ. Si la disposition de trame n'est pas reconnue, l'identification entière reste **indisponible** ; les mesures et paramètres des autres types ne sont pas touchés. Aucun champ de code d'accès du BMS n'est lu ni renvoyé.
