@@ -1,4 +1,4 @@
-# Smart JK ESP32 — firmware de test (0.1.8-dev)
+# Smart JK ESP32 — firmware de test (0.1.9-dev)
 
 **Fonctions actuellement codées** : diagnostic Wi-Fi et retour automatique au mode configuration après 30 secondes d'échec, point d'accès Wi-Fi de configuration, secret unique par appareil, lecture de l'identité, scan BLE, sélection et enregistrement persistant des MAC JK, configuration du Wi-Fi, retour au réseau local, et **première acquisition BLE expérimentale en lecture seule**.
 
@@ -88,3 +88,13 @@ Après installation du nouveau firmware sur ESP32, appuyer sur BOOT **4 secondes
 - Aucun ancien code n'est renvoyé par le réseau. L'application stocke le nouveau code dans Android Keystore après vérification.
 - **Sécurité du prototype :** authentification par présence physique, mais transport LAN encore en HTTP clair. Un appareil malveillant sur le réseau local pourrait tenter de profiter de la fenêtre de récupération. Désactiver l'option en production tant qu'elle n'est pas protégée par un protocole chiffré avec confirmation de l'identité du téléphone.
 - Il s'agit d'une récupération de proximité (bouton physique), **pas d'un accès à distance depuis Internet**.
+
+## v0.1.9-dev — liaison BLE persistante, réduction des bips
+
+La v0.1.8 reconnectait délibérément le JK après chaque lecture. **La v0.1.9 ne déconnecte plus un JK unique tant que la connexion BLE reste active** : elle s'abonne une fois aux notifications `FFE1`, attend les mesures, conserve en mémoire les dernières données validées, et n'envoie une requête de lecture `0x96` que si aucune mesure valide n'arrive depuis huit secondes. La route HTTP `/api/v1/telemetry` répond uniquement depuis ce cache ; elle ne déclenche **aucun scan ni reconnexion BLE**. Les mesures datant de plus de 20 secondes sont marquées indisponibles.
+
+La reconnexion est réservée aux pertes de liaison, changements de configuration, passage en mode setup et scans BLE/Wi-Fi **demandés manuellement**. Après des échecs successifs, la temporisation augmente pour éviter les reconnexions en rafale. La route de télémétrie expose maintenant `ble_connected`, `connections` et `disconnections` par JK, afin de diagnostiquer les bips.
+
+**Limites à tester :** la stabilité dépend du matériel et de la façon dont JK V19 diffuse ses notifications. Sur l'ESP32 classique, le prototype conserve une connexion permanente **pour un seul JK**. Si plusieurs BMS sont configurés, le lecteur alterne les sessions par périodes de 90 secondes : cette partie doit encore être optimisée et peut occasionner des bips lors des changements de batterie. La lecture est **strictement seule**, et les températures ne sont pas validées pour la sécurité.
+
+**Mise à jour conseillée :** firmware `APP-ONLY` à `0x10000`, sans `Erase Flash`. Les clés Wi-Fi, l'accès physique BOOT et la liste des JK restent normalement stockés en NVS. La fonction de réassociation BOOT 4 secondes issue de v0.1.8 est conservée.
