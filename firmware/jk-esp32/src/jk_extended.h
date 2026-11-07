@@ -112,7 +112,14 @@ struct Param {
   uint16_t offset;
   Kind kind;
   float scale, minimum, maximum;
-  int bit = -1;
+  int bit;
+  // ESP32 Arduino uses C++11. Default member initializers make an aggregate
+  // in C++17 but not in C++11, so use an explicit constexpr constructor.
+  constexpr Param(const char *k, const char *l, const char *g, const char *u,
+                  uint16_t o, Kind type, float multiplier,
+                  float lo, float hi, int bitIndex = -1):
+    key(k), label(l), group(g), unit(u), offset(o), kind(type),
+    scale(multiplier), minimum(lo), maximum(hi), bit(bitIndex) {}
 };
 static constexpr Param PARAMS[] = {
   {"smart_sleep_voltage","Tension veille intelligente","Énergie","V",6,UINT4,1000,0.003f,3.65f},
