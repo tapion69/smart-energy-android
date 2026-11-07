@@ -181,6 +181,15 @@ class MainActivity : Activity() {
         return false
     }
 
+    private fun supportsLanWifiUpdate(version: String): Boolean {
+        val versionParts = version.substringBefore("-").split(".")
+        if (versionParts.size != 3) return false
+        val major = versionParts[0].toIntOrNull() ?: return false
+        val minor = versionParts[1].toIntOrNull() ?: return false
+        val patch = versionParts[2].toIntOrNull() ?: return false
+        return major > 0 || minor > 1 || (minor == 1 && patch >= 3)
+    }
+
     private fun d(v: Int) = (v * resources.displayMetrics.density + .5f).toInt()
 
     private fun rounded(color: Int) = GradientDrawable().apply {
@@ -808,8 +817,7 @@ class MainActivity : Activity() {
                         !info.optBoolean("wifi_connected")) {
                         throw IllegalStateException("L'ESP32 local ne correspond pas à celui associé.")
                     }
-                    if (!info.optString("version").startsWith("0.1.3") &&
-                        !info.optString("version").startsWith("0.1.4")) {
+                    if (!supportsLanWifiUpdate(info.optString("version"))) {
                         throw IllegalStateException("Le firmware ESP32 doit être en v0.1.3 ou supérieur pour changer le Wi-Fi depuis le réseau de la maison. L'ancien firmware ne le permet qu'en mode configuration.")
                     }
                 }
