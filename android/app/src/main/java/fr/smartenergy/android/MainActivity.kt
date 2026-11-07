@@ -13,6 +13,19 @@ import android.net.Network
 import android.net.NetworkCapabilities
 import android.net.NetworkRequest
 import android.net.wifi.WifiNetworkSpecifier
+import android.net.nsd.NsdManager
+import android.net.nsd.NsdServiceInfo
+import android.os.Handler
+import android.os.Looper
+import android.security.keystore.KeyGenParameterSpec
+import android.security.keystore.KeyProperties
+import android.util.Base64
+import java.security.KeyStore
+import javax.crypto.Cipher
+import javax.crypto.KeyGenerator
+import javax.crypto.SecretKey
+import javax.crypto.spec.GCMParameterSpec
+import java.net.Inet4Address
 import android.os.Build
 import android.os.Bundle
 import android.view.Gravity
@@ -29,10 +42,10 @@ import java.net.URL
 import java.util.concurrent.Executors
 
 /**
- * Smart Energy Android 0.1.0-dev.
- * Real provisioning + BLE scan from ESP32, NO mock measurements.
- * Only communicates with 192.168.4.1 while the handset is on the ESP32 setup AP.
- * This is a development-only local HTTP transport; NOT a production security design.
+ * Smart Energy Android 0.1.2-dev.
+ * Initial provisioning over ESP32's setup AP, subsequent management over home Wi-Fi.
+ * Credentials kept encrypted in Android Keystore-backed local preferences.
+ * DEVELOPMENT-ONLY HTTP local transport; NOT safe for remote/public use.
  */
 class MainActivity : Activity() {
     private val background = Color.rgb(10, 18, 29)
@@ -41,12 +54,20 @@ class MainActivity : Activity() {
     private val subdued = Color.rgb(162, 176, 197)
     private val mint = Color.rgb(58, 212, 157)
     private val io = Executors.newSingleThreadExecutor()
+    private val prefs by lazy { getSharedPreferences("smart_energy_v012", MODE_PRIVATE) }
     private val connectivity by lazy { getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager }
 
     @Volatile private var apNetwork: Network? = null
     private var callback: ConnectivityManager.NetworkCallback? = null
     private var switchingToHome = false
     @Volatile private var activeSetupCode = ""
+    @Volatile private var localHost = ""
+    @Volatile private var selectedDeviceId = ""
+    private val uiHandler = Handler(Looper.getMainLooper())
+    private lateinit var lanIp: EditText
+    private lateinit var lanConnectBtn: Button
+    private lateinit var lanDiscoverBtn: Button
+    private var discoverListener: NsdManager.DiscoveryListener? = null
     private val chosen = mutableSetOf<String>()
     private val scanChoices = mutableListOf<CheckBox>()
 
@@ -63,6 +84,70 @@ class MainActivity : Activity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         drawUi()
+        selectedDeviceId = prefs.getString("device_id", "") ?: ""
+        val savedIp = prefs.getString("local_ip", "") ?: ""
+        if (allowedLocalIp(savedIp) && storedCode().isNotBlank()) {
+            localHost = savedIp
+            lanIp.setText(savedIp)
+            connectHomeLan()
+        }
+    }
+
+    private fun encryptionKey(): SecretKey {
+        val store = KeyStore.getInstance("AndroidKeyStore")
+        store.load(null)
+        val alias = "smart_energy_pairing_v1"
+        val existing = store.getKey(alias, null) as? SecretKey
+        if (existing != null) return existing
+        val generator = KeyGenerator.getInstance(KeyProperties.KEY_ALGORITHM_AES, "AndroidKeyStore")
+        val spec = KeyGenParameterSpec.Builder(
+            alias, KeyProperties.PURPOSE_ENCRYPT or KeyProperties.PURPOSE_DECRYPT
+        ).setBlockModes(KeyProperties.BLOCK_MODE_GCM)
+            .setEncryptionPaddings(KeyProperties.ENCRYPTION_PADDING_NONE)
+            .setKeySize(256)
+            .build()
+        generator.init(spec)
+        return generator.generateKey()
+    }
+
+    private fun storedCode(): String {
+        val encoded = prefs.getString("pairing_code_cipher", "") ?: ""
+        if (encoded.isBlank()) return ""
+        return try {
+            val combined = Base64.decode(encoded, Base64.NO_WRAP)
+            if (combined.size < 29) return ""
+            val cipher = Cipher.getInstance("AES/GCM/NoPadding")
+            cipher.init(Cipher.DECRYPT_MODE, encryptionKey(), GCMParameterSpec(128, combined.copyOfRange(0, 12)))
+            String(cipher.doFinal(combined.copyOfRange(12, combined.size)), Charsets.UTF_8)
+        } catch (_: Exception) {
+            // Saved ciphertext is unreadable (e.g. Keystore reset); prompt for new pairing.
+            ""
+        }
+    }
+
+    private fun savePairing(deviceId: String, ssid: String, secret: String) {
+        val cipher = Cipher.getInstance("AES/GCM/NoPadding")
+        cipher.init(Cipher.ENCRYPT_MODE, encryptionKey())
+        val data = cipher.iv + cipher.doFinal(secret.toByteArray(Charsets.UTF_8))
+        val encoded = Base64.encodeToString(data, Base64.NO_WRAP)
+        prefs.edit()
+            .putString("pairing_code_cipher", encoded)
+            .putString("device_id", deviceId)
+            .putString("setup_ssid", ssid)
+            .apply()
+        selectedDeviceId = deviceId
+        activeSetupCode = secret
+    }
+
+    private fun allowedLocalIp(input: String): Boolean {
+        // Development-only, IPv4 private ranges. Never send secret to public hosts.
+        val parts = input.split(".")
+        if (parts.size != 4 || parts.any { it.isBlank() || it.length > 3 || it.toIntOrNull() !in 0..255 }) return false
+        val p = parts.map { it.toInt() }
+        if (p[0] == 10) return true
+        if (p[0] == 192 && p[1] == 168) return true
+        if (p[0] == 172 && p[1] in 16..31) return true
+        return false
     }
 
     private fun d(v: Int) = (v * resources.displayMetrics.density + .5f).toInt()
@@ -126,21 +211,34 @@ class MainActivity : Activity() {
         setContentView(scroll)
 
         add(root, label("SMART ENERGY", 13f, true, mint))
-        add(root, label("Associer un ESP32 JK", 25f, true))
-        add(root, label("Version développeur · Configuration réelle, sans Home Assistant.", 13f, color = subdued))
+        add(root, label("Mes passerelles JK", 25f, true))
+        add(root, label("Wi-Fi maison en priorité. Configuration initiale seulement si nécessaire.", 13f, color = subdued))
         status = label("ESP32 non connecté", 14f, true)
         add(root, status, 14)
 
-        val a = section(root, "1. Connecter l'ESP32")
-        add(a, label("SSID et code affichés par le moniteur série de l'ESP32 neuf. Un code propre à chaque carte.", color = subdued))
+        val lan = section(root, "1. Connexion quotidienne — Wi-Fi maison")
+        add(lan, label("Après la première association, l'application garde la passerelle et son code en mémoire sécurisée.", color = subdued))
+        lanIp = input("Adresse IP locale de l'ESP32 (ex. 192.168.1.50)")
+        lanIp.setText(prefs.getString("local_ip", "") ?: "")
+        add(lan, lanIp)
+        lanConnectBtn = action("Se connecter à ma passerelle") { connectHomeLan() }
+        add(lan, lanConnectBtn)
+        lanDiscoverBtn = action("Rechercher automatiquement la passerelle") { discoverHomeLan() }
+        add(lan, lanDiscoverBtn)
+        add(lan, label("La recherche utilise mDNS ; si elle échoue, renseigne une fois l'adresse IP vue dans les journaux ESP32.", 12f, color = subdued))
+
+        val a = section(root, "2. Première association / dépannage")
+
+        add(a, label("À utiliser seulement lors du premier appairage ou si le Wi-Fi de la box a changé.", color = subdued))
         apName = input("SmartJK-Setup-XXXXXX")
-        setupCode = input("Code ESP32 (12 caractères)", true)
+        setupCode = input("Code unique de l'ESP32 (vide = code mémorisé)", true)
+        apName.setText(prefs.getString("setup_ssid", "") ?: "")
         add(a, apName)
         add(a, setupCode)
         add(a, action("Connecter l'ESP32") { connectSetupAp() }, 12)
         add(a, label("Android demandera l'autorisation de rejoindre ce Wi-Fi temporaire. Pas besoin d'aller dans les paramètres Wi-Fi.", 12f, color = subdued))
 
-        val b = section(root, "2. Détecter les JK BMS")
+        val b = section(root, "3. Détecter les JK BMS")
         add(b, label("La recherche Bluetooth est exécutée par l'ESP32, pas par le téléphone. Vérifie la MAC avant de sélectionner un appareil.", 13f, color = subdued))
         scanBtn = action("Rechercher les appareils BLE") { scanBle() }
         add(b, scanBtn)
@@ -150,7 +248,7 @@ class MainActivity : Activity() {
         add(b, saveBtn)
         add(b, label("Pour ce jalon, la sélection est conservée après redémarrage ; la lecture des mesures JK sera ajoutée ensuite.", 12f, color = subdued))
 
-        val c = section(root, "3. Configurer le Wi-Fi de la maison")
+        val c = section(root, "4. Changer le Wi-Fi de la maison")
         homeSsid = input("Nom de ton réseau Wi-Fi (SSID)")
         homePassword = input("Mot de passe Wi-Fi", true)
         add(c, homeSsid)
@@ -159,7 +257,7 @@ class MainActivity : Activity() {
         add(c, wifiBtn)
         add(c, label("Après validation, l'ESP32 redémarre et rejoint le réseau de la maison. Le téléphone quitte alors son Wi-Fi temporaire.", 12f, color = subdued))
 
-        val d = section(root, "4. Tableau de bord JK")
+        val d = section(root, "5. Tableau de bord JK")
         add(d, label("En attente du décodeur JK V19. Aucune valeur fictive n'est affichée.", color = subdued))
         val e = section(root, "Prochainement")
         add(e, label("Lecture SOC/cellules · OTA ESP32 · notifications APK · accès distant sécurisé.", color = subdued))
@@ -185,13 +283,14 @@ class MainActivity : Activity() {
             return
         }
         val ssid = apName.text.toString().trim()
-        val password = setupCode.text.toString().trim().uppercase()
+        val password = setupCode.text.toString().trim().uppercase().ifBlank { storedCode() }
         if (!Regex("^SmartJK-Setup-[A-F0-9]{6}$").matches(ssid) || password.length != 12) {
             state("Vérifie le SSID SmartJK-Setup-XXXXXX et son code à 12 caractères.")
             return
         }
         releaseConnection()
         activeSetupCode = password
+        localHost = ""
         switchingToHome = false
         val spec = WifiNetworkSpecifier.Builder()
             .setSsid(ssid)
@@ -228,9 +327,15 @@ class MainActivity : Activity() {
     }
 
     private fun httpCall(method: String, path: String, payload: JSONObject? = null): JSONObject {
-        val network = apNetwork ?: throw IllegalStateException("Connecte d'abord l'ESP32.")
         require(path.startsWith("/api/v1/"))
-        val conn = network.openConnection(URL("http://192.168.4.1$path")) as HttpURLConnection
+        val network = apNetwork
+        val conn = if (network != null) {
+            network.openConnection(URL("http://192.168.4.1" + path)) as HttpURLConnection
+        } else {
+            val host = localHost
+            if (!allowedLocalIp(host)) throw IllegalStateException("Associe d'abord l'ESP32 ou indique une adresse locale.")
+            URL("http://" + host + path).openConnection() as HttpURLConnection
+        }
         return try {
             conn.connectTimeout = 8000
             conn.readTimeout = 15000
@@ -264,11 +369,120 @@ class MainActivity : Activity() {
             state("Firmware incompatible ou mode configuration désactivé.")
             return@async
         }
+        // Authenticated request: do NOT save a code merely because /info answers.
+        httpCall("GET", "/api/v1/bms")
+        val deviceId = info.optString("device_id")
+        if (!Regex("^smartjk-[A-F0-9]{6}$").matches(deviceId, RegexOption.IGNORE_CASE)) {
+            state("Identifiant ESP32 invalide.")
+            return@async
+        }
+        savePairing(deviceId, apName.text.toString().trim(), activeSetupCode)
         runOnUiThread {
-            state("ESP32 connecté : ${info.optString("device_id")} · ${info.optString("version")}")
+            setupCode.text.clear()
+            state("Passerelle associée et code mémorisé : " + deviceId)
             scanBtn.isEnabled = true
             saveBtn.isEnabled = true
             wifiBtn.isEnabled = true
+        }
+    }
+
+    private fun connectHomeLan() {
+        releaseConnection()
+        val ip = lanIp.text.toString().trim()
+        if (!allowedLocalIp(ip)) {
+            state("Indique une adresse IP privée de ta passerelle (ex. 192.168.1.50).")
+            return
+        }
+        val code = storedCode()
+        if (code.isBlank()) {
+            state("Il faut associer l'ESP32 une dernière fois pour mémoriser son code.")
+            return
+        }
+        activeSetupCode = code
+        localHost = ip
+        state("Connexion locale à l'ESP32…")
+        async {
+            val info = httpCall("GET", "/api/v1/info")
+            val returnedId = info.optString("device_id")
+            val savedId = prefs.getString("device_id", "") ?: ""
+            if (info.optString("product") != "smart-jk-esp32" || returnedId != savedId ||
+                !info.optBoolean("wifi_connected")) {
+                localHost = ""
+                state("La passerelle ne correspond pas à l'appareil associé, ou n'est pas sur le Wi-Fi maison.")
+                return@async
+            }
+            val configured = httpCall("GET", "/api/v1/bms")
+            val storedBms = configured.optJSONArray("bms") ?: JSONArray()
+            chosen.clear()
+            for (i in 0 until storedBms.length()) chosen.add(storedBms.optString(i))
+            prefs.edit().putString("local_ip", ip).apply()
+            runOnUiThread {
+                scanBtn.isEnabled = true
+                saveBtn.isEnabled = true
+                wifiBtn.isEnabled = false
+                state("Connecté automatiquement à " + returnedId + " (" + ip + "). " +
+                    chosen.size + " batteries mémorisées.")
+            }
+        }
+    }
+
+    private fun discoverHomeLan() {
+        val code = storedCode()
+        if (code.isBlank()) {
+            state("Associe d'abord ton ESP32 une seule fois pour enregistrer son code.")
+            return
+        }
+        if (discoverListener != null) {
+            state("Recherche déjà en cours.")
+            return
+        }
+        val nsd = getSystemService(Context.NSD_SERVICE) as NsdManager
+        var found = false
+        val listener = object : NsdManager.DiscoveryListener {
+            override fun onDiscoveryStarted(serviceType: String) {
+                state("Recherche des passerelles Smart JK sur le réseau local…")
+            }
+            override fun onStartDiscoveryFailed(serviceType: String, errorCode: Int) {
+                state("Recherche réseau indisponible : indique l'adresse IP manuellement.")
+                try { nsd.stopServiceDiscovery(this) } catch (_: Exception) {}
+                discoverListener = null
+            }
+            override fun onStopDiscoveryFailed(serviceType: String, errorCode: Int) {
+                discoverListener = null
+            }
+            override fun onDiscoveryStopped(serviceType: String) { discoverListener = null }
+            override fun onServiceLost(serviceInfo: NsdServiceInfo) {}
+            override fun onServiceFound(serviceInfo: NsdServiceInfo) {
+                if (found || !serviceInfo.serviceName.startsWith("smartjk-", true)) return
+                nsd.resolveService(serviceInfo, object : NsdManager.ResolveListener {
+                    override fun onResolveFailed(serviceInfo: NsdServiceInfo, errorCode: Int) {}
+                    override fun onServiceResolved(serviceInfo: NsdServiceInfo) {
+                        val host = serviceInfo.host
+                        if (found || host !is Inet4Address) return
+                        val ip = host.hostAddress ?: return
+                        if (!allowedLocalIp(ip)) return
+                        found = true
+                        runOnUiThread {
+                            lanIp.setText(ip)
+                            connectHomeLan() // verifies stored device ID before accepting IP
+                        }
+                    }
+                })
+            }
+        }
+        discoverListener = listener
+        try {
+            nsd.discoverServices("_http._tcp.", NsdManager.PROTOCOL_DNS_SD, listener)
+            uiHandler.postDelayed({
+                if (discoverListener === listener) {
+                    try { nsd.stopServiceDiscovery(listener) } catch (_: Exception) {}
+                    discoverListener = null
+                    if (!found) state("Aucune passerelle trouvée : renseigne son IP une fois.")
+                }
+            }, 12000)
+        } catch (ex: Exception) {
+            discoverListener = null
+            state("Recherche impossible : " + (ex.message ?: "erreur système"))
         }
     }
 
@@ -277,7 +491,7 @@ class MainActivity : Activity() {
         val response = httpCall("GET", "/api/v1/bms/scan")
         val devices = response.getJSONArray("devices")
         runOnUiThread {
-            chosen.clear()
+            val saved = chosen.toSet()
             scanChoices.clear()
             scanPanel.removeAllViews()
             if (devices.length() == 0) {
@@ -295,6 +509,7 @@ class MainActivity : Activity() {
                         if (checked) chosen.add(mac) else chosen.remove(mac)
                     }
                 }
+                if (saved.contains(mac)) check.isChecked = true
                 add(scanPanel, check)
                 scanChoices.add(check)
             }
@@ -329,11 +544,17 @@ class MainActivity : Activity() {
                     state("Wi-Fi enregistré. L'ESP32 redémarre : reconnecte le téléphone à ta box.")
                 }
                 releaseConnection()
+                runOnUiThread { discoverHomeLan() }
             }
         }
     }
 
     override fun onDestroy() {
+        discoverListener?.let { listener ->
+            try { (getSystemService(Context.NSD_SERVICE) as NsdManager).stopServiceDiscovery(listener) }
+            catch (_: Exception) {}
+        }
+        discoverListener = null
         releaseConnection()
         io.shutdownNow()
         super.onDestroy()
