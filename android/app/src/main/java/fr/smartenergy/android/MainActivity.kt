@@ -142,7 +142,7 @@ class MainActivity : Activity() {
     private fun allowedLocalIp(input: String): Boolean {
         // Development-only, IPv4 private ranges. Never send secret to public hosts.
         val parts = input.split(".")
-        if (parts.size != 4 || parts.any { it.isBlank() || it.length > 3 || it.toIntOrNull() !in 0..255 }) return false
+        if (parts.size != 4 || parts.any { it.isBlank() || it.length > 3 || (it.toIntOrNull() ?: -1) !in 0..255 }) return false
         val p = parts.map { it.toInt() }
         if (p[0] == 10) return true
         if (p[0] == 192 && p[1] == 168) return true
