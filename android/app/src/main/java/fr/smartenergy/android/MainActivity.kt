@@ -558,8 +558,10 @@ class MainActivity : Activity() {
             message.contains("Binding socket to network", true) ||
             message.contains("Operation not permitted", true)) {
             return IllegalStateException(
-                "Android refuse l'accès au réseau local (EPERM). Désactive temporairement le VPN et l'option « Bloquer les connexions sans VPN », " +
-                "vérifie que le téléphone est sur le Wi-Fi de la maison, puis relance Smart Energy.", ex
+                if (remoteVpnConnection)
+                    "VPN Android refuse la connexion (EPERM). Vérifie que la route du réseau domestique est annoncée et approuvée."
+                else
+                    "Android refuse le réseau local (EPERM). Autorise le réseau local dans le VPN ou désactive le VPN pour cet essai à domicile.", ex
             )
         }
         val vpnActive = connectivity.activeNetwork?.let {
@@ -569,7 +571,10 @@ class MainActivity : Activity() {
                            ex is java.net.UnknownHostException ||
                            ex is java.net.SocketTimeoutException)) {
             return IllegalStateException(
-                "Connexion locale inaccessible avec le VPN actif. Autorise le réseau local dans ton VPN, ou désactive-le temporairement pour ce test.", ex
+                if (remoteVpnConnection)
+                    "VPN actif mais réseau de la maison inaccessible. Vérifie la route 192.168.1.0/24 et le routeur de sous-réseau allumé."
+                else
+                    "Connexion locale bloquée par le VPN. Autorise le réseau local dans ses paramètres ou désactive-le pour ce test.", ex
             )
         }
         return ex
