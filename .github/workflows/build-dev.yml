@@ -88,6 +88,8 @@ jobs:
         run: |
           g++ -std=c++17 -Wall -Wextra -Werror firmware/jk-esp32/tests/test_protocol.cpp -o /tmp/smart-jk-protocol-test
           /tmp/smart-jk-protocol-test
+          g++ -std=c++17 -Wall -Wextra -Werror firmware/jk-esp32/tests/test_extended.cpp -o /tmp/smart-jk-extended-test
+          /tmp/smart-jk-extended-test
       - name: Compile firmware
         run: pio run -d firmware/jk-esp32
       - name: Create complete USB flash image (ESP32 classic only)
