@@ -1,4 +1,4 @@
-# Smart JK ESP32 — firmware de test (0.1.9-dev)
+# Smart JK ESP32 — firmware de test (0.2.0-dev)
 
 **Fonctions actuellement codées** : diagnostic Wi-Fi et retour automatique au mode configuration après 30 secondes d'échec, point d'accès Wi-Fi de configuration, secret unique par appareil, lecture de l'identité, scan BLE, sélection et enregistrement persistant des MAC JK, configuration du Wi-Fi, retour au réseau local, et **première acquisition BLE expérimentale en lecture seule**.
 
@@ -98,3 +98,15 @@ La reconnexion est réservée aux pertes de liaison, changements de configuratio
 **Limites à tester :** la stabilité dépend du matériel et de la façon dont JK V19 diffuse ses notifications. Sur l'ESP32 classique, le prototype conserve une connexion permanente **pour un seul JK**. Si plusieurs BMS sont configurés, le lecteur alterne les sessions par périodes de 90 secondes : cette partie doit encore être optimisée et peut occasionner des bips lors des changements de batterie. La lecture est **strictement seule**, et les températures ne sont pas validées pour la sécurité.
 
 **Mise à jour conseillée :** firmware `APP-ONLY` à `0x10000`, sans `Erase Flash`. Les clés Wi-Fi, l'accès physique BOOT et la liste des JK restent normalement stockés en NVS. La fonction de réassociation BOOT 4 secondes issue de v0.1.8 est conservée.
+
+## 0.2.0-dev — Données étendues et paramètres confirmés
+
+Le décodeur expérimental conserve la connexion BLE persistante de v0.1.9 et interprète les trames validées par CRC :
+
+- Type 0x02 : résistances des cellules, sondes T3/T4/T5 si renseignées, équilibrage, capacités, SOH, autonomie, états MOS/chauffage/contacts, alarmes et diagnostics ; les offsets spécifiques JK02_32S ne sont pas appliqués aux trames 24S.
+- Type 0x01 : catalogue des paramètres du module Smart JK Home Assistant (seuils cellules, courants, températures, équilibrage, interrupteurs, capacités), décodage avec plages et contrôle de cohérence UVP/OVP.
+- Type 0x03 : nom, modèle, firmware, matériel et autres informations autorisées ; les mots de passe BMS et les champs utilisateur sensibles ne sont ni stockés ni renvoyés.
+
+L'API authentifiée `GET /api/v1/details` renvoie les paramètres et informations lus, avec état et ancienneté. `GET /api/v1/telemetry` reste optimisée pour les mesures rafraîchies rapidement. Les réglages sont relus sur le lien BLE toutes les cinq minutes et les informations toutes les quinze minutes, sans reconnecter le BMS.
+
+**Attention :** le catalogue est provisoire pour JK02 V19 et doit être comparé à l'application fabricant. Les résistances et sondes ne sont renvoyées que si présentes et plausibles ; n'utiliser aucune valeur pour la sécurité des batteries. Aucune écriture BMS n'a été intégrée.
