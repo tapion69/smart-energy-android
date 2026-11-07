@@ -32,6 +32,7 @@ struct Device {
   uint32_t lastAttemptMs = 0;
   uint32_t badFrames = 0;
   uint32_t rejectedMeasurements = 0;
+  uint32_t rejectedIdentityFrames = 0;
   bool bleConnected = false;
   uint32_t connections = 0;
   uint32_t disconnections = 0;
@@ -70,7 +71,13 @@ void onValidatedFrame(const uint8_t *frame, const smartjk::Reading *basic, void 
   } else if (type == 1) {
     if (!jkextra::decodeSettings(frame, settings)) return;
   } else if (type == 3) {
-    if (!jkextra::decodeInfo(frame, info)) return;
+    if (!jkextra::decodeInfo(frame, info)) {
+      portENTER_CRITICAL(&stateMux);
+      if (index < configured && strcmp(devices[index].mac, activeMac) == 0)
+        devices[index].rejectedIdentityFrames++;
+      portEXIT_CRITICAL(&stateMux);
+      return;
+    }
   } else {
     return;
   }
@@ -521,6 +528,7 @@ void fillDetails(JsonDocument &out) {
     const bool infoAvailable = item.info.confirmed && item.lastInfoMs &&
       (uint32_t)(now - item.lastInfoMs) < 3600000;
     info["available"] = infoAvailable;
+    info["unrecognized_frames"] = item.rejectedIdentityFrames;
     if (infoAvailable) {
       info["age_seconds"] = (now - item.lastInfoMs) / 1000;
       const jkextra::Info &v = item.info;
@@ -534,7 +542,9 @@ void fillDetails(JsonDocument &out) {
       info["power_on_count"] = v.powerOnCount;
       info["uptime_hours"] = v.uptimeS / 3600.0f;
     } else {
-      info["reason"] = "no_fresh_crc_checked_device_info_frame";
+      info["reason"] = item.rejectedIdentityFrames > 0 ?
+          "unrecognized_type3_identity_layout" :
+          "no_fresh_crc_checked_device_info_frame";
     }
   }
 }
