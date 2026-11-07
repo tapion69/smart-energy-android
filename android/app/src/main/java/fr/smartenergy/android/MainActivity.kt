@@ -61,6 +61,7 @@ class MainActivity : Activity() {
     private var callback: ConnectivityManager.NetworkCallback? = null
     private var switchingToHome = false
     @Volatile private var activeSetupCode = ""
+    @Volatile private var activeSetupSsid = ""
     @Volatile private var localHost = ""
     @Volatile private var selectedDeviceId = ""
     private val uiHandler = Handler(Looper.getMainLooper())
@@ -290,6 +291,7 @@ class MainActivity : Activity() {
         }
         releaseConnection()
         activeSetupCode = password
+        activeSetupSsid = ssid
         localHost = ""
         switchingToHome = false
         val spec = WifiNetworkSpecifier.Builder()
@@ -376,7 +378,7 @@ class MainActivity : Activity() {
             state("Identifiant ESP32 invalide.")
             return@async
         }
-        savePairing(deviceId, apName.text.toString().trim(), activeSetupCode)
+        savePairing(deviceId, activeSetupSsid, activeSetupCode)
         runOnUiThread {
             setupCode.text.clear()
             state("Passerelle associée et code mémorisé : " + deviceId)
