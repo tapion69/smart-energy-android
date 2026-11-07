@@ -1,0 +1,11 @@
+{
+  "schemaVersion": 1,
+  "product": "smart-voltronic-esp32",
+  "available": false,
+  "version": null,
+  "hardwareTargets": [],
+  "downloadUrl": null,
+  "sha256": null,
+  "signature": null,
+  "releaseNotesUrl": null
+}
