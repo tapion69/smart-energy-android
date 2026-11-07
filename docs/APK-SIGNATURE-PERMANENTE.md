@@ -43,9 +43,9 @@ Pour récupérer le code sans effacer l'ESP32 :
 
 1. Brancher l'ESP32 à l'ordinateur et ouvrir le moniteur série à **115200 bauds**.
 2. Laisser l'ESP32 démarrer. Puis tenir **BOOT pendant 4 secondes** pour activer le réseau temporaire SmartJK (ne pas presser pendant le démarrage).
-3. Relever **privément** le code unique affiché sur le moniteur série et ne pas le divulguer.
-4. Dans l'application, « Trouver un ESP32 proche », sélectionner le point d'accès puis saisir le code dans « Première association » une seule fois.
-5. Revenir sur le Wi-Fi de la maison ; lancer « Rechercher sur mon Wi-Fi » et choisir la passerelle. **Ne pas reconfigurer le Wi-Fi ni la MAC du JK** : elles sont toujours dans la NVS de l'ESP32.
+3. Relever **privément** le code unique affiché sur le moniteur série, puis redémarrer simplement l'ESP32 pour qu'il retrouve le Wi-Fi de la box. **Ne pas effacer sa mémoire.**
+4. Dans l'APK **v0.1.7 ou ultérieure**, saisir l'adresse locale de l'ESP32 dans la section 1 et le code original dans la section 2, puis appuyer sur « Se connecter à ma passerelle » dans la section 1. L'APK valide le code auprès de l'ESP32, puis le mémorise de nouveau dans Android Keystore : pas besoin de rejoindre le point d'accès temporaire.
+5. **Ne pas reconfigurer le Wi-Fi ni la MAC du JK** : elles sont toujours enregistrées dans la NVS de l'ESP32.
 
 Les mises à jour suivantes : augmenter `versionCode`, compiler avec les quatre mêmes secrets, installer l'artifact signé par-dessus l'APK signée précédente. Android conservera normalement les données de l'application, dont le code chiffré dans Android Keystore.
 
