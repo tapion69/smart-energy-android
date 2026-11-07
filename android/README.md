@@ -1,4 +1,4 @@
-# Smart Energy Android — prototype Android v0.1.8-dev
+# Smart Energy Android — prototype Android v0.1.9-dev
 
 Un projet Android Studio **réel**, en Kotlin natif, ciblant Android 10+.
 
@@ -82,3 +82,15 @@ Dans la section 1, saisir l'adresse locale de l'ESP32 et appuyer sur **« Code p
 Si l'ESP32 utilise encore la v0.1.6, il n'existe pas de récupération distante sans authentification. Rechercher d'abord le code dans les anciens journaux USB ou flasher une fois la v0.1.8. **Ne jamais ajouter de route HTTP exposant l'ancien code.** La fonction expérimentale s'utilise sur un réseau local privé de confiance, pas à distance via un port ouvert.
 
 La signature Android permanente est traitée séparément dans `docs/APK-SIGNATURE-PERMANENTE.md` et nécessite les secrets GitHub avant de produire un artifact signé. Les APK debug peuvent toujours nécessiter une réinstallation.
+
+## v0.1.9-dev — tableau de bord Android finalisé pour le test réel
+
+- L'écran principal affiche désormais les mesures, **avant les formulaires de configuration**.
+- Cartes Android natives : jauge SOC dessinée, tension/courant/puissance, 2 colonnes de cellules avec barres, températures T1/T2/MOS et cycles.
+- **Le format JK02 24S/32S n'est plus affiché** ; il reste une donnée technique interne.
+- Actualisation automatique **toutes les 2,5 secondes**, à partir d'un cache de télémétrie ESP32 (aucune nouvelle connexion BLE déclenchée par l'APK).
+- Les mêmes vues sont mises à jour sans être recréées à chaque appel, pour limiter scintillement et coût CPU.
+- Si les valeurs ne sont plus fraîches, les cartes sont masquées et un état de diagnostic explicite apparaît, sans valeurs fictives.
+- « Configuration et association » ouvre/referme les sections Wi-Fi, JK, code et récupération BOOT.
+- La connexion BLE persistante et les barres de cellules sont **à valider sur batterie physique**. Les temps de mise à jour de 2,5 s concernent **le rafraîchissement de l'APK** ; la fréquence des trames dépend du JK.
+- Les APK debug GitHub Actions ont toujours une signature éphémère : une réinstallation peut perdre l'association Android. La signature permanente est préparée, mais les secrets GitHub doivent encore être configurés pour publier des APK signées.
