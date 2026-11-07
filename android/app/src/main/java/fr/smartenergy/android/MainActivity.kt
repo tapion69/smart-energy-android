@@ -49,7 +49,7 @@ import java.util.concurrent.Executors
 import java.util.Locale
 
 /**
- * Smart Energy Android 0.1.6-dev.
+ * Smart Energy Android 0.1.7-dev.
  * Initial provisioning over ESP32's setup AP, subsequent management over home Wi-Fi.
  * Credentials kept encrypted in Android Keystore-backed local preferences.
  * DEVELOPMENT-ONLY HTTP local transport; NOT safe for remote/public use.
@@ -257,7 +257,7 @@ class MainActivity : Activity() {
         add(root, status, 14)
 
         val lan = section(root, "1. Connexion quotidienne — Wi-Fi maison")
-        add(lan, label("Après la première association, l'application garde la passerelle et son code en mémoire sécurisée.", color = subdued))
+        add(lan, label("L’application mémorise le code après association. Si une réinstallation l’a effacé, renseigne le code dans la section 2 puis clique ici : pas besoin de reconfigurer la box.", color = subdued))
         lanIp = input("Adresse IP locale de l'ESP32 (ex. 192.168.1.50)")
         lanIp.setText(prefs.getString("local_ip", "") ?: "")
         add(lan, lanIp)
@@ -271,7 +271,7 @@ class MainActivity : Activity() {
 
         val a = section(root, "2. Première association / dépannage")
 
-        add(a, label("Le nom de l’ESP32 peut être trouvé automatiquement ci-dessus. Son code unique est à entrer une seule fois lors de la première association.", color = subdued))
+        add(a, label("Si l’APK a perdu son association, saisis ici le code original de l’ESP32 puis clique sur « Se connecter à ma passerelle » dans la section 1. Inutile de modifier le Wi-Fi ou le JK.", color = subdued))
         apName = input("SmartJK-Setup-XXXXXX")
         setupCode = input("Code unique de l'ESP32 (vide = code mémorisé)", true)
         apName.setText(prefs.getString("setup_ssid", "") ?: "")
@@ -510,41 +510,53 @@ class MainActivity : Activity() {
         releaseConnection()
         val ip = lanIp.text.toString().trim()
         if (!allowedLocalIp(ip)) {
-            state("Indique une adresse IP privée de ta passerelle (ex. 192.168.1.50).")
+            state("Indique une adresse IP privée de ton ESP32 (celle visible dans les journaux série).")
             return
         }
-        val code = storedCode()
-        if (code.isBlank()) {
-            state("Il faut associer l'ESP32 une dernière fois pour mémoriser son code.")
+        val savedCode = storedCode()
+        val typedCode = setupCode.text.toString().trim()
+        val recovery = savedCode.isBlank()
+        val code = if (recovery) typedCode else savedCode
+        if (code.length !in 8..32) {
+            state("Le code mémorisé a disparu (probablement après réinstallation). Renseigne le code ORIGINAL de l'ESP32 dans la section 2 et clique sur « Se connecter à ma passerelle ». Aucun nouveau flash ni Wi-Fi à configurer.")
             return
         }
         activeSetupCode = code
         localHost = ip
-        state("Connexion locale à l'ESP32…")
+        state(if (recovery) "Réassociation sécurisée via le Wi-Fi de la maison…" else "Connexion locale à l'ESP32…")
         async {
             val info = httpCall("GET", "/api/v1/info")
             val returnedId = info.optString("device_id")
             val savedId = prefs.getString("device_id", "") ?: ""
-            if (info.optString("product") != "smart-jk-esp32" || returnedId != savedId ||
+            if (info.optString("product") != "smart-jk-esp32" ||
+                !Regex("^smartjk-[A-F0-9]{6}$", RegexOption.IGNORE_CASE).matches(returnedId) ||
+                (savedId.isNotBlank() && returnedId != savedId) ||
                 !info.optBoolean("wifi_connected")) {
                 localHost = ""
-                state("La passerelle ne correspond pas à l'appareil associé, ou n'est pas sur le Wi-Fi maison.")
+                state("L'ESP32 n'est pas reconnu ou ne correspond pas à l'appareil associé.")
                 return@async
             }
+            // Verify device ownership *before* persisting user-provided credentials.
             val configured = httpCall("GET", "/api/v1/bms")
             val storedBms = configured.optJSONArray("bms") ?: JSONArray()
+            if (recovery) {
+                savePairing(returnedId,
+                    "SmartJK-Setup-" + returnedId.substringAfter("-").uppercase(Locale.ROOT),
+                    code)
+            }
             chosen.clear()
             for (i in 0 until storedBms.length()) chosen.add(storedBms.optString(i))
             prefs.edit().putString("local_ip", ip).apply()
             lanVerified = true
             lastLanFirmwareVersion = info.optString("version")
             runOnUiThread {
+                setupCode.text.clear()
                 scanBtn.isEnabled = true
                 saveBtn.isEnabled = true
                 wifiBtn.isEnabled = true
                 refreshTelemetry()
-                state("Connecté automatiquement à " + returnedId + " (" + ip + "). " +
-                    chosen.size + " batteries mémorisées.")
+                state((if (recovery) "Code récupéré et mémorisé. " else "Connecté automatiquement. ") +
+                    returnedId + " (" + ip + ") · " + chosen.size + " batterie(s) JK conservée(s).")
             }
         }
     }
@@ -552,7 +564,7 @@ class MainActivity : Activity() {
     private fun discoverHomeLan() {
         val code = storedCode()
         if (code.isBlank()) {
-            state("Associe d'abord ton ESP32 une seule fois pour enregistrer son code.")
+            state("Code ESP32 manquant. Saisis son code original dans la section 2, puis connecte-toi via son IP dans la section 1.")
             return
         }
         if (discoverListener != null) {
