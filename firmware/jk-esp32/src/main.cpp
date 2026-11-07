@@ -1,4 +1,4 @@
-// Smart Energy JK - provisioning test firmware 0.1.1-dev
+// Smart Energy JK - provisioning test firmware 0.1.2-dev
 // IMPORTANT: Wi-Fi setup and BLE discovery only, JK data decoding NOT included yet.
 // Target: classic ESP32 DevKit (esp32dev), flash a spare unit, not the HA proxy.
 #include <Arduino.h>
@@ -41,16 +41,21 @@ void error(int code, const char *message) {
   doc["error"] = message;
   respond(code, doc);
 }
-bool requireSetup() {
-  if (!setupMode) {
-    error(403, "setup_mode_required");
-    return false;
-  }
+bool requireControl() {
+  // Development-only LAN access: a unique per-device code must be supplied.
+  // TODO production: replace plaintext HTTP with authenticated encrypted channel.
   if (http.header("X-Setup-Code") != setupCode) {
     error(401, "invalid_setup_code");
     return false;
   }
   return true;
+}
+bool requireSetup() {
+  if (!setupMode) {
+    error(403, "setup_mode_required");
+    return false;
+  }
+  return requireControl();
 }
 String normalizedMac(const String &input) {
   if (input.length() != 17) return "";
@@ -121,12 +126,13 @@ void onInfo() {
   doc["last_disconnect_reason"] = disconnectReason;
   doc["ip"] = WiFi.localIP().toString();
   doc["ble_scan"] = true;
+  doc["lan_management"] = true;
   doc["telemetry"] = false;
   doc["ota"] = false;
   respond(200, doc);
 }
 void onConfiguredBms() {
-  if (!requireSetup()) return;
+  if (!requireControl()) return;
   JsonDocument doc;
   String saved = prefs.getString("bmsList", "[]");
   deserializeJson(doc, saved);
@@ -136,7 +142,7 @@ void onConfiguredBms() {
   respond(200, out);
 }
 void onScan() {
-  if (!requireSetup()) return;
+  if (!requireControl()) return;
   NimBLEScan *scan = NimBLEDevice::getScan();
   scan->setActiveScan(true);
   scan->setMaxResults(40);
@@ -159,7 +165,7 @@ void onScan() {
   respond(200, doc);
 }
 void onSaveBms() {
-  if (!requireSetup()) return;
+  if (!requireControl()) return;
   JsonDocument received;
   if (deserializeJson(received, http.arg("plain"))) {
     error(400, "invalid_json");
