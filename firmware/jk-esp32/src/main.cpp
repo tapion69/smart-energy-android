@@ -8,6 +8,7 @@
 #include <ESPmDNS.h>
 #include <NimBLEDevice.h>
 #include "jk_reader.h"
+#include "jk_write.h"
 #include "setup_code_policy.h"
 #include <ArduinoJson.h>
 #include <ctype.h>
@@ -40,6 +41,9 @@ uint32_t wifiAttemptAt = 0;
 bool everConnected = false;
 String wifiIssue = "";
 volatile uint8_t disconnectReason = 0;
+// Parameter writes are disabled by default, per-device, and expire quickly.
+uint32_t writeArmUntil = 0;
+String writeArmMac;
 
 void respond(int status, JsonDocument &doc) {
   String json;
@@ -153,6 +157,7 @@ void onInfo() {
   doc["telemetry_experimental"] = true;
   doc["ble_simultaneous_target"] = 4;
   doc["ota"] = false;
+  doc["parameter_writes"] = "experimental_low_risk_local_only";
   doc["physical_recovery"] = true; // does NOT reveal the old password.
   respond(200, doc);
 }
@@ -386,6 +391,82 @@ void onSetWifi() {
   respond(200, resp);
   restartAt = millis() + 2200;
 }
+// Only user-triggered, time-boxed commands. No recurring/automatic writes.
+// This experimental API is not exposed through the existing VPN gateway.
+bool allowedWriteConnection() {
+  return !setupMode && WiFi.status()==WL_CONNECTED;
+}
+void onArmParameterWrite() {
+  if(!requireControl())return;
+  if(!allowedWriteConnection()){error(403,"local_wifi_required");return;}
+  if(setupCode.length()<16){error(403,"strong_code_16_characters_required_for_writes");return;}
+  JsonDocument req;
+  if(deserializeJson(req,http.arg("plain"))){error(400,"invalid_json");return;}
+  String mac=req["mac"].as<String>();
+  if(!jkreader::isConfigured(mac.c_str())){error(404,"bms_not_configured");return;}
+  if(req["confirmation"].as<String>()!="I_CONFIRM_ONE_JK_WRITE"){
+    error(403,"explicit_confirmation_required");return;
+  }
+  writeArmMac=mac;
+  writeArmUntil=millis()+120000;
+  JsonDocument out;
+  out["ok"]=true;out["armed"]=true;
+  out["expires_seconds"]=120;
+  out["mac"]=mac;
+  respond(200,out);
+}
+void onWriteParameter() {
+  if(!requireControl())return;
+  if(!allowedWriteConnection()){error(403,"local_wifi_required");return;}
+  JsonDocument req;
+  if(deserializeJson(req,http.arg("plain"))){error(400,"invalid_json");return;}
+  String mac=req["mac"].as<String>();
+  // One successful arm can authorize at most one command. Clear before
+  // inspecting target/value to prevent accidental or replayed double writes.
+  const bool armed = writeArmUntil && (int32_t)(writeArmUntil-millis())>0 &&
+                     writeArmMac==mac;
+  writeArmUntil=0;writeArmMac="";
+  if(!armed){error(403,"write_permission_expired_or_not_armed");return;}
+  if(req["confirmation"].as<String>()!="APPLY_TO_SELECTED_BMS"){
+    error(403,"explicit_write_confirmation_required");return;
+  }
+  String key=req["key"].as<String>();
+  const int idx=jkwrite::find(key.c_str());
+  if(idx<0||!jkwrite::editable(size_t(idx))){
+    error(403,"parameter_not_allowlisted");return;
+  }
+  JsonVariant value=req["value"];
+  JsonVariant prior=req["expected_old"];
+  const bool boolType=value.is<bool>();
+  const bool numericType=value.is<int>()||value.is<float>()||value.is<double>();
+  if(!(boolType||numericType) || prior.isNull() ||
+       !(prior.is<bool>()||prior.is<int>()||prior.is<float>()||prior.is<double>())){
+    error(400,"typed_value_and_expected_old_required");return;
+  }
+  if(jkwrite::isBoolean(size_t(idx))!=boolType){
+    error(400,"parameter_type_mismatch");return;
+  }
+  const float desired=boolType?(value.as<bool>()?1.0f:0.0f):value.as<float>();
+  const float expected=prior.is<bool>()?(prior.as<bool>()?1.0f:0.0f):prior.as<float>();
+  String reason;
+  if(!jkreader::requestWrite(mac.c_str(),key.c_str(),desired,boolType,expected,reason)){
+    JsonDocument denied;
+    denied["error"]=reason;
+    respond(409,denied);return;
+  }
+  JsonDocument out;
+  out["accepted"]=true;out["verified_by_bms"]=false;
+  out["state"]="queued";
+  out["mac"]=mac;out["key"]=key;
+  respond(202,out);
+}
+void onParameterWriteStatus() {
+  if(!requireControl())return;
+  JsonDocument out;
+  String mac=http.arg("mac");
+  jkreader::fillWriteStatus(out,mac.c_str());
+  respond(200,out);
+}
 void onTelemetry() {
   if (!requireControl()) return;
   JsonDocument doc;
@@ -435,6 +516,9 @@ void setup() {
   http.on("/api/v1/pair/recover", HTTP_POST, onPhysicalRecovery);
   http.on("/api/v1/telemetry", HTTP_GET, onTelemetry);
   http.on("/api/v1/details", HTTP_GET, onDetails);
+  http.on("/api/v1/jk/write-arm", HTTP_POST, onArmParameterWrite);
+  http.on("/api/v1/jk/write", HTTP_POST, onWriteParameter);
+  http.on("/api/v1/jk/write-status", HTTP_GET, onParameterWriteStatus);
   http.onNotFound([] { error(404, "unknown_route"); });
   if (prefs.getString("ssid", "").isEmpty()) startSetup();
   else connectHome();
