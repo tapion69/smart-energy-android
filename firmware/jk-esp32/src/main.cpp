@@ -498,11 +498,20 @@ void loop() {
       recoveryAttempts = 0;
       Serial.println("[Pairing] Physical confirmation: LAN recovery open for 45 seconds.");
     }
-    if (!setupHoldTriggered && !setupMode && heldFor >= SETUP_HOLD_MS) {
-      setupHoldTriggered = true;
-      recoveryWindowAt = 0;
-      wifiIssue = "manual_setup";
-      startSetup();
+    if (!setupHoldTriggered && heldFor >= SETUP_HOLD_MS) {
+      if (!setupMode) {
+        setupHoldTriggered = true;
+        recoveryWindowAt = 0;
+        wifiIssue = "manual_setup";
+        startSetup(false);
+      } else if (automaticSetupFallback) {
+        // User intentionally requests to remain in provisioning AP.
+        // Cancel auto-retries, do not rotate the code or erase saved Wi-Fi.
+        setupHoldTriggered = true;
+        automaticSetupFallback = false;
+        wifiIssue = "manual_setup";
+        Serial.println("[WiFi] Manual setup selected: automatic retries paused.");
+      }
     }
   } else {
     buttonPressedAt = 0;
