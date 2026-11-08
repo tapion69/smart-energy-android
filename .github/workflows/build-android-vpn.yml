@@ -50,6 +50,8 @@ jobs:
           /tmp/test-jk-protocol
           g++ -std=c++11 -Wall -Wextra -Werror firmware/jk-esp32/tests/test_extended.cpp -o /tmp/test-jk-extended
           /tmp/test-jk-extended
+          g++ -std=c++11 -Wall -Wextra -Werror firmware/jk-esp32/tests/test_write.cpp -o /tmp/test-jk-write
+          /tmp/test-jk-write
           g++ -std=c++11 -Wall -Wextra -Werror firmware/jk-esp32/tests/test_setup_code_policy.cpp -o /tmp/test-jk-code-policy
           /tmp/test-jk-code-policy
           python firmware/jk-esp32/tests/test_json_ownership.py
