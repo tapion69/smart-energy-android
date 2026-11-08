@@ -33,7 +33,7 @@
 #include "tailtiny.h"
 #include "gateway_policy.h"
 
-#define GATEWAY_VERSION "0.1.0-alpha"
+#define GATEWAY_VERSION "0.1.1-diag"
 #define GATEWAY_PORT 18767
 #define MAX_JSON_BYTES 32768
 
@@ -104,19 +104,39 @@ static void on_vpn_state(tailtiny_t *ml, tailtiny_state_t state, void *arg) {
 // Fail closed if the HTTP socket is not actually addressed to this node's
 // TailTiny VPN IP. TailTiny's default HTTP listener otherwise binds INADDR_ANY.
 static bool request_is_private_vpn(httpd_req_t *req) {
-    if (!vpn || !tailtiny_is_connected(vpn) || !wifi_ready) return false;
+    const bool vpn_ready = vpn && tailtiny_is_connected(vpn);
+    if (!vpn_ready || !wifi_ready) {
+        ESP_LOGW(TAG, "VPN gate: refused state (vpn_ready=%d, wifi_ready=%d)",
+                 (int)vpn_ready, (int)wifi_ready);
+        return false;
+    }
     const int fd = httpd_req_to_sockfd(req);
     struct sockaddr_in local = {0}, peer = {0};
     socklen_t local_len = sizeof(local), peer_len = sizeof(peer);
-    if (getsockname(fd, (struct sockaddr *)&local, &local_len) != 0 ||
-        getpeername(fd, (struct sockaddr *)&peer, &peer_len) != 0 ||
-        local.sin_family != AF_INET || peer.sin_family != AF_INET) {
+    if (fd < 0 ||
+        getsockname(fd, (struct sockaddr *)&local, &local_len) != 0 ||
+        getpeername(fd, (struct sockaddr *)&peer, &peer_len) != 0) {
+        ESP_LOGW(TAG, "VPN gate: refused socket metadata unavailable");
+        return false;
+    }
+    if (local.sin_family != AF_INET || peer.sin_family != AF_INET) {
+        ESP_LOGW(TAG, "VPN gate: refused non-IPv4 socket (local_family=%d, peer_family=%d)",
+                 (int)local.sin_family, (int)peer.sin_family);
         return false;
     }
     const uint32_t own = ntohl(local.sin_addr.s_addr);
     const uint32_t src = ntohl(peer.sin_addr.s_addr);
     const uint32_t vpn_ip = tailtiny_get_vpn_ip(vpn);
-    return vpn_ip != 0 && own == vpn_ip && se_is_tailnet_ipv4(src);
+    const bool target_matches = vpn_ip != 0 && own == vpn_ip;
+    const bool peer_is_tailnet = se_is_tailnet_ipv4(src);
+    if (!target_matches || !peer_is_tailnet) {
+        // Diagnostic intentionally exposes no actual IP, secret or device identity.
+        ESP_LOGW(TAG, "VPN gate: refused address checks (dest_is_vpn=%d, src_is_tailnet=%d, dest_is_any=%d, vpn_ip_ready=%d)",
+                 (int)target_matches, (int)peer_is_tailnet, (int)(own == 0),
+                 (int)(vpn_ip != 0));
+        return false;
+    }
+    return true;
 }
 
 static bool authorized(httpd_req_t *req) {
