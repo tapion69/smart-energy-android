@@ -639,64 +639,72 @@ bool requestWrite(const char *mac, const char *key, float value,
   }
   const uint32_t now=millis();
   bool accepted=false;
-  error="bms_not_configured";
+  const char *reason="bms_not_configured";
   portENTER_CRITICAL(&stateMux);
   for(uint8_t i=0;i<configured;++i){
     Device &d=devices[i];
     if(strcmp(d.mac,mac))continue;
-    error="write_refused";
+    reason="write_refused";
     if(!d.bleConnected || !d.reading.valid || !d.lastReadingMs ||
        (uint32_t)(now-d.lastReadingMs)>=20000){
-      error="bms_not_live";break;
+      reason="bms_not_live";break;
     }
-    if(d.reading.errorMask!=0){error="bms_alarm_active";break;}
+    if(d.reading.errorMask!=0){reason="bms_alarm_active";break;}
     if(!d.info.confirmed || !jkextra::usableIdentity(d.info)){
-      error="unverified_bms_identity";break;
+      reason="unverified_bms_identity";break;
     }
     if(!d.settings.confirmed || !d.lastSettingsMs ||
        (uint32_t)(now-d.lastSettingsMs)>=60000 ||
        !d.settings.available[size_t(idx)]){
-      error="stale_or_missing_settings";break;
+      reason="stale_or_missing_settings";break;
     }
     if(fabsf(d.settings.value[size_t(idx)]-expectedOld)>0.0011f){
-      error="stale_expected_value";break;
+      reason="stale_expected_value";break;
     }
     if(d.writePhase==1||d.writePhase==2){
-      error="write_already_pending";break;
+      reason="write_already_pending";break;
     }
     if(d.writeAt && (uint32_t)(now-d.writeAt)<15000){
-      error="write_rate_limit_15s";break;
+      reason="write_rate_limit_15s";break;
     }
     d.writeIndex=int8_t(idx);
     d.writeTarget=value;
     d.writeAt=now;
     d.writeSentAt=0;
     d.writePhase=1;
-    accepted=true;error="";
+    accepted=true;reason="";
     break;
   }
   portEXIT_CRITICAL(&stateMux);
+  error=reason; // String operations must happen outside FreeRTOS critical.
   return accepted;
 }
 
 void fillWriteStatus(JsonDocument &out, const char *mac) {
   out["mac"] = mac ? String(mac) : String("");
   out["verified_by_bms"] = false;
+  uint8_t phase=0;
+  int idx=-1;
+  bool found=false;
   portENTER_CRITICAL(&stateMux);
   for(uint8_t i=0;i<configured;++i){
     Device &d=devices[i];
     if(!mac || strcmp(d.mac,mac))continue;
-    const char *phase = d.writePhase==0?"none":d.writePhase==1?"queued":
-       d.writePhase==2?"sent_unconfirmed":d.writePhase==3?"confirmed":
-       d.writePhase==4?"mismatch":d.writePhase==5?"send_failed":
-       d.writePhase==6?"timeout_unverified":"link_lost_unverified";
-    out["state"] = phase;
-    out["verified_by_bms"] = d.writePhase==3;
-    if(d.writeIndex>=0 && d.writeIndex<int(jkextra::PARAM_COUNT))
-      out["key"]=jkextra::PARAMS[size_t(d.writeIndex)].key;
+    phase=d.writePhase;
+    idx=d.writeIndex;
+    found=true;
     break;
   }
   portEXIT_CRITICAL(&stateMux);
+  if(!found){out["state"]="bms_not_configured";return;}
+  const char *name = phase==0?"none":phase==1?"queued":
+     phase==2?"sent_unconfirmed":phase==3?"confirmed":
+     phase==4?"mismatch":phase==5?"send_failed":
+     phase==6?"timeout_unverified":"link_lost_unverified";
+  out["state"]=name;
+  out["verified_by_bms"]=phase==3;
+  if(idx>=0 && idx<int(jkextra::PARAM_COUNT))
+    out["key"]=jkextra::PARAMS[size_t(idx)].key;
 }
 
 void begin() {
