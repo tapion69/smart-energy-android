@@ -57,6 +57,7 @@ bool physicalStaged = false;
 bool physicalConfirmed = false;
 uint32_t physicalStartedAt = 0;
 uint32_t physicalConfirmedAt = 0;
+uint32_t physicalStagedAt = 0;
 uint32_t physicalTicket = 0;
 uint8_t physicalFailedStages = 0;
 String physicalNewCode;
@@ -119,6 +120,7 @@ void clearPhysicalPairing() {
   physicalConfirmed = false;
   physicalStartedAt = 0;
   physicalConfirmedAt = 0;
+  physicalStagedAt = 0;
   physicalTicket = 0;
   physicalFailedStages = 0;
   physicalNewCode = "";
@@ -473,6 +475,7 @@ void onPhysicalStage() {
   if(!physicalTicket)physicalTicket=1;
   physicalStaged=true;
   physicalConfirmed=false;
+  physicalStagedAt=millis();
   physicalConfirmedAt=0;
   JsonDocument reply;
   reply["staged"]=true;reply["requires_second_boot"]=true;
@@ -743,8 +746,11 @@ void loop() {
     if (!buttonPressedAt) buttonPressedAt = millis();
   } else if (buttonPressedAt) {
     const uint32_t heldFor=(uint32_t)(millis()-buttonPressedAt);
+    const uint32_t pressedAt=buttonPressedAt;
     buttonPressedAt=0;
     if (physicalPairWindow() && physicalStaged && !physicalConfirmed &&
+        physicalStagedAt && 
+        (int32_t)(pressedAt-physicalStagedAt)>0 &&
         heldFor>=PHYSICAL_CONFIRM_HOLD_MS && heldFor<SETUP_HOLD_MS) {
       physicalConfirmed=true;
       physicalConfirmedAt=millis();
