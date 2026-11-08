@@ -74,6 +74,26 @@ Plan d'implémentation :
 - Paramètres : lecture seule par défaut, changement manuel ciblé et statut de relecture, journal d'audit. Les autorisations local/Tailscale sont visibles et contrôlées séparément.
 - Une maquette HTML indépendante, sans accès réseau ni commandes matérielles, a été préparée pour valider la présentation avant développement natif Kotlin.
 
+## Maquette HTML V3 — synthèse et alarmes
+
+- Reprendre visuellement la **carte Batterie existante** pour le tableau de bord global : jauge SOC à gauche, et à droite trois indicateurs : courant **moyen** (A), puissance **moyenne** (W) et tension **moyenne** (V). Ne pas afficher de capacité globale.
+- Sous la synthèse, une **carte Alarmes des BMS** : afficher `Aucune` uniquement si l'état des BMS observés est disponible et qu'aucune alarme n'est présente. Si une alarme est active, indiquer le nom/identifiant du BMS, le libellé et un lien vers son détail. Si un BMS est indisponible, annoncer une supervision partielle et ne pas conclure `Aucune` pour l'ensemble.
+- Chaque carte individuelle indique aussi `Aucune alarme` ou le nombre d'alarmes, et chaque fiche BMS conserve ses écrans précédents : Batterie (jauge SOC, cellules et barres, températures, alarmes), Détails, Paramètres.
+- La maquette HTML V3 réalisée dans la conversation comprend un bouton pour simuler une alarme sur JK 2 puis l'effacer, avec affichage synchronisé global/détails; aucune connexion ni écriture sur matériel réel.
+
+## Point de vigilance confirmé : BOOT et bascule VPN / LAN
+
+La **bascule** LAN ↔ Tailscale ne change jamais à elle seule le secret du lecteur JK.
+
+En revanche, l'action **« Code perdu ? Réassocier avec BOOT »** a un effet réel :
+- `android/app/src/main/java/fr/smartenergy/android/MainActivity.kt` génère un **nouveau code aléatoire** avec `randomDeviceCode()`, puis appelle `POST /api/v1/pair/recover`; elle l'enregistre ensuite via Android Keystore.
+- `firmware/jk-esp32/src/main.cpp::onPhysicalRecovery()` remplace `setupCode` en NVS, en conservant Wi-Fi et BMS. Ceci n'est **pas** une simple reconnexion.
+- `firmware/vpn-gateway/main/main.c::get_target()` utilise `CONFIG_SE_JK_READ_CODE` compilé localement. Le second ESP32 Tailscale ne suit donc **pas automatiquement** la rotation du code JK.
+- Si l'APK affiche « Failed to connect to /IP:80 » et qu'un navigateur ne peut pas appeler `GET /api/v1/info` (route non authentifiée), traiter d'abord le problème comme **réseau/routage/IP**, pas comme code de connexion.
+- Avant de proposer un réappairage, vérifier sur un autre appareil LAN la joignabilité du port 80, l'IP DHCP effective, le bon Wi-Fi, le routage du téléphone et la politique d'accès au LAN de Tailscale.
+- À prévoir : diagnostic séparant `réseau inaccessible`, `code refusé`, `VPN bloquant LAN`, `IP modifiée`, `configuration passerelle VPN désynchronisée`, et synchronisation **sécurisée** des autorisations sans diffuser ou réinjecter les secrets dans des journaux.
+- Ne pas faire de rotation automatique de code au simple basculement réseau. Prévoir une procédure explicite pour reprovisionner le deuxième ESP32 VPN lors d'un renouvellement de code JK.
+
 ## Non-régression et séparation des produits
 
 - L'APK Android actuelle ne doit pas perdre ses données, le firmware ESP32 JK connu ne doit pas perdre le Wi-Fi ni les adresses enregistrées.
