@@ -1,0 +1,30 @@
+menu "Smart Energy VPN Gateway — test only"
+    config SE_JK_IP
+        string "JK ESP32 private LAN IPv4 address"
+        default ""
+        help
+            E.g. 192.168.1.53. Empty disables JK forwarding.
+    config SE_JK_READ_CODE
+        string "JK ESP32 access code (NEVER commit)"
+        default ""
+        help
+            X-Setup-Code for the JK ESP32 on the trusted LAN only.
+    config SE_VOLT_IP
+        string "Voltronic ESP LAN IPv4 (optional, experimental)"
+        default ""
+    config SE_VOLT_READ_PATH
+        string "Voltronic read-only JSON route (optional)"
+        default ""
+        help
+            E.g. /api/v1/telemetry only once independently verified.
+            Empty disables Voltronic forwarding completely.
+    config SE_VOLT_READ_CODE
+        string "Voltronic optional read code (never commit)"
+        default ""
+    config SE_GATEWAY_TOKEN
+        string "Independent strong gateway read token"
+        default ""
+        help
+            At least 20 characters. Set locally, never in source control.
+            Used in X-Gateway-Token from the Android/PC test client.
+endmenu
