@@ -41,6 +41,7 @@ import android.widget.Button
 import android.widget.CheckBox
 import android.widget.EditText
 import android.widget.LinearLayout
+import android.widget.ImageView
 import android.widget.ScrollView
 import android.widget.TextView
 import org.json.JSONArray
@@ -52,7 +53,7 @@ import java.util.Locale
 import java.security.SecureRandom
 
 /**
- * Smart Energy Android 0.2.2-dev (experimental second-ESP32 VPN gateway).
+ * Smart Energy Android 0.2.3-dev (JK overview / icon / VPN gateway).
  * Initial provisioning over ESP32's setup AP, subsequent management over home Wi-Fi.
  * Credentials kept encrypted in Android Keystore-backed local preferences.
  * HTTP only inside the trusted LAN or encrypted VPN subnet route; never a public IP.
@@ -342,7 +343,19 @@ class MainActivity : Activity() {
         scroll.addView(root)
         setContentView(scroll)
 
-        add(root, label("⚡ SMART ENERGY", 14f, true, mint))
+        val brand = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+        }
+        val brandLogo = ImageView(this).apply {
+            setImageResource(R.drawable.smart_energy_icon)
+            scaleType = ImageView.ScaleType.FIT_CENTER
+            contentDescription = "Logo Smart Energy"
+        }
+        brand.addView(brandLogo, LinearLayout.LayoutParams(d(54), d(54)))
+        brand.addView(label("SMART ENERGY", 17f, true, mint),
+            LinearLayout.LayoutParams(-2, -2).apply { leftMargin = d(8) })
+        add(root, brand, 2)
         add(root, label("Tableau de bord JK", 25f, true), 18)
         status = label("Connexion à la passerelle…", 13f, false, subdued)
         add(root, status, 8)
