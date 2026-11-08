@@ -53,7 +53,7 @@ import java.util.Locale
 import java.security.SecureRandom
 
 /**
- * Smart Energy Android 0.2.3-dev (JK overview / icon / VPN gateway).
+ * Smart Energy Android 0.3.0-dev (4 JK overview, pilot safe local writes).
  * Initial provisioning over ESP32's setup AP, subsequent management over home Wi-Fi.
  * Credentials kept encrypted in Android Keystore-backed local preferences.
  * HTTP only inside the trusted LAN or encrypted VPN subnet route; never a public IP.
@@ -1388,6 +1388,99 @@ class MainActivity : Activity() {
         return null
     }
 
+    private fun editJkParameter(mac: String, param: JSONObject) {
+        if(remoteGatewayConnection || remoteVpnConnection) {
+            AlertDialog.Builder(this).setTitle("Écriture distante désactivée")
+                .setMessage("L'ESP32 Tailscale actuel n'autorise que les lectures. " +
+                    "Les écritures seront proposées à distance après validation " +
+                    "du relais et d'une authentification spécifique.")
+                .setPositiveButton("Compris",null).show()
+            return
+        }
+        if(!lanVerified || setupTransport) {
+            state("Connecte d'abord ton JK sur le réseau local pour modifier un paramètre.")
+            return
+        }
+        if(lastLanFirmwareVersion.substringBefore("-").let {
+            val p=it.split(".").mapNotNull {n->n.toIntOrNull()}
+            p.size < 3 || p[0] == 0 && p[1] < 3
+        }) {
+            state("Firmware JK 0.3.0 requis pour les modifications contrôlées.")
+            return
+        }
+        val key=param.optString("key")
+        val label=param.optString("label",key)
+        if(!param.optBoolean("editable") || key.isBlank())return
+        val isBool=param.optString("type")=="bool"
+        val oldValue=if(isBool) param.optBoolean("value") else param.optDouble("value",Double.NaN)
+        fun confirmAndSend(newValue: Any) {
+            if(!isBool && (newValue !is Double || !newValue.isFinite())) {
+                state("Valeur numérique incorrecte.");return
+            }
+            val oldText=if(isBool) if(oldValue==true)"Activé" else "Désactivé"
+                else oldValue.toString()
+            val newText=if(isBool) if(newValue==true)"Activé" else "Désactivé"
+                else newValue.toString()
+            AlertDialog.Builder(this)
+                .setTitle("Confirmer sur ce JK uniquement")
+                .setMessage("$label\nAncienne valeur : $oldText\nNouvelle valeur : $newText\n\n" +
+                    "Aucune autre batterie ne sera modifiée. " +
+                    "La confirmation n'apparaîtra qu'après relecture du BMS.")
+                .setNegativeButton("Annuler",null)
+                .setPositiveButton("Confirmer") { _, _ ->
+                    io.execute {
+                        try {
+                            val arm=JSONObject().put("mac",mac)
+                                .put("confirmation","I_CONFIRM_ONE_JK_WRITE")
+                            httpCall("POST","/api/v1/jk/write-arm",arm)
+                            val req=JSONObject().put("mac",mac).put("key",key)
+                                .put("value",newValue).put("expected_old",oldValue)
+                                .put("confirmation","APPLY_TO_SELECTED_BMS")
+                            httpCall("POST","/api/v1/jk/write",req)
+                            state("Commande envoyée à $label ; vérification du BMS…")
+                            var finalState="sent_unconfirmed"
+                            for(i in 0 until 9) {
+                                Thread.sleep(1500)
+                                val path="/api/v1/jk/write-status?mac="+
+                                    java.net.URLEncoder.encode(mac,"UTF-8")
+                                val status=httpCall("GET",path)
+                                finalState=status.optString("state","sent_unconfirmed")
+                                if(finalState !in setOf("queued","sent_unconfirmed"))break
+                            }
+                            if(finalState=="confirmed"){
+                                state("Confirmé par le BMS : $label = $newText")
+                            } else state("Écriture non confirmée ($finalState). " +
+                                "Vérifie le BMS avant toute nouvelle tentative.")
+                            lastDetailsFetchedAt=0
+                            refreshDetails()
+                        }catch(ex:Exception) {
+                            state("Modification refusée ou interrompue : " +
+                                (ex.message ?: "erreur") + ". Ne réessaie pas sans relire le BMS.")
+                        }
+                    }
+                }.show()
+        }
+        if(isBool) {
+            AlertDialog.Builder(this).setTitle(label)
+                .setItems(arrayOf("Activer","Désactiver")) {_,choice ->
+                    confirmAndSend(choice==0)
+                }.setNegativeButton("Annuler",null).show()
+        } else {
+            val field=input("Nouvelle valeur")
+            field.inputType=android.text.InputType.TYPE_CLASS_NUMBER or
+                android.text.InputType.TYPE_NUMBER_FLAG_DECIMAL or
+                android.text.InputType.TYPE_NUMBER_FLAG_SIGNED
+            AlertDialog.Builder(this).setTitle(label)
+                .setMessage("Ancienne valeur : $oldValue ${param.optString("unit")}")
+                .setView(field).setNegativeButton("Annuler",null)
+                .setPositiveButton("Vérifier"){_,_->
+                    val next=field.text.toString().trim().replace(',','.').toDoubleOrNull()
+                    if(next==null || !next.isFinite())state("Nouvelle valeur incorrecte.")
+                    else confirmAndSend(next)
+                }.show()
+        }
+    }
+
     private fun selectBms(mac: String) {
         selectedBmsMac = mac
         mountedBmsMac = ""
@@ -1475,7 +1568,9 @@ class MainActivity : Activity() {
                 when(currentTab) {
                     0 -> dashboardCards[mac]?.bind(i,item)
                     1 -> advancedCards[mac]?.measurements(i,item)
-                    2 -> advancedCards[mac]?.settings(i,detailForMac(mac),item)
+                    2 -> advancedCards[mac]?.settings(i,detailForMac(mac),item) {param ->
+                        editJkParameter(mac,param)
+                    }
                 }
             }
         }
