@@ -1,4 +1,4 @@
-# Smart JK ESP32 — firmware de test (0.2.3-dev)
+# Smart JK ESP32 — firmware de test (0.2.4-dev)
 
 **Fonctions actuellement codées** : diagnostic Wi-Fi et retour automatique au mode configuration après 30 secondes d'échec, point d'accès Wi-Fi de configuration, secret unique par appareil, lecture de l'identité, scan BLE, sélection et enregistrement persistant des MAC JK, configuration du Wi-Fi, retour au réseau local, et **première acquisition BLE expérimentale en lecture seule**.
 
@@ -151,3 +151,27 @@ fixtures de tests utilisent des identités synthétiques et plusieurs modèles.
 L'API n'affiche jamais un modèle, une version ou une date fictive en
 remplacement d'une donnée absente. Il faut confirmer sur BMS réel le
 traitement de type 0x03 et les nouveaux diagnostics avant de conclure.
+
+## 0.2.4-dev — durée de vie des chaînes JSON (cause probable du modèle vide)
+
+Diagnostic terrain sur JK : `type3_frames_seen=3`, `unrecognized_frames=0`,
+`identity_integrity_ok=true`, mais `model` absent et autres chaînes illisibles.
+Le problème a été localisé dans la fabrication du JSON **après** validation
+BLE. Dans `fillDetails` et `fillTelemetry`, un `Device item` copié sur
+la pile est détruit avant la sérialisation par `respond()`. ArduinoJson 7.4.2
+peut conserver les tableaux de caractères constants par référence (politique
+spéciale de littéraux), ce qui rend ces pointeurs invalides et provoque
+potentiellement des champs vides/corrompus.
+
+Le firmware utilise maintenant `String(...)` explicitement pour les champs
+texte issus du BMS (`model`, `name`, `hardware_version`,
+`software_version`, `manufacturing_date`, `serial_number`,
+`last_rejection`) et pour les champs de télémétrie `mac`/`state`.
+ArduinoJson duplique ainsi les octets dans le document avant destruction
+de la copie locale. **Aucune valeur de modèle, de version, de date ou de numéro
+personnel n'est codée en dur dans le firmware ou ses journaux.**
+Le décodeur est identifiable par `identity_decoder_revision=jk02-info-json-owned-4`.
+
+Le traitement BLE, l'APK Android et le second ESP32 VPN ne changent pas.
+Vérifier la compilation et les tests GitHub Actions avant tout flash APP-ONLY
+sur l'ESP32 JK à l'adresse `0x10000`, sans effacer la NVS.
