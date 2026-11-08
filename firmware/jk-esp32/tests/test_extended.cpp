@@ -113,6 +113,42 @@ int main() {
   jkextra::Info rejectedVersions{};
   assert(!jkextra::decodeInfo(noVersion, rejectedVersions));
 
+  // Same semantics as Home Assistant mqtt_ha.py/ascii_field(): fields may
+  // have NUL or space padding, and two DIFFERENT JK models must decode to
+  // their respective values. These are invented unit-test fixtures only.
+  uint8_t padded[300] = {0x55,0xAA,0xEB,0x90,0x03};
+  memset(padded+6, ' ', 16);
+  memset(padded+22, ' ', 8);
+  memset(padded+30, ' ', 8);
+  memset(padded+46, ' ', 16);
+  memset(padded+78, ' ', 8);
+  memcpy(padded+6, "JK_TEST_ALPHA", 13);
+  memcpy(padded+22, "HW7", 3);
+  memcpy(padded+30, "V9.8", 4);
+  memcpy(padded+46, "PACK A", 6);
+  memcpy(padded+78, "260114", 6);
+  sign(padded);
+  jkextra::Info paddedResult{};
+  assert(jkextra::decodeInfo(padded, paddedResult));
+  assert(!strcmp(paddedResult.vendor, "JK_TEST_ALPHA"));
+  assert(!strcmp(paddedResult.hardware, "HW7"));
+  assert(!strcmp(paddedResult.software, "V9.8"));
+  assert(!strcmp(paddedResult.deviceName, "PACK A"));
+  assert(!strcmp(paddedResult.manufactureDate, "2026-01-14"));
+
+  uint8_t another[300] = {0x55,0xAA,0xEB,0x90,0x03};
+  memcpy(another+6,"PB_TEST_B",9);
+  memcpy(another+22,"R2",2);
+  memcpy(another+30,"V4.6",4);
+  sign(another);
+  jkextra::Info secondResult{};
+  assert(jkextra::decodeInfo(another, secondResult));
+  assert(!strcmp(secondResult.vendor, "PB_TEST_B"));
+  assert(!strcmp(secondResult.hardware, "R2"));
+  assert(!strcmp(secondResult.software, "V4.6"));
+  assert(strcmp(secondResult.vendor, paddedResult.vendor) != 0);
+  assert(strcmp(secondResult.software, paddedResult.software) != 0);
+
   uint8_t d[300]={0x55,0xAA,0xEB,0x90,0x02};
   for(int j=0;j<16;j++){ w16(d,6+j*2,3280);w16(d,80+j*2,40+j); }
   w32(d,70,0xFFFF);
