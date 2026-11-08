@@ -44,7 +44,6 @@ git checkout d1ec2ae45e252e8dc737452be0f6afe1ac2e3edb
 cd ..
 mkdir components
 xcopy /E /I upstream-tailtiny\components\tailtiny components\tailtiny
-xcopy /E /I upstream-tailtiny\components\wireguard_lwip components\wireguard_lwip
 copy sdkconfig.credentials.example sdkconfig.credentials
 ~~~
 
