@@ -34,6 +34,11 @@ android {
         }
     }
     buildTypes {
+        debug {
+            // Separate experimental install; never require uninstalling the
+            // stable Smart Energy APK or erasing its Keystore pairing.
+            applicationIdSuffix = ".vpntrial"
+        }
         release {
             isMinifyEnabled = false
             if (hasStableSigning) signingConfig = signingConfigs.getByName("stable")
