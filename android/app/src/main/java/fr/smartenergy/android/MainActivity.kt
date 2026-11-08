@@ -83,6 +83,7 @@ class MainActivity : Activity() {
     private lateinit var gatewayTokenEdit: EditText
     @Volatile private var lanConnectionPending = false
     private var lastRemoteAttempt = 0L
+    private var lastLocalAttempt = 0L
     private lateinit var remoteStatus: TextView
     private lateinit var remoteCheck: CheckBox
     @Volatile private var setupTransport = false
@@ -126,18 +127,22 @@ class MainActivity : Activity() {
     @Volatile private var telemetryBusy = false
     private val telemetryTicker = object : Runnable {
         override fun run() {
-            if (!lanVerified && !lanConnectionPending && !setupTransport && vpnConnected()) {
-                val now = android.os.SystemClock.elapsedRealtime()
-                if (now - lastRemoteAttempt >= 20000L) {
-                    if (prefs.getBoolean("remote_gateway_enabled", false) &&
-                        allowedTailnetIp(prefs.getString("remote_gateway_ip", "") ?: "") &&
+            if (!lanVerified && !lanConnectionPending && !setupTransport) {
+                val now=android.os.SystemClock.elapsedRealtime()
+                val savedIp=prefs.getString("local_ip","") ?: ""
+                // First retry the already paired LAN identity. Never use
+                // BOOT or rotate credentials when switching transports.
+                if(storedCode().isNotBlank() && allowedLocalIp(savedIp) &&
+                    now-lastLocalAttempt >= 20000L) {
+                    lastLocalAttempt=now
+                    localHost=savedIp
+                    lanIp.setText(savedIp)
+                    connectHomeLan(false)
+                } else if(vpnConnected() && now-lastRemoteAttempt>=20000L) {
+                    if(prefs.getBoolean("remote_gateway_enabled",false) &&
+                        allowedTailnetIp(prefs.getString("remote_gateway_ip","") ?: "") &&
                         storedGatewayToken().isNotBlank()) {
-                        lastRemoteAttempt = now
-                        connectGatewayRemote()
-                    } else if (prefs.getBoolean("remote_vpn_enabled", false) &&
-                               storedCode().isNotBlank()) {
-                        lastRemoteAttempt = now
-                        connectHomeLan(true)
+                        lastRemoteAttempt=now;connectGatewayRemote()
                     }
                 }
             }
@@ -166,19 +171,16 @@ class MainActivity : Activity() {
         drawUi()
         selectedDeviceId = prefs.getString("device_id", "") ?: ""
         val savedIp = prefs.getString("local_ip", "") ?: ""
-        if (prefs.getBoolean("remote_gateway_enabled", false) && vpnConnected() &&
-            allowedTailnetIp(prefs.getString("remote_gateway_ip", "") ?: "") &&
+        if (storedCode().isNotBlank() && allowedLocalIp(savedIp)) {
+            localHost = savedIp
+            lanIp.setText(savedIp)
+            lastLocalAttempt=android.os.SystemClock.elapsedRealtime()
+            connectHomeLan(false)
+        } else if (prefs.getBoolean("remote_gateway_enabled",false) && vpnConnected() &&
+            allowedTailnetIp(prefs.getString("remote_gateway_ip","") ?: "") &&
             storedGatewayToken().isNotBlank()) {
             connectGatewayRemote()
-        } else if (storedCode().isNotBlank()) {
-            if (allowedLocalIp(savedIp)) {
-                localHost = savedIp
-                lanIp.setText(savedIp)
-                connectHomeLan(prefs.getBoolean("remote_vpn_enabled", false) && vpnConnected())
-            } else {
-                discoverHomeLan()
-            }
-        }
+        } else if(storedCode().isNotBlank()) discoverHomeLan()
     }
 
     private fun encryptionKey(): SecretKey {
