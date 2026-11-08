@@ -59,6 +59,17 @@ class BatteryAdvancedCard(context: Context) : LinearLayout(context) {
         return String.format(Locale.FRANCE,"%."+digits+"f",x)+
             (if(unit.isEmpty())"" else " "+unit)
     }
+    private fun safeIdentityText(raw:String,key:String):Boolean {
+        if(raw.length < 2 || raw.length > 32) return false
+        if(!raw.all { it in 'a'..'z' || it in 'A'..'Z' ||
+                        it in '0'..'9' || it in " ._-" }) return false
+        return when(key) {
+            "manufacturing_date" -> Regex("^[0-9]{6}([0-9]{2})?$").matches(raw)
+            "serial_number" -> raw.length >= 5
+            else -> true
+        }
+    }
+
     private fun flag(o:JSONObject,k:String):String {
         if(!o.has(k)||o.isNull(k))return "—"
         return if(o.optBoolean(k))"Oui" else "Non"
@@ -175,25 +186,45 @@ class BatteryAdvancedCard(context: Context) : LinearLayout(context) {
             }
         }
         val info=device.optJSONObject("info")
-        val p=panel("Informations du BMS","Trame JK 0x03 confirmée")
-        if(info==null||!info.optBoolean("available")) {
+        val p=panel("Informations du BMS","Identifiants seulement si le format est reconnu")
+        val model=info?.optString("model","") ?: ""
+        val recognizedModel = Regex("^(JK|PB|Jik)[A-Za-z0-9 ._-]{1,14}$",
+            RegexOption.IGNORE_CASE).matches(model)
+        if(info==null||!info.optBoolean("available")||!recognizedModel) {
             row(p,"État",
-                if(info?.optString("reason")=="unrecognized_type3_identity_layout")
-                    "Trame BMS non reconnue — valeurs invalides masquées"
+                if(info?.optString("reason")=="unrecognized_type3_identity_layout" ||
+                    info?.optBoolean("available") == true && !recognizedModel)
+                    "Format BMS non reconnu — caractères incohérents masqués"
                 else "Informations non reçues ou périmées")
+            row(p,"Conseil","Le firmware JK 0.2.0 ne vérifie pas tous les champs d'identité.")
             if((info?.optInt("unrecognized_frames") ?: 0) > 0)
                 row(p,"Trames d'identité non reconnues",
                     (info?.optInt("unrecognized_frames") ?: 0).toString())
         } else {
+            row(p,"Modèle",model)
             for((label,key) in listOf(
-                "Modèle" to "model","Nom" to "name",
+                "Nom" to "name",
                 "Version matérielle" to "hardware_version",
                 "Version logicielle" to "software_version",
                 "Fabrication" to "manufacturing_date",
                 "Numéro de série" to "serial_number"
-            ))if(info.has(key))row(p,label,info.optString(key))
-            if(info.has("power_on_count"))row(p,"Allumages",info.optInt("power_on_count").toString())
-            if(info.has("uptime_hours"))row(p,"Fonctionnement",num(info,"uptime_hours",1,"h"))
+            )) {
+                val value=info.optString(key,"")
+                if (safeIdentityText(value,key)) row(p,label,value)
+            }
+            // Old JK 0.2.0 can emit plausible-looking counters from an unknown
+            // binary layout. Show them only when the strict 0.2.1+ validation
+            // metadata is available; never silently present fake counters.
+            if(info.has("unrecognized_frames")) {
+                if(info.has("power_on_count") &&
+                    info.optLong("power_on_count",-1) in 1..999999)
+                    row(p,"Allumages",info.optLong("power_on_count").toString())
+                if(info.has("uptime_hours") &&
+                    info.optDouble("uptime_hours",Double.NaN) in 0.1..87600.0)
+                    row(p,"Fonctionnement",num(info,"uptime_hours",1,"h"))
+            } else {
+                row(p,"Compteurs","Non confirmés par le firmware JK actuel")
+            }
         }
     }
 }
