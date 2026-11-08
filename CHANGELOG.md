@@ -1,5 +1,15 @@
 # Journal des modifications
 
+## 0.2.5-dev ESP32 JK — code stable et reprise automatique du Wi-Fi (2026-11-08)
+
+- Correction de la désynchronisation : l'APK acceptait un code personnel de 8 à 32 caractères, mais le lecteur JK régénérait tout code de 8 à 11 caractères après redémarrage. Politique partagée et tests de non-régression C++.
+- Après perte réseau supérieure à 30 s, le point d'accès de secours ne reste plus éternellement isolé : tentative de reconnexion au Wi-Fi déjà mémorisé après 120 s sans client connecté au point d'accès. Sans effacer les paramètres enregistrés.
+- BOOT 10 s permet de conserver volontairement le mode configuration si le repli automatique avait été activé.
+- Version JK seule, **aucune modification de l'APK Android, du décodeur BLE ou du deuxième ESP32 VPN**.
+- La réparation ne retrouve pas l'ancien secret si le firmware 0.2.4 l'a déjà écrasé avant le flash. Récupération non destructive via moniteur USB série ou future procédure physique sans LAN.
+- Compilation CI/flash réel à vérifier avant de déployer. L'image APP-ONLY n'efface pas NVS si flashée à 0x10000 sans Erase Flash.
+
+
 ## 0.2.4-dev ESP32 JK — correction de chaînes JSON temporaires (2026-11-08)
 
 - Cause probable des identités absentes malgré des trames CRC validées : références à des buffers de la copie locale `Device item` détruits avant `serializeJson()`.
