@@ -8,7 +8,7 @@
 - Cellules : barres animées lors des nouvelles lectures et changement de couleur progressif lorsque les cellules les plus basse (rouge) et haute (bleue) changent. En cas d'égalité, plusieurs cellules peuvent être mises en évidence ; si toutes sont identiques, il n'y a pas de fausse distinction.
 - Sécurise l'affichage « Informations BMS » : filtre fragments JSON et caractères incompatibles ; avec le firmware JK 0.2.0, ne présente pas les compteurs d'identité non validés comme réels. Cette protection **ne répare pas les trames JK 0x03 inconnues** : installer le firmware JK 0.2.1 au besoin pour la validation stricte, qui peut encore masquer des champs si le BMS utilise un format différent.
 - Conserve le fonctionnement **VPN TailTiny/Tailscale second ESP32** validé en 4G/5G, les contrôles de token chiffré localement, l'association JK vérifiée et l'interdiction de toute commande distante.
-- Nouvelle APK de test **installable à côté** de l'application normale grâce à son identifiant séparé `.vpntrial`. Le code source et les binaires de développement ne contiennent aucun identifiant Wi-Fi/Tailscale utilisateur.
+- Nouvelle APK de test **installable à côté** de l'application normale grâce à son identifiant séparé `.vpntrial23`. Le code source et les binaires de développement ne contiennent aucun identifiant Wi-Fi/Tailscale utilisateur.
 - Cette version **ne nécessite pas** de reflasher l'ESP32 VPN ni le lecteur JK pour afficher le nouveau tableau de bord.
 
 
