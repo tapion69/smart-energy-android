@@ -149,3 +149,5 @@ Voir `docs/ACCES-DISTANT-VPN.md`.
 - Modification locale pilote uniquement, sur une petite liste blanche, avec code fort et confirmation de relecture BMS. Les commandes sensibles restent indisponibles.
 - L'ESP32 VPN en lecture seule reste inchangé ; pas encore d'écritures depuis Tailscale.
 - Ne pas installer si le lecteur JK actuel ne rejoint plus le réseau et que le code NVS a déjà été remplacé : il faut d'abord en récupérer le code actif de manière non destructive.
+
+**Signature / migration test :** l'APK de test 0.3.0 utilise le suffixe `vpntrial30`, distinct de `vpntrial24`. Les tests GitHub Actions peuvent employer des clés debug différentes ; installer la 0.3.0 à côté de la 0.2.4 évite l'obligation de désinstaller cette dernière. La nouvelle APK doit être associée une fois au lecteur JK, sans toucher à la configuration des BMS. Un APK release réellement mise à jour nécessite une signature stable personnelle ou configurée en CI.
