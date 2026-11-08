@@ -1,5 +1,33 @@
 # Journal des modifications
 
+## Smart Energy 0.3.0-dev — 4 JK simultanés, vue globale et écritures locales pilotes (2026-11-08)
+
+**Branche expérimentale isolée** `experiment/smart-energy-v0.3.0-multibms`. Ne pas distribuer comme version stable avant essais sur matériel.
+
+### ESP32 JK
+- Refactorisation de la lecture JK : **4 tâches et connexions BLE persistantes indépendantes**, chacune avec assembleur de trames propre ; suppression de la rotation 90 s. Limite NimBLE configurée à 4. Les 4 connexions doivent encore être validées sur du matériel physique.
+- Conservation de la stabilité et du décodage d'identité JK démontrés par la 0.2.4-dev.
+- Correctifs 0.2.5-dev intégrés : codes 8–32 caractères conservés après redémarrage et tentatives automatiques de reprise du Wi-Fi après un AP de secours.
+- Commandes **locales expérimentales et désactivées par défaut** : autorisation 120 s, un seul BMS, une seule commande, contrôle de la valeur précédente, code personnel long (>=16), intervalle minimal de 15 s, relecture CRC d'une nouvelle trame 0x01. Le statut `confirmed` n'est émis que si le BMS renvoie la valeur demandée ; aucun nouvel essai automatique.
+- Écritures pilotes limitées aux options affichage, veille, enregistrement périodique et mode flottement. **Seuils de protection, MOS et sécurité thermique non modifiables** dans cette version. Test préalable impératif.
+
+### APK Android
+- **Version 0.3.0-dev, code 15**, conserve l'identité de l'APK de test 0.2.4 et ses données chiffrées si la signature est compatible.
+- Page Accueil pour 2 à 4 JK : jauge SOC global pondéré selon les capacités reçues, Tension moyenne, Watts moyens, Ampères moyens, Alarmes avec lien vers la batterie concernée. Les données périmées ne comptent pas.
+- Onglets Accueil / BMS 1–4, avec conservation des cartes Batterie, Détails, Paramètres individuelles existantes.
+- Paramètres autorisés affichent une action Modifier, avec revue ancien/nouveau, confirmation, envoi unique et attente de confirmation par lecture du BMS.
+- À l'ouverture/reconnexion, priorité à l'IP locale mémorisée ; si indisponible, retour à la passerelle Tailscale de lecture. **Aucune rotation de code automatique.**
+
+### VPN
+- L'ESP32 Tailscale **n'a pas été changé**, afin de préserver l'accès existant. Il relaie uniquement les lectures GET. Les **écritures via Tailscale ne sont pas incluses** dans cette version ; elles nécessitent un firmware VPN distinct avec des routes POST explicites, authentification spécifique, protection anti-rejeu, contrôle de BMS et CI.
+- Le code JK configuré dans la passerelle VPN reste distinct de celui de l'APK ; une rotation antérieure du code JK peut nécessiter une reprovision de la passerelle.
+
+### Migration et prudence
+- Un firmware 0.2.4 qui aurait **déjà remplacé** un code personnel 8–11 caractères n'est pas réparé en flashant la 0.3.0 : l'ancien secret n'est plus dans la NVS. Récupérer l'accès par USB série avant d'envisager les tests.
+- Ne pas flasher le firmware VPN actuel ni utiliser Erase Flash/factory sur le JK ; ne flasher que l'APP-ONLY à 0x10000 après sauvegarde et vérification CI.
+- Les tests unitaires synthétiques, compilation et génération APK ne remplacent pas une validation de quatre connexions BLE et d'une écriture pilote sur du matériel.
+
+
 ## 0.2.5-dev ESP32 JK — code stable et reprise automatique du Wi-Fi (2026-11-08)
 
 - Correction de la désynchronisation : l'APK acceptait un code personnel de 8 à 32 caractères, mais le lecteur JK régénérait tout code de 8 à 11 caractères après redémarrage. Politique partagée et tests de non-régression C++.
