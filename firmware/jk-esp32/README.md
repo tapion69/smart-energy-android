@@ -1,4 +1,4 @@
-# Smart JK ESP32 — firmware de test (0.3.0-dev)
+# Smart JK ESP32 — firmware de test (0.3.1-dev)
 
 **Fonctions actuellement codées** : diagnostic Wi-Fi et retour automatique au mode configuration après 30 secondes d'échec, point d'accès Wi-Fi de configuration, secret unique par appareil, lecture de l'identité, scan BLE, sélection et enregistrement persistant des MAC JK, configuration du Wi-Fi, retour au réseau local, et **première acquisition BLE expérimentale en lecture seule**.
 
@@ -189,3 +189,12 @@ La modification ne répare **pas** un code déjà remplacé dans la NVS : ne fla
 - Routes POST `/api/v1/jk/write-arm` et `/api/v1/jk/write`, GET `/api/v1/jk/write-status?mac=...`. Autorisation courte, confirmation, rejet des cache périmés et vérification BMS 0x01 ; aucun renvoi automatique.
 - Pas d'écriture des MOS, seuils de sécurité, alarmes thermiques ni calibration SOC.
 - Le VPN en lecture seule reste inchangé pour éviter une dégradation de sa configuration ; écritures à distance à venir avec un protocole d'autorisation testé.
+
+## 0.3.1-dev — BOOT, première installation et récupération
+
+- BOOT **4 s après alimentation**, relâcher : **AP temporaire ouvert 120 s, un seul client**. Les endpoints normaux de lecture/écriture sont verrouillés pendant cette phase.
+- L'application envoie `POST /api/v1/pair/boot/stage` avec code choisi (8–32 caractères) et les identifiants Wi-Fi **si nécessaire**. Le lecteur retourne un ticket temporaire non secret.
+- Un **deuxième appui BOOT de 2 s** doit commencer après la demande ; l'application contrôle `GET /api/v1/pair/boot/status?ticket=...` puis envoie `POST /api/v1/pair/boot/commit`. Aucun ancien code n'est nécessaire, et la NVS de sélection BMS est conservée.
+- Le firmware expire toute fenêtre au bout de 2 minutes et retourne au Wi-Fi enregistré ou au mode configuration WPA2. La page `/api/v1/info` indique `physical_pairing_mode` sans révéler d'identifiants.
+- La condition de longueur minimale de 16 caractères a été retirée pour les rares paramètres pilotes ; 8–32 caractères valides sont autorisés avec relecture et confirmation utilisateur obligatoires.
+- **Ce prototype utilise un AP provisoirement ouvert et l'API HTTP sans chiffrement d'application. Ne pas exposer sur Internet, ni déclarer le bootstrap sûr contre interception radio/MITM.** Prévoir chiffrement et authentification avant version stable.
