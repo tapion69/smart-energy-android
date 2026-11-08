@@ -72,6 +72,14 @@ int main() {
   assert(!strcmp(i.deviceName,"JK pack"));
   assert(!strstr(i.vendor,"ACCESS") && !strstr(i.deviceName,"SECRET"));
   assert(i.powerOnCount==137 && i.uptimeS==3600);
+  assert(jkextra::usableIdentity(i));
+  jkextra::Info tampered=i;
+  tampered.vendor[0]=0;
+  assert(!jkextra::usableIdentity(tampered));
+  tampered=i;
+  memcpy(tampered.hardware, "invalid!", 8);
+  tampered.hardware[8]=0;
+  assert(!jkextra::usableIdentity(tampered));
   // Field issue observed in real firmware: some checksum-valid JK 0x03
   // payloads contain JSON-like fragments rather than model/hardware data.
   // Never display those strings as trusted identity or serial number.
@@ -94,6 +102,13 @@ int main() {
   assert(jkextra::decodeInfo(validButDirty,sanitized));
   assert(sanitized.deviceName[0] == 0);
   assert(sanitized.serialNumber[0] == 0);
+  uint8_t noVersion[300] = {0x55,0xAA,0xEB,0x90,0x03};
+  memcpy(noVersion+6, "JK-BMS", 6);
+  memcpy(noVersion+22, "invalid!", 8);
+  memcpy(noVersion+30, "invalid!", 8);
+  sign(noVersion);
+  jkextra::Info rejectedVersions{};
+  assert(!jkextra::decodeInfo(noVersion, rejectedVersions));
 
   uint8_t d[300]={0x55,0xAA,0xEB,0x90,0x02};
   for(int j=0;j<16;j++){ w16(d,6+j*2,3280);w16(d,80+j*2,40+j); }
