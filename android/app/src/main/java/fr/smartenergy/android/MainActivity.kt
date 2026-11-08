@@ -1162,12 +1162,10 @@ class MainActivity : Activity() {
 
     private fun useFoundEsp32(ssid: String) {
         apName.setText(ssid)
-        if (storedCode().isNotBlank() && prefs.getString("setup_ssid", "") == ssid) {
-            state("ESP32 déjà associé retrouvé : connexion en cours…")
-            connectSetupAp()
-        } else {
-            state("ESP32 trouvé : " + ssid + ". Entre son code unique une seule fois dans la section 2, puis clique sur « Connecter l'ESP32 ».")
-        }
+        state("ESP32 trouvé : " + ssid +
+            ". Si c'est une première association ou un code oublié, " +
+            "maintiens BOOT 4 s et utilise « Associer avec BOOT » dans la section 1. " +
+            "Sinon, tu peux te connecter avec le code mémorisé.")
     }
 
     private fun scanRouterWifi() {
