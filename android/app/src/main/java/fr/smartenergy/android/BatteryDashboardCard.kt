@@ -49,7 +49,7 @@ class BatteryDashboardCard(context: Context) : LinearLayout(context) {
     private val t5 = txt("—", 14f, true)
     private val alarmSummary = txt("En attente", 13f, true, muted)
     private val alarmDetails = LinearLayout(context).apply { orientation = VERTICAL }
-    private var lastAlarmSignature = ""
+    private var lastAlarmSignature: String? = null
     private val cycles = txt("—", 22f, true)
     private val contentArea = LinearLayout(context).apply { orientation = VERTICAL }
     private val bars = ArrayList<CellItem>()
@@ -185,22 +185,24 @@ class BatteryDashboardCard(context: Context) : LinearLayout(context) {
         val cells = values.optJSONArray("cells")
         val size = cells?.length() ?: 0
         if (size != bars.size) buildBars(size)
-        val valid = (0 until size).mapNotNull { i ->
-            val cell = cells?.optJSONObject(i)
-            val v = cell?.optDouble("voltage_v", Double.NaN) ?: Double.NaN
-            if (v.isFinite() && v in 1.5..4.5) v else null
+        val cellMeasurements = (0 until size).mapNotNull { i ->
+            val cell = cells?.optJSONObject(i) ?: return@mapNotNull null
+            val v = cell.optDouble("voltage_v", Double.NaN)
+            val number = cell.optInt("number", -1)
+            if (!v.isFinite() || v !in 1.5..4.5 || number !in 1..32) null
+            else JkCellExtrema.Cell(number, kotlin.math.round(v * 1000.0).toInt())
         }
-        val low = valid.minOrNull()
-        val high = valid.maxOrNull()
-        // If every cell is equal, there is no meaningful red/blue ranking.
-        val hasDistinctExtremes = low != null && high != null && high - low >= 0.0005
+        val extrema = JkCellExtrema.select(
+            cellMeasurements,
+            values.optInt("cell_min_number", -1).takeIf { it in 1..32 },
+            values.optInt("cell_max_number", -1).takeIf { it in 1..32 }
+        )
         for (i in 0 until size) {
             val cell = cells?.optJSONObject(i) ?: continue
             val v = cell.optDouble("voltage_v", Double.NaN)
-            val role = when {
-                !hasDistinctExtremes || !v.isFinite() -> 0
-                kotlin.math.abs(v - low!!) < 0.0005 -> -1
-                kotlin.math.abs(v - high!!) < 0.0005 -> 1
+            val role = when (cell.optInt("number", -1)) {
+                extrema.lowest -> if (extrema.lowest != null) -1 else 0
+                extrema.highest -> if (extrema.highest != null) 1 else 0
                 else -> 0
             }
             bars[i].update(cell.optInt("number"), v, role)
