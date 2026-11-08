@@ -1,6 +1,16 @@
-# Smart Energy Android — prototype Android v0.2.3-dev
+# Smart Energy Android — prototype Android v0.2.4-dev
 
 Un projet Android Studio **réel**, en Kotlin natif, ciblant Android 10+.
+
+## Hotfix 0.2.4 (branch experiment/esp32-vpn-gateway)
+
+- Corrige la coloration des cellules par **numéros min/max**, sans faire rougir ou bleuir toutes celles qui partagent une tension arrondie. Numéros natifs du BMS si vérifiés, sinon première cellule min/max, comme notre module Bluetooth.
+- Corrige le statut « En attente » lorsqu'aucune alarme n'est active.
+- Affiche les données d'identité JK strictement validées ou un diagnostic clair, avec informations de télémétrie certaines (profil JK02, nombre de cellules, BLE) en remplacement des caractères non reconnus.
+- La v0.2.4 de test (`.vpntrial24`) s'installe à côté de la 0.2.3, sans la supprimer. Pour cette application distincte, refaire une association locale JK avant de tester le VPN.
+- Aucun flash nécessaire sur le **deuxième ESP32 VPN**. Pour obtenir l'ID min/max natif et le décodage 0x03 plus sûr, le firmware du **lecteur JK** 0.2.2-dev est proposé séparément, APP-ONLY à `0x10000`, **sans erase-flash**. Éviter de le flasher si l'installation actuelle n'est pas sauvegardée ou vérifiée.
+- Le firmware ne garantit pas de retrouver le modèle, le numéro de série et les versions si le JK V19 utilise une variante de trame 0x03 non reconnue ; dans ce cas le panneau informe du problème sans inventer de valeur.
+- GitHub Actions compile l'APK, exécute les tests unitaires de min/max et construit le firmware JK avec tests synthétiques.
 
 ## Version v0.2.3-dev (branche experiment/esp32-vpn-gateway)
 
