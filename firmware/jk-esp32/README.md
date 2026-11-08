@@ -136,3 +136,18 @@ Ce correctif ne reconstruit pas encore une variante de trame 0x03 inconnue :
 il empêche d'en certifier à tort les données et fournit un diagnostic non
 sensible pour la suite. Ne flasher l'APP-ONLY JK à 0x10000 sans Erase Flash
 qu'après réussite des tests et sauvegarde de la configuration.
+
+### Décodage dynamique des informations JK (aligné sur le module HA)
+
+Le décodeur type 0x03 utilise les mêmes octets que
+`smart-jkbms-bluetooth/ble/mqtt_ha.py:parse_info()` : modèle 6–21,
+matériel 22–29, logiciel 30–37, nom 46–61, date 78–85 et série 86–96.
+La trame doit être valide (longueur/en-tête/checksum) avant lecture.
+Les champs ASCII sont extraits, dépourvus de leur padding d'espaces ou NUL,
+puis contrôlés séparément. Une date YYMMDD validée est transformée
+**dynamiquement** en YYYY-MM-DD pour l'APK. Aucune valeur propre à une
+batterie réelle n'est présente dans le firmware ou les journaux ; les
+fixtures de tests utilisent des identités synthétiques et plusieurs modèles.
+L'API n'affiche jamais un modèle, une version ou une date fictive en
+remplacement d'une donnée absente. Il faut confirmer sur BMS réel le
+traitement de type 0x03 et les nouveaux diagnostics avant de conclure.
