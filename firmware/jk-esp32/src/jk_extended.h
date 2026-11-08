@@ -253,6 +253,19 @@ inline bool likelyJKModel(const char *v) {
       (v[0]=='P' && v[1]=='B') ||
       (v[0]=='J' && v[1]=='i' && v[2]=='k'));
 }
+// Check cached identity again at the API boundary. Frame CRC and firmware
+// version alone cannot certify a model and its version fields.
+inline bool usableIdentity(const Info &info) {
+  if (!info.confirmed || !likelyJKModel(info.vendor)) return false;
+  const bool hw = info.hardware[0] && safeIdentifier(info.hardware, 2);
+  const bool sw = info.software[0] && safeIdentifier(info.software, 2);
+  if (!hw && !sw) return false;
+  if (info.hardware[0] && !hw) return false;
+  if (info.software[0] && !sw) return false;
+  if (info.deviceName[0] && !safeIdentifier(info.deviceName, 2, true)) return false;
+  if (info.serialNumber[0] && !safeIdentifier(info.serialNumber, 5)) return false;
+  return true;
+}
 inline bool decodeInfo(const uint8_t *f, Info &out) {
   if (!smartjk::frameValid(f) || f[4] != 3) return false;
   Info info{};
@@ -285,6 +298,7 @@ inline bool decodeInfo(const uint8_t *f, Info &out) {
   info.canProtocol = f[185];
   // Explicitly ignore secret areas [62,78) and [118,134).
   info.confirmed = true;
+  if (!usableIdentity(info)) return false; // model + at least one valid version
   out = info;
   return true;
 }
