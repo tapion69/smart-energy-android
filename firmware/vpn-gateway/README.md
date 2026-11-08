@@ -26,6 +26,10 @@ Les appels de modification et les URLs arbitraires sont exclus. Le token indépe
 
 La route Voltronic est un emplacement prévu dans l'architecture, **pas une intégration déjà fonctionnelle**. Nous devons connaître le protocole réel de l'ESP Voltronic (HTTP, MQTT ou TCP série) avant de l'utiliser.
 
+## Sur Windows : préparation simplifiée
+
+Le script prepare-windows.cmd récupère TailTiny à la version figée et ouvre le fichier privé de paramètres dans le Bloc-notes. Il **ne transmet aucun secret**. Dans le dépôt local, après avoir sélectionné cette branche, double-cliquer sur prepare-windows.cmd ; ouvrir ensuite le terminal ESP-IDF 5.3.2 pour flasher l'ESP32 n°2.
+
 ## Première préparation (compilation avec paramètres locaux)
 
 Installer ESP-IDF 5.3.2 (ESP-IDF 5.3 CMD sous Windows), prévoir un second ESP32 classique et un câble USB.
