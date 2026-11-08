@@ -37,3 +37,9 @@ Objectif : **une seule association par ESP32**. Le secret généré de manière 
 - Prévoir une procédure contrôlée de reprovisionnement de la passerelle VPN lorsqu'un jeton JK change, avant d'autoriser l'écriture de paramètres BMS à distance.
 
 Ceci est un plan : le mode BOOT sans SSID et la séparation des tokens ne sont **pas encore implémentés** dans 0.2.5. La solution actuelle reste provisoire, et aucune API de modification de paramètres BMS n'a été ouverte.
+
+## Avancement 0.3.1-dev — récupération sans lecture du code USB
+
+Le nouveau firmware 0.3.1 **implémente désormais** une fenêtre physique BOOT 4 s avec AP temporaire ouvert 120 s, suivie d'un deuxième BOOT 2 s après demande de l'APK. L'app permet de choisir un code personnel 8–32 caractères, y compris si l'ancien code a été perdu, et conserve la NVS Wi-Fi/BMS. Il n'est donc **plus nécessaire de lire le code par USB série après mise à jour du firmware**. Le flash initial de ce nouveau firmware nécessite toutefois un outil d'installation ; l'OTA n'est pas encore disponible. L'ESP32 VPN reste inchangé.
+
+**Limite de sécurité** : les secrets transmis sur l'AP ouvert ne sont pas encore chiffrés au niveau applicatif. La confirmation BOOT n'est pas une authentification cryptographique ; ne pas présenter ce mécanisme expérimental comme totalement sûr contre écoute ou usurpation radio. Avant diffusion publique, introduire un protocole de bootstrap chiffré/authentifié.
