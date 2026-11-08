@@ -67,3 +67,21 @@ jobs:
           name: smart-jk-esp32-v0.3.1-dev-APP-ONLY-offset-0x10000
           path: firmware/jk-esp32/.pio/build/esp32dev/firmware.bin
           retention-days: 14
+      - name: Create full 0x0000 image for deliberate clean reinstall
+        run: python firmware/jk-esp32/tools/build_full_flash.py
+      - name: Verify clean-install factory image
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          f=Path("firmware/jk-esp32/.pio/build/esp32dev/smart_jk_esp32_v0.3.1_FULL_ERASE_FIRST_0x0000.bin")
+          b=f.read_bytes()
+          assert b[0x1000] == 0xe9 and b[0x10000] == 0xe9, "Missing bootloader/app"
+          assert 0x10000 < len(b) < 0x400000, "Invalid ESP32 image size"
+          print("Factory image verified:",len(b),"bytes")
+          PY
+      - name: Upload full factory reinstallation image (ESP1 only)
+        uses: actions/upload-artifact@v4
+        with:
+          name: smart-jk-esp32-v0.3.1-COMPLETE-ERASE-FIRST-address-0x0000
+          path: firmware/jk-esp32/.pio/build/esp32dev/smart_jk_esp32_v0.3.1_FULL_ERASE_FIRST_0x0000.bin
+          retention-days: 14
