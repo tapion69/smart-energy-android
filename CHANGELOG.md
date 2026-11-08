@@ -1,5 +1,15 @@
 # Journal des modifications
 
+## Smart Energy 0.3.1-dev — première association et code perdu avec BOOT (2026-11-08)
+
+- **Première installation et récupération du code oublié sans lecture du port série** : sur l'ESP32 **déjà sous tension**, BOOT 4 s ouvre un point d'accès temporaire, un seul téléphone, pendant 120 s. L'APK demande un **nouveau code personnel de 8 à 32 caractères**, ainsi que les identifiants Wi-Fi 2,4 GHz uniquement si le lecteur ne les connaît pas.
+- L'application transmet une demande temporaire au lecteur puis exige un **deuxième appui physique BOOT de 2 secondes**, commencé après la demande, avant validation définitive. Le lecteur redémarre avec le code choisi, sans effacer le Wi-Fi ni les BMS déjà enregistrés.
+- **Code 8–32 caractères valable également pour les paramètres locaux** : le minimum de 16 caractères a été retiré. Les paramètres restent limités à la liste blanche pilote et protégés par confirmation explicite, cible unique et nouvelle trame de vérification.
+- Secret jamais publié dans GitHub, jamais imprimé par les nouveaux journaux ESP32 ; ne change pas automatiquement lors des bascules LAN ↔ VPN. Pas de changement du deuxième ESP32 Tailscale.
+- **Sécurité à valider avant production** : le point d'accès provisoire est ouvert pendant l'association et les identifiants envoyés dans ce prototype ne sont pas chiffrés au niveau application. Les deux confirmations physiques et la limitation temporelle réduisent les risques mais ne protègent pas suffisamment contre un attaquant radio actif. Ne pas distribuer comme association « sécurité maximale » sans échange chiffré et mécanisme anti-usurpation.
+- Un appareil encore en 0.2.4/0.3.0 doit d'abord recevoir **le nouveau firmware APP-ONLY**. Cela nécessite un moyen de flash (USB/OTG ou outil compatible), mais **plus de lecture du code secret par USB** après le flash. Ne pas faire d'Erase Flash : le Wi-Fi et les adresses JK sont conservés.
+
+
 ## Smart Energy 0.3.0-dev — 4 JK simultanés, vue globale et écritures locales pilotes (2026-11-08)
 
 **Branche expérimentale isolée** `experiment/smart-energy-v0.3.0-multibms`. Ne pas distribuer comme version stable avant essais sur matériel.
