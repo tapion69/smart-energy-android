@@ -145,18 +145,24 @@ class BatteryAdvancedCard(context: Context) : LinearLayout(context) {
         row(diag,"Âge mesure",device.optInt("age_seconds").toString()+" s")
     }
 
-    fun settings(index:Int,device:JSONObject?) {
-        val signature="s"+index+(device?.toString()?:"")
-        if(lastSignature==signature)return
-        lastSignature=signature
+    fun settings(index:Int, device:JSONObject?, telemetry:JSONObject? = null) {
+        val liveValues = telemetry?.optJSONObject("values")
+        val statusSignature = listOf(
+            telemetry?.optBoolean("available"),
+            telemetry?.optBoolean("ble_connected"),
+            liveValues?.optString("frame_layout"),
+            liveValues?.optInt("cell_count")
+        ).joinToString()
+        val signature = "s" + index + (device?.toString() ?: "") + statusSignature
+        if (lastSignature == signature) return
+        lastSignature = signature
         removeAllViews()
-        val header=panel("JK "+(index+1)+" · Paramètres",
+        val header = panel("JK " + (index + 1) + " · Paramètres",
             "Lecture seule · aucun paramètre n'est modifié")
-        if(device==null) {
-            row(header,"État","En attente de l'ESP32")
-            return
+        if (device == null) {
+            row(header, "État", "Paramètres JK non reçus")
         }
-        val s=device.optJSONObject("settings")
+        val s=device?.optJSONObject("settings")
         if(s==null||!s.optBoolean("available")){
             row(header,"État","Trame paramètres JK non reçue ou périmée")
         } else {
@@ -185,21 +191,40 @@ class BatteryAdvancedCard(context: Context) : LinearLayout(context) {
                 }
             }
         }
-        val info=device.optJSONObject("info")
-        val p=panel("Informations du BMS","Identifiants seulement si le format est reconnu")
-        val model=info?.optString("model","") ?: ""
+        val info = device?.optJSONObject("info")
+        val p = panel("Informations du BMS", "Décodage strict : aucune identité inventée")
+        val model = info?.optString("model", "") ?: ""
         val recognizedModel = Regex("^(JK|PB|Jik)[A-Za-z0-9 ._-]{1,14}$",
             RegexOption.IGNORE_CASE).matches(model)
-        if(info==null||!info.optBoolean("available")||!recognizedModel) {
-            row(p,"État",
-                if(info?.optString("reason")=="unrecognized_type3_identity_layout" ||
-                    info?.optBoolean("available") == true && !recognizedModel)
-                    "Format BMS non reconnu — caractères incohérents masqués"
-                else "Informations non reçues ou périmées")
-            row(p,"Conseil","Le firmware JK 0.2.0 ne vérifie pas tous les champs d'identité.")
-            if((info?.optInt("unrecognized_frames") ?: 0) > 0)
-                row(p,"Trames d'identité non reconnues",
-                    (info?.optInt("unrecognized_frames") ?: 0).toString())
+        if (info == null || !info.optBoolean("available") || !recognizedModel) {
+            val explanation = when {
+                info?.optString("reason") == "unrecognized_type3_identity_layout" ->
+                    "La trame d'identité JK 0x03 n'utilise pas le format reconnu."
+                info?.optBoolean("available") == true && !recognizedModel ->
+                    "La trame JK contient une identité non fiable : texte masqué."
+                else -> "La trame d'identité JK 0x03 n'est pas disponible."
+            }
+            p.addView(txt(explanation, 13f, color = muted),
+                LayoutParams(-1, -2).apply { topMargin = dp(10) })
+            // Verified telemetry is available even if the vendor-specific
+            // identity frame is missing or not implemented on older readers.
+            if (telemetry?.optBoolean("available") == true && liveValues != null) {
+                row(p, "Connexion Bluetooth",
+                    if (telemetry.optBoolean("ble_connected")) "Connectée" else "Déconnectée")
+                val profile = liveValues.optString("frame_layout", "")
+                if (profile in setOf("JK02_24S", "JK02_32S"))
+                    row(p, "Format de mesures", profile + " (profil, pas modèle BMS)")
+                val cellCount = liveValues.optInt("cell_count", 0)
+                if (cellCount in 4..32) row(p, "Cellules actives", cellCount.toString())
+            }
+            if (info?.has("unrecognized_frames") == true &&
+                info.optInt("unrecognized_frames") > 0)
+                row(p, "Trames d'identité rejetées",
+                    info.optInt("unrecognized_frames").toString())
+            p.addView(txt("Le modèle, la version et le numéro de série exacts "
+                + "nécessitent une trame 0x03 correctement reconnue par le firmware JK.",
+                12f, color = muted),
+                LayoutParams(-1, -2).apply { topMargin = dp(10) })
         } else {
             row(p,"Modèle",model)
             for((label,key) in listOf(
