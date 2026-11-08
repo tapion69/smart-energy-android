@@ -37,7 +37,7 @@ android {
         debug {
             // Separate experimental install; never require uninstalling the
             // stable Smart Energy APK or erasing its Keystore pairing.
-            applicationIdSuffix = ".vpntrial24"
+            applicationIdSuffix = ".vpntrial30"
         }
         release {
             isMinifyEnabled = false
