@@ -23,6 +23,8 @@ struct Reading {
   uint8_t soc = 0;
   float cellMinV = 0;
   float cellMaxV = 0;
+  uint8_t cellMinNumber = 0; // Actual JK cell slot, 1-based; first equal minimum
+  uint8_t cellMaxNumber = 0; // Actual JK cell slot, 1-based; first equal maximum
   int cellDeltaMv = 0;
   float tempC[3] = {};
   bool tempAvailable[3] = {};
@@ -69,14 +71,23 @@ inline bool decodeProfile(const uint8_t* frame, const Profile& p, Reading& out) 
   r.sequence = frame[5];
   const uint32_t mask = u32(frame, p.mask);
   float sum = 0.0f;
+  uint16_t minMv = 0;
+  uint16_t maxMv = 0;
   for (uint8_t i = 0; i < p.cellSlots; ++i) {
     if ((mask & (uint32_t(1) << i)) == 0) continue;
-    const float v = u16(frame, 6 + 2 * i) / 1000.0f;
+    const uint16_t mv = u16(frame, 6 + 2 * i);
+    const float v = mv / 1000.0f;
     if (v < 1.5f || v > 4.5f) return false;
     r.cellActive[i] = true;
     r.cellVoltage[i] = v;
-    if (r.cellCount == 0 || v < r.cellMinV) r.cellMinV = v;
-    if (r.cellCount == 0 || v > r.cellMaxV) r.cellMaxV = v;
+    // Mirror the JK Bluetooth module: list.index(min()) / list.index(max())
+    // chooses exactly one physical cell ID, even when millivolts tie.
+    if (r.cellCount == 0 || mv < minMv) {
+      minMv = mv; r.cellMinV = v; r.cellMinNumber = i + 1;
+    }
+    if (r.cellCount == 0 || mv > maxMv) {
+      maxMv = mv; r.cellMaxV = v; r.cellMaxNumber = i + 1;
+    }
     r.cellCount++;
     sum += v;
   }
