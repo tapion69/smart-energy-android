@@ -428,6 +428,8 @@ void fillTelemetry(JsonDocument &out) {
     values["cell_count"] = m.cellCount;
     values["cell_min_v"] = m.cellMinV;
     values["cell_max_v"] = m.cellMaxV;
+    if (m.cellMinNumber) values["cell_min_number"] = m.cellMinNumber;
+    if (m.cellMaxNumber) values["cell_max_number"] = m.cellMaxNumber;
     values["cell_delta_mv"] = m.cellDeltaMv;
     values["nominal_capacity_ah"] = m.nominalCapacityAh;
     values["cycles"] = m.cycles;
