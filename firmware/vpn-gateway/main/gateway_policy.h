@@ -52,6 +52,23 @@ static inline bool se_is_tailnet_ipv4(uint32_t ip_host_order) {
     return (ip_host_order & 0xffc00000UL) == 0x64400000UL;
 }
 
+// lwIP/ESP-IDF may return IPv4 peers as AF_INET6 IPv4-mapped sockets
+// (::ffff:a.b.c.d), even when the actual WireGuard tailnet is IPv4.
+// Strictly reject native IPv6: the gateway currently has no VPN IPv6 identity.
+static inline bool se_ipv4_from_mapped_v6_bytes(const uint8_t addr[16],
+                                                 uint32_t *host_ip) {
+    if (!addr || !host_ip) return false;
+    for (size_t i = 0; i < 10; ++i) {
+        if (addr[i] != 0) return false;
+    }
+    if (addr[10] != 0xff || addr[11] != 0xff) return false;
+    *host_ip = ((uint32_t)addr[12] << 24) |
+               ((uint32_t)addr[13] << 16) |
+               ((uint32_t)addr[14] << 8) |
+               (uint32_t)addr[15];
+    return true;
+}
+
 static inline bool se_secure_equals(const char *left, const char *right) {
     if (!left || !right) return false;
     // Fixed upper bound avoids unbounded work on a malicious HTTP header.
