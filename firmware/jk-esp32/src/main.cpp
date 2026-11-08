@@ -10,6 +10,7 @@
 #include "jk_reader.h"
 #include "jk_write.h"
 #include "setup_code_policy.h"
+#include "boot_pair_policy.h"
 #include <ArduinoJson.h>
 #include <ctype.h>
 
@@ -20,9 +21,8 @@ static const int SETUP_BUTTON = 0; // BOOT is physical proof for pairing recover
 static const uint32_t RECOVERY_HOLD_MS = 4000; // open short LAN recovery window
 static const uint32_t SETUP_HOLD_MS = 10000;  // long hold enters setup AP
 static const uint32_t RECOVERY_WINDOW_MS = 45000;
-static const uint32_t PHYSICAL_PAIR_WINDOW_MS = 120000;
-static const uint32_t PHYSICAL_CONFIRM_HOLD_MS = 2000;
-static const uint32_t PHYSICAL_COMMIT_WINDOW_MS = 45000;
+static const uint32_t PHYSICAL_PAIR_WINDOW_MS = bootpair::SESSION_MS;
+static const uint32_t PHYSICAL_COMMIT_WINDOW_MS = bootpair::CONFIRM_MS;
 
 Preferences prefs;
 WebServer http(80);
@@ -438,8 +438,8 @@ void onPhysicalRecovery() {
 }
 
 bool physicalPairWindow() {
-  return setupMode && physicalPairing && physicalStartedAt &&
-         (uint32_t)(millis()-physicalStartedAt) < PHYSICAL_PAIR_WINDOW_MS;
+  return setupMode && physicalPairing &&
+         bootpair::windowOpen(millis(),physicalStartedAt);
 }
 bool physicalApClient() {
   if (!physicalPairWindow()) return false;
@@ -748,10 +748,9 @@ void loop() {
     const uint32_t heldFor=(uint32_t)(millis()-buttonPressedAt);
     const uint32_t pressedAt=buttonPressedAt;
     buttonPressedAt=0;
-    if (physicalPairWindow() && physicalStaged && !physicalConfirmed &&
-        physicalStagedAt && 
-        (int32_t)(pressedAt-physicalStagedAt)>0 &&
-        heldFor>=PHYSICAL_CONFIRM_HOLD_MS && heldFor<SETUP_HOLD_MS) {
+    if (physicalStaged && !physicalConfirmed &&
+        bootpair::secondPress(millis(),physicalStartedAt,physicalStagedAt,
+                             pressedAt,heldFor)) {
       physicalConfirmed=true;
       physicalConfirmedAt=millis();
       Serial.println("[Pairing] Second BOOT confirmation received for pending device.");
