@@ -50,6 +50,7 @@ jobs:
           /tmp/test-jk-protocol
           g++ -std=c++11 -Wall -Wextra -Werror firmware/jk-esp32/tests/test_extended.cpp -o /tmp/test-jk-extended
           /tmp/test-jk-extended
+          python firmware/jk-esp32/tests/test_json_ownership.py
       - name: Build classic ESP32 reader firmware
         run: pio run -d firmware/jk-esp32
       - name: Verify app-only image
