@@ -42,7 +42,7 @@ Le remplacement du code 8–11 caractères au redémarrage dans le firmware pré
 ## Étape 4 : paramètre pilote local (facultatif et seulement après stabilité)
 
 - Les modifications sont **désactivées par défaut** : seuls 5 réglages à faible criticité sont disponibles : `display_always_on`, `smart_sleep_enabled`, `timed_stored_data`, `charging_float_mode`, `smart_sleep_delay_h`.
-- Le firmware exige un code personnel ASCII d'au moins 16 caractères pour armer les écritures. Ne pas modifier un code de 8–11 caractères uniquement pour tester cette fonction avant validation de la récupération et du VPN.
+- Le firmware 0.3.1 accepte un code personnel ASCII **de 8 à 32 caractères** pour armer les écritures locales pilotes. Privilégier un code difficile à deviner. Les protections restent verrouillées.
 - Une seule batterie, une seule commande ; confirmer ancienne/nouvelle valeur dans l'APK. Aucun ordre automatique, pas de modification groupée.
 - Observer `queued` puis `confirmed` **uniquement après nouvelle trame de paramètres vérifiée**. En cas de `mismatch`, `send_failed`, `timeout_unverified`, `link_lost_unverified`, s'arrêter et lire le BMS manuellement, sans répéter la commande à l'aveugle.
 - Les protections cellule, courant, température, MOS, calibration SOC ne sont pas modifiables dans cette version de test.
@@ -54,3 +54,12 @@ Le second ESP32 VPN **n'a pas changé** : il relaie la lecture (GET) mais **aucu
 Pour modifier les paramètres depuis l'extérieur, il faudra adapter ce relais sur une branche distincte (routes POST strictement listées, identifiant JK sécurisé, code renouvelable, autorisation limitée, protection anti-rejeu, audit) et valider le nouvel ESP32 VPN sur matériel. Ne pas tenter d'envoyer des écritures par des routes GET ou par un serveur exposé à Internet.
 
 **Critère de sortie stable :** jobs GitHub verts, tests 1→4 BMS réussis, aucune perte de BMS, pas de faux succès sur les écritures et récupération Wi-Fi/code validée.
+
+## Étape 0 — première association ou code oublié sans USB série (0.3.1)
+
+- Avec firmware antérieur déjà installé, flasher `firmware.bin` de la 0.3.1 sur le lecteur JK uniquement, APP-ONLY à `0x10000`, **sans effacement NVS**. Cela exige un moyen de flash, mais pas la récupération du code initial.
+- BOOT 4 s sur un ESP32 déjà allumé ; l'APK rejoint le Wi-Fi temporaire ouvert, un seul client, au plus 120 s.
+- Saisir le nouveau code (8–32 caractères) et, seulement pour une installation vierge ou changement de réseau, les identifiants du Wi-Fi 2,4 GHz.
+- L'APK prépare l'opération ; BOOT 2 s **après la demande**, relâcher ; confirmer dans l'APK. Vérifier code enregistré et retour Wi-Fi, sans perte des JK.
+- Tester code 8, 11, 12, 20 caractères et redémarrage ; vérification de l'état des paramètres BMS et du VPN.
+- Sécurité radio : mécanisme **expérimental**, AP brièvement ouvert, pas de chiffrement applicatif sur les secrets. Validation de résistance aux attaques MITM nécessaire avant stable.
