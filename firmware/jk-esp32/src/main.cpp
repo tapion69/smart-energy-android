@@ -11,7 +11,7 @@
 #include <ArduinoJson.h>
 #include <ctype.h>
 
-static const char *VERSION = "0.2.3-dev";
+static const char *VERSION = "0.2.4-dev";
 static const uint32_t WIFI_JOIN_TIMEOUT_MS = 30000; // Return to setup after 30s
 static const int SETUP_BUTTON = 0; // BOOT is physical proof for pairing recovery.
 static const uint32_t RECOVERY_HOLD_MS = 4000; // open short LAN recovery window
@@ -127,7 +127,7 @@ void onInfo() {
   JsonDocument doc;
   doc["product"] = "smart-jk-esp32";
   doc["version"] = VERSION;
-  doc["identity_decoder_revision"] = "jk02-info-strict-3";
+  doc["identity_decoder_revision"] = "jk02-info-json-owned-4";
   doc["device_id"] = hostName;
   doc["setup_mode"] = setupMode;
   doc["wifi_connected"] = WiFi.status() == WL_CONNECTED;
