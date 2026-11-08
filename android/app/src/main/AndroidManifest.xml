@@ -9,6 +9,8 @@
     <uses-permission android:name="android.permission.NEARBY_WIFI_DEVICES" />
     <application
         android:label="Smart Energy VPN (test)"
+        android:icon="@drawable/smart_energy_icon"
+        android:roundIcon="@drawable/smart_energy_icon"
         android:allowBackup="false"
         android:usesCleartextTraffic="true"
         android:theme="@android:style/Theme.Material.NoActionBar">
