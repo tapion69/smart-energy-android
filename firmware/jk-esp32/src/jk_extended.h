@@ -7,6 +7,7 @@
 #include <stddef.h>
 #include <string.h>
 #include <math.h>
+#include <stdio.h>
 
 namespace jkextra {
 struct Reading {
