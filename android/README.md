@@ -140,3 +140,12 @@ La signature Android permanente est traitée séparément dans `docs/APK-SIGNATU
 - Le téléphone avait précédemment une connexion VPN susceptible d'empêcher la découverte mDNS et le transport local ; on utilise ici directement l'IP privée enregistrée.
 
 Voir `docs/ACCES-DISTANT-VPN.md`.
+
+## Smart Energy 0.3.0-dev — expérimentation 4 JK
+
+- Branche de validation : `experiment/smart-energy-v0.3.0-multibms` (ne remplace pas la branche fonctionnelle existante).
+- Navigation multi-batteries : accueil récapitulatif, quatre indicateurs et alarmes, sélection des JK et anciennes cartes par batterie conservées.
+- Connexion locale réessayée automatiquement avec le code chiffré existant, sans renouvellement silencieux.
+- Modification locale pilote uniquement, sur une petite liste blanche, avec code fort et confirmation de relecture BMS. Les commandes sensibles restent indisponibles.
+- L'ESP32 VPN en lecture seule reste inchangé ; pas encore d'écritures depuis Tailscale.
+- Ne pas installer si le lecteur JK actuel ne rejoint plus le réseau et que le code NVS a déjà été remplacé : il faut d'abord en récupérer le code actif de manière non destructive.
