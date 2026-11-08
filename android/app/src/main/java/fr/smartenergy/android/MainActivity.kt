@@ -83,6 +83,10 @@ class MainActivity : Activity() {
     private lateinit var gatewayTokenEdit: EditText
     @Volatile private var lanConnectionPending = false
     private var lastRemoteAttempt = 0L
+    private var bootPairTicket = 0L
+    private var bootPairCode = ""
+    private var bootPairDeviceId = ""
+    private lateinit var bootCommitBtn: Button
     private var lastLocalAttempt = 0L
     private lateinit var remoteStatus: TextView
     private lateinit var remoteCheck: CheckBox
@@ -409,9 +413,11 @@ class MainActivity : Activity() {
         add(lan, lanIp)
         lanConnectBtn = action("Se connecter à ma passerelle") { connectHomeLan() }
         add(lan, lanConnectBtn)
-        physicalRecoverBtn = action("Code perdu ? Réassocier avec BOOT") { recoverWithBoot() }
+        physicalRecoverBtn = action("Associer avec BOOT (première fois / code oublié)") { beginBootPairing() }
         add(lan, physicalRecoverBtn)
-        add(lan, label("Avec le firmware ESP32 v0.1.8-dev : maintiens BOOT 4 secondes pour autoriser une nouvelle association, sans USB et sans effacer le Wi-Fi/JK.", 12f, color = subdued))
+        bootCommitBtn = action("Après le 2e BOOT : confirmer l'association") { commitBootPairing() }
+        add(lan, bootCommitBtn)
+        add(lan, label("ESP32 JK v0.3.1 : appuie 4 secondes sur BOOT, choisis un code de 8 à 32 caractères dans l'application, puis confirme par un second appui BOOT de 2 secondes. Aucun ancien code ni USB nécessaires ; Wi-Fi et BMS conservés.",12f,color=subdued))
         lanDiscoverBtn = action("Rechercher sur mon Wi-Fi") { discoverHomeLan() }
         add(lan, lanDiscoverBtn)
         autoEspBtn = action("Trouver un ESP32 proche") { findNearbyEsp32() }
@@ -461,14 +467,14 @@ class MainActivity : Activity() {
 
         val a = section(advanced, "2. Première association / dépannage")
 
-        add(a, label("Si l’APK a perdu son association, saisis ici le code original de l’ESP32 puis clique sur « Se connecter à ma passerelle » dans la section 1. Inutile de modifier le Wi-Fi ou le JK.", color = subdued))
+        add(a, label("Méthode recommandée : « Associer avec BOOT » dans la section 1. Le code personnel est choisi une fois et conservé chiffré. Cette section permet aussi d'utiliser une ancienne passerelle déjà configurée.", color = subdued))
         apName = input("SmartJK-Setup-XXXXXX")
         setupCode = input("Code unique de l'ESP32 (vide = code mémorisé)", true)
         apName.setText(prefs.getString("setup_ssid", "") ?: "")
         add(a, apName)
         add(a, setupCode)
         add(a, action("Connecter l'ESP32") { connectSetupAp() }, 12)
-        add(a, label("Android demandera l'autorisation de rejoindre ce Wi-Fi temporaire. Pas besoin d'aller dans les paramètres Wi-Fi.", 12f, color = subdued))
+        add(a, label("Avec le mode BOOT 0.3.1, l'application rejoint automatiquement le Wi-Fi temporaire et demande une seconde confirmation physique ; il reste ouvert au maximum 2 minutes.", 12f, color = subdued))
 
         val b = section(advanced, "3. Détecter les JK BMS")
         add(b, label("La recherche Bluetooth est exécutée par l'ESP32, pas par le téléphone. Vérifie la MAC avant de sélectionner un appareil.", 13f, color = subdued))
@@ -646,7 +652,8 @@ class MainActivity : Activity() {
                     if (!validGatewayToken(gatewaySecret)) throw IllegalStateException("Code VPN invalide.")
                     conn.setRequestProperty("X-Gateway-Token", gatewaySecret)
                 }
-            } else if (path != "/api/v1/info") {
+            } else if (path != "/api/v1/info" &&
+                       !path.startsWith("/api/v1/pair/boot/")) {
                 conn.setRequestProperty("X-Setup-Code", activeSetupCode)
             }
             if (payload != null) {
@@ -896,97 +903,153 @@ class MainActivity : Activity() {
         }
     }
 
-    private fun recoverWithBoot() {
-        val ip = lanIp.text.toString().trim()
-        if (!allowedLocalIp(ip)) {
-            state("Renseigne l'adresse IP locale de l'ESP32 dans la section 1.")
+    private fun beginBootPairing() {
+        if (Build.VERSION.SDK_INT >= 33 &&
+            checkSelfPermission(Manifest.permission.NEARBY_WIFI_DEVICES) != PackageManager.PERMISSION_GRANTED) {
+            requestPermissions(arrayOf(Manifest.permission.NEARBY_WIFI_DEVICES), 20)
+            state("Autorise « Appareils Wi-Fi proches », puis relance l'association BOOT.")
             return
         }
-        AlertDialog.Builder(this)
-            .setTitle("Réassocier sans l'ancien code")
-            .setMessage("1. Assure-toi que l'ESP32 utilise le firmware 0.1.8-dev.\n" +
-                "2. Sur l'ESP32 allumé, maintiens BOOT 4 secondes, puis relâche (ne le maintiens pas 10 secondes).\n" +
-                "3. Dans les 45 secondes, appuie sur « Réassocier » ici.\n\n" +
-                "L'APK créera un nouveau code aléatoire à la place de l'ancien. Le Wi-Fi et les JK enregistrés resteront inchangés.\n\n" +
-                "Cette fonction expérimentale est limitée au réseau local de confiance.")
-            .setNegativeButton("Annuler", null)
-            .setPositiveButton("Réassocier") { _, _ -> performPhysicalRecovery(ip) }
-            .show()
-    }
-
-    private fun randomDeviceCode(): String {
-        val alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
-        val random = SecureRandom()
-        return buildString {
-            repeat(20) { append(alphabet[random.nextInt(alphabet.length)]) }
+        if (checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION) != PackageManager.PERMISSION_GRANTED) {
+            requestPermissions(arrayOf(Manifest.permission.ACCESS_FINE_LOCATION), 21)
+            state("Autorise la localisation pour détecter le Wi-Fi temporaire de l'ESP32.")
+            return
         }
+        val ssid=apName.text.toString().trim()
+        if (!Regex("^SmartJK-Setup-[A-F0-9]{6}$").matches(ssid)) {
+            state("Commence par « Trouver un ESP32 proche » pour sélectionner son réseau SmartJK-Setup.")
+            return
+        }
+        val form=LinearLayout(this).apply {
+            orientation=LinearLayout.VERTICAL
+            setPadding(d(18),d(4),d(18),d(4))
+        }
+        val newCode=input("Choisis ton code JK (8 à 32 caractères)",true)
+        val wifiSsid=input("Wi-Fi maison 2,4 GHz (nouveau lecteur)")
+        val wifiPassword=input("Mot de passe Wi-Fi maison",true)
+        wifiSsid.setText(homeSsid.text.toString())
+        form.addView(label("Sur l'ESP32 déjà allumé, maintiens BOOT 4 secondes puis relâche. Tu choisiras un nouveau code, sans connaître l'ancien.",13f,color=subdued))
+        add(form,newCode);add(form,wifiSsid);add(form,wifiPassword)
+        add(form,label("Si l'ESP32 connaît déjà ton Wi-Fi, laisse les deux champs Wi-Fi vides. Pour une première installation vierge, saisis les deux.",12f,color=subdued))
+        AlertDialog.Builder(this).setTitle("Association physique BOOT")
+            .setView(form).setNegativeButton("Annuler",null)
+            .setPositiveButton("Se connecter à l'ESP32") {_,_->
+                val code=newCode.text.toString()
+                val home=wifiSsid.text.toString().trim()
+                val pass=wifiPassword.text.toString()
+                if(code.length !in 8..32 || code.any{it.code !in 33..126}) {
+                    state("Choisis un code de 8 à 32 caractères ASCII sans espaces.")
+                } else if(home.isNotBlank() && pass.length !in 8..63) {
+                    state("Le mot de passe Wi-Fi doit contenir de 8 à 63 caractères.")
+                } else if(home.isBlank() && pass.isNotBlank()) {
+                    state("Indique le nom du Wi-Fi ou laisse les deux champs vides.")
+                } else {
+                    connectBootPairing(ssid,code,home,pass)
+                }
+            }.show()
     }
 
-    private fun performPhysicalRecovery(ip: String) {
-        physicalRecoverBtn.isEnabled = false
-        lanVerified = false
+    private fun connectBootPairing(ssid:String,code:String,home:String,password:String) {
         releaseConnection()
-        localHost = ip
-        state("Vérification de la passerelle et de la confirmation physique BOOT…")
+        lanVerified=false
+        remoteVpnConnection=false
+        remoteGatewayConnection=false
+        setupTransport=true
+        switchingToHome=false
+        bootPairTicket=0
+        bootPairCode=code
+        bootPairDeviceId=""
+        activeSetupSsid=ssid
+        localHost=""
+        // Deliberately NO WPA2 password: only the physically confirmed,
+        // short-lived, single-client BOOT window uses this transport.
+        val spec=WifiNetworkSpecifier.Builder().setSsid(ssid).build()
+        val req=NetworkRequest.Builder()
+            .addTransportType(NetworkCapabilities.TRANSPORT_WIFI)
+            .setNetworkSpecifier(spec).build()
+        val cb=object:ConnectivityManager.NetworkCallback() {
+            override fun onAvailable(network:Network) {
+                apNetwork=network
+                state("Wi-Fi temporaire BOOT connecté : association en préparation…")
+                async {
+                    try {
+                        val info=httpCall("GET","/api/v1/info")
+                        val deviceId=info.optString("device_id")
+                        val expected=prefs.getString("device_id","") ?: ""
+                        if(info.optString("product")!="smart-jk-esp32" ||
+                            !info.optBoolean("physical_pairing_mode") ||
+                            !info.optBoolean("physical_pairing_requires_second_boot") ||
+                            !Regex("^smartjk-[A-F0-9]{6}$",RegexOption.IGNORE_CASE).matches(deviceId) ||
+                            (expected.isNotBlank() && expected!=deviceId)) {
+                            throw IllegalStateException("ESP32 non reconnu ou fenêtre BOOT expirée.")
+                        }
+                        val data=JSONObject().put("device_id",deviceId)
+                            .put("new_code",code)
+                            .put("ssid",home).put("wifi_password",password)
+                        val staged=httpCall("POST","/api/v1/pair/boot/stage",data)
+                        if(!staged.optBoolean("staged") || staged.optLong("ticket",0)==0L)
+                            throw IllegalStateException("Association non préparée.")
+                        bootPairTicket=staged.optLong("ticket")
+                        bootPairDeviceId=deviceId
+                        state("Code prêt : maintiens BOOT une deuxième fois pendant 2 secondes, " +
+                              "relâche, puis utilise le bouton « Après le 2e BOOT ».")
+                    } catch(ex:Exception) {
+                        bootPairTicket=0
+                        state("Association BOOT impossible : "+(ex.message ?: "erreur") +
+                            ". Vérifie que tu as maintenu BOOT 4 s et que le Wi-Fi temporaire est visible.")
+                    }
+                }
+            }
+            override fun onLost(network:Network) {
+                if(apNetwork==network)apNetwork=null
+                if(!switchingToHome)state("Réseau BOOT perdu ou délai expiré : réessaie l'association.")
+            }
+            override fun onUnavailable() {
+                state("Réseau BOOT introuvable. Maintiens BOOT 4 s sur l'ESP32 allumé, puis réessaie.")
+            }
+        }
+        callback=cb
+        state("Recherche du réseau temporaire ouvert après BOOT… Accepte la demande Android.")
+        try{connectivity.requestNetwork(req,cb,30000)}
+        catch(ex:Exception){state("Connexion BOOT impossible : "+(ex.message ?: "réseau"))}
+    }
+
+    private fun commitBootPairing() {
+        val ticket=bootPairTicket
+        val id=bootPairDeviceId
+        val code=bootPairCode
+        if(ticket==0L || id.isBlank() || code.length !in 8..32 ||
+            !setupTransport || apNetwork==null) {
+            state("Aucune association BOOT en attente. Commence par « Associer avec BOOT ».")
+            return
+        }
         async {
             try {
-                val info = httpCall("GET", "/api/v1/info")
-                val id = info.optString("device_id")
-                val saved = prefs.getString("device_id", "") ?: ""
-                if (info.optString("product") != "smart-jk-esp32" ||
-                    !Regex("^smartjk-[A-F0-9]{6}$", RegexOption.IGNORE_CASE).matches(id) ||
-                    (saved.isNotBlank() && saved != id) ||
-                    !info.optBoolean("wifi_connected")) {
-                    throw IllegalStateException("L'ESP32 ne correspond pas à la passerelle attendue.")
+                val check=httpCall("GET","/api/v1/pair/boot/status?ticket=$ticket")
+                if(!check.optBoolean("confirmed_by_boot")) {
+                    state("Seconde confirmation absente : maintiens BOOT 2 secondes puis relâche.")
+                    return@async
                 }
-                if (!info.optBoolean("physical_recovery")) {
-                    throw IllegalStateException("Firmware trop ancien. Une mise à jour ESP32 v0.1.8-dev est nécessaire avant cette fonction.")
-                }
-                val generated = randomDeviceCode()
-                val payload = JSONObject().put("device_id", id).put("new_code", generated)
-                var submitted = false
-                try {
-                    val response = httpCall("POST", "/api/v1/pair/recover", payload)
-                    if (!response.optBoolean("paired") || response.optString("device_id") != id) {
-                        throw IllegalStateException("La réassociation n'a pas été confirmée par l'ESP32.")
-                    }
-                    submitted = true
-                } catch (ex: Exception) {
-                    // POST response may have been lost after secret rotation.
-                    // Recover only if the *new* code proves accepted by the ESP32.
-                    activeSetupCode = generated
-                    try {
-                        httpCall("GET", "/api/v1/bms")
-                        submitted = true
-                    } catch (_: Exception) {
-                        throw ex
-                    }
-                }
-                if (!submitted) throw IllegalStateException("Réassociation non confirmée.")
-                activeSetupCode = generated
-                // Persist only after receiving device proof using the new secret.
-                val configured = httpCall("GET", "/api/v1/bms")
-                val macs = configured.optJSONArray("bms") ?: JSONArray()
-                savePairing(id, "SmartJK-Setup-" + id.substringAfter("-").uppercase(Locale.ROOT), generated)
-                prefs.edit().putString("local_ip", ip).apply()
-                chosen.clear()
-                for (index in 0 until macs.length()) chosen.add(macs.optString(index))
-                lanVerified = true
-                lastLanFirmwareVersion = info.optString("version")
+                val result=httpCall("POST","/api/v1/pair/boot/commit",
+                    JSONObject().put("ticket",ticket))
+                if(!result.optBoolean("paired") || result.optString("device_id")!=id)
+                    throw IllegalStateException("L'ESP32 n'a pas confirmé l'enregistrement.")
+                // Store only after the physical commit succeeds on this device.
+                savePairing(id,activeSetupSsid,code)
+                bootPairTicket=0;bootPairCode="";bootPairDeviceId=""
+                switchingToHome=true
+                releaseConnection()
+                prefs.edit().remove("local_ip").apply()
                 runOnUiThread {
                     setupCode.text.clear()
-                    scanBtn.isEnabled = true
-                    saveBtn.isEnabled = true
-                    state("ESP32 réassocié avec confirmation physique. Nouveau code sécurisé mémorisé ; " +
-                        chosen.size + " JK conservé(s).")
-                    refreshTelemetry()
+                    homePassword.text.clear()
+                    state("Association physique réussie. Code mémorisé et BMS conservés. " +
+                          "L'ESP32 rejoint maintenant ton Wi-Fi 2,4 GHz.")
+                    uiHandler.postDelayed({ discoverHomeLan() },9000)
                 }
-            } catch (ex: Exception) {
-                state("Réassociation non effectuée : " +
-                    (ex.message ?: ex.javaClass.simpleName) +
-                    ". Vérifie le firmware et maintiens BOOT 4 secondes avant de relancer.")
-            } finally {
-                runOnUiThread { physicalRecoverBtn.isEnabled = true }
+            }catch(ex:Exception){
+                state("Confirmation BOOT impossible : "+(ex.message ?: "erreur") +
+                    ". Ne réappuie pas plusieurs fois sur BOOT ; vérifie l'état avant de relancer.")
             }
         }
     }
