@@ -392,7 +392,7 @@ class MainActivity : Activity() {
         telemetryPanel = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         add(root, telemetryPanel, 8)
         add(root, action("⟳ Actualiser les mesures") { refreshTelemetry() }, 8)
-        add(root, label("Données expérimentales en lecture seule. Ne pas utiliser pour une protection batterie.", 12f, color = subdued), 8)
+        add(root, label("Mesures expérimentales. Les modifications manuelles locales restent limitées et ne remplacent jamais les protections du BMS.", 12f, color = subdued), 8)
         val advanced = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             visibility = if (storedCode().isBlank()) View.VISIBLE else View.GONE
