@@ -1,7 +1,7 @@
 name: Smart Energy Android VPN Gateway (experimental)
 on:
   push:
-    branches: [experiment/esp32-vpn-gateway, experiment/smart-energy-v0.3.1-multibms]
+    branches: [experiment/esp32-vpn-gateway, experiment/smart-energy-v0.3.0-multibms]
     paths:
       - 'android/**'
       - 'firmware/jk-esp32/**'
