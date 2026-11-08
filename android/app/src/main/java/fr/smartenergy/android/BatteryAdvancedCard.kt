@@ -145,7 +145,8 @@ class BatteryAdvancedCard(context: Context) : LinearLayout(context) {
         row(diag,"Âge mesure",device.optInt("age_seconds").toString()+" s")
     }
 
-    fun settings(index:Int, device:JSONObject?, telemetry:JSONObject? = null) {
+    fun settings(index:Int, device:JSONObject?, telemetry:JSONObject? = null,
+                 onEdit: ((JSONObject)->Unit)? = null) {
         val liveValues = telemetry?.optJSONObject("values")
         val statusSignature = listOf(
             telemetry?.optBoolean("available"),
@@ -158,7 +159,7 @@ class BatteryAdvancedCard(context: Context) : LinearLayout(context) {
         lastSignature = signature
         removeAllViews()
         val header = panel("JK " + (index + 1) + " · Paramètres",
-            "Lecture seule · aucun paramètre n'est modifié")
+            "Modifications manuelles limitées aux réglages validés ; protections verrouillées")
         if (device == null) {
             row(header, "État", "Paramètres JK non reçus")
         }
@@ -188,6 +189,12 @@ class BatteryAdvancedCard(context: Context) : LinearLayout(context) {
                             if(unit=="°C") 1 else 0,unit)
                     }
                     row(panel,title,result)
+                    if (p.optBoolean("editable") && onEdit != null) {
+                        val link=txt("Modifier ce réglage  ›",12f,true,accent)
+                        link.setPadding(dp(6),dp(5),dp(6),dp(10))
+                        link.setOnClickListener { onEdit(p) }
+                        panel.addView(link)
+                    }
                 }
             }
         }
