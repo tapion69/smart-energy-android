@@ -107,7 +107,13 @@ class MainActivity : Activity() {
     private val dashboardCards = linkedMapOf<String, BatteryDashboardCard>()
     private val advancedCards = linkedMapOf<String, BatteryAdvancedCard>()
     private var dashboardMacs = emptyList<String>()
-    private var currentTab = 0 // 0 overview, 1 extended measurements, 2 read-only settings
+    private var currentTab = 0 // 0 Batterie, 1 Détails, 2 Paramètres
+    private var selectedBmsMac = "" // empty = global overview if multiple BMS
+    private var mountedBmsMac = ""
+    private lateinit var bmsTabStrip: android.widget.HorizontalScrollView
+    private lateinit var bmsTabRow: LinearLayout
+    private lateinit var detailsTabRow: LinearLayout
+    private var globalOverview: JkGlobalOverview? = null
     private var mountedTab = -1
     private var lastTelemetry: JSONObject? = null
     private var lastDetails: JSONObject? = null
@@ -371,7 +377,15 @@ class MainActivity : Activity() {
                 leftMargin = d(2); rightMargin = d(2)
             })
         }
-        add(root, tabs, 8)
+        detailsTabRow = tabs
+        bmsTabRow = LinearLayout(this).apply { orientation=LinearLayout.HORIZONTAL }
+        bmsTabStrip = android.widget.HorizontalScrollView(this).apply {
+            isHorizontalScrollBarEnabled = false
+            addView(bmsTabRow)
+            visibility = View.GONE
+        }
+        add(root, bmsTabStrip, 8)
+        add(root, detailsTabRow, 8)
         highlightActiveTab()
         telemetryPanel = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         add(root, telemetryPanel, 8)
@@ -1374,64 +1388,105 @@ class MainActivity : Activity() {
         return null
     }
 
+    private fun selectBms(mac: String) {
+        selectedBmsMac = mac
+        mountedBmsMac = ""
+        mountedTab = -1
+        lastTelemetry?.let { showTelemetry(it) }
+        if (currentTab == 2 && mac.isNotBlank()) refreshDetails()
+    }
+
+    private fun renderBmsTabs(macs: List<String>, showGlobal: Boolean) {
+        bmsTabRow.removeAllViews()
+        if (!showGlobal) {
+            bmsTabStrip.visibility = View.GONE
+            return
+        }
+        bmsTabStrip.visibility = View.VISIBLE
+        fun button(caption: String, targetMac: String) {
+            val active = selectedBmsMac == targetMac
+            val item = action(caption) { selectBms(targetMac) }
+            item.textSize = 12f
+            item.backgroundTintList = ColorStateList.valueOf(
+                if (active) mint else Color.rgb(38,57,77))
+            item.setTextColor(if (active) background else normal)
+            bmsTabRow.addView(item, LinearLayout.LayoutParams(d(103),d(43)).apply{
+                rightMargin=d(6)
+            })
+        }
+        button("Accueil", "")
+        for ((index,mac) in macs.withIndex()) button("BMS ${index+1}",mac)
+    }
+
     private fun showTelemetry(response: JSONObject) {
         lastTelemetry = response
         val devices = response.optJSONArray("devices")
-        if (devices == null) {
-            telemetryStatus.text = "Ce firmware ne prend pas en charge les mesures JK."
+        if (devices == null || devices.length() == 0) {
+            telemetryStatus.text = if (devices == null)
+                "Ce firmware ne prend pas en charge les mesures JK."
+            else "Aucun JK enregistré. Ouvre « Configuration et association »."
             telemetryPanel.removeAllViews()
-            dashboardCards.clear()
-            advancedCards.clear()
-            dashboardMacs = emptyList()
-            return
-        }
-        if (devices.length() == 0) {
-            telemetryStatus.text = "Aucun JK enregistré. Ouvre « Configuration et association »."
-            telemetryPanel.removeAllViews()
-            dashboardCards.clear()
-            advancedCards.clear()
+            dashboardCards.clear(); advancedCards.clear()
             dashboardMacs = emptyList()
             return
         }
         val macs = (0 until devices.length()).mapNotNull { i ->
             devices.optJSONObject(i)?.optString("mac")?.takeIf { it.isNotBlank() }
         }
-        if (macs != dashboardMacs || mountedTab != currentTab) {
+        val multi = macs.size > 1
+        if (!multi) selectedBmsMac = macs.firstOrNull() ?: ""
+        else if (selectedBmsMac.isNotBlank() && selectedBmsMac !in macs)
+            selectedBmsMac = ""
+        val global = multi && selectedBmsMac.isBlank()
+        val rerender = macs != dashboardMacs ||
+            mountedTab != currentTab || mountedBmsMac != selectedBmsMac
+        if (rerender) {
             dashboardMacs = macs
             mountedTab = currentTab
+            mountedBmsMac = selectedBmsMac
+            dashboardCards.clear(); advancedCards.clear()
+            globalOverview = null
             telemetryPanel.removeAllViews()
-            dashboardCards.clear()
-            advancedCards.clear()
-            for (mac in macs) {
-                if (currentTab == 0) {
+            detailsTabRow.visibility = if(global) View.GONE else View.VISIBLE
+            renderBmsTabs(macs,multi)
+            if(global) {
+                globalOverview = JkGlobalOverview(this)
+                telemetryPanel.addView(globalOverview,LinearLayout.LayoutParams(-1,-2))
+            } else {
+                val mac = selectedBmsMac
+                if(currentTab == 0) {
                     val card = BatteryDashboardCard(this)
                     dashboardCards[mac] = card
-                    telemetryPanel.addView(card, LinearLayout.LayoutParams(-1, -2))
+                    telemetryPanel.addView(card,LinearLayout.LayoutParams(-1,-2))
                 } else {
                     val card = BatteryAdvancedCard(this)
                     advancedCards[mac] = card
-                    telemetryPanel.addView(card, LinearLayout.LayoutParams(-1, -2))
+                    telemetryPanel.addView(card,LinearLayout.LayoutParams(-1,-2))
                 }
             }
         }
-        var validCount = 0
-        for (i in 0 until devices.length()) {
-            val item = devices.optJSONObject(i) ?: continue
-            val mac = item.optString("mac")
-            if (item.optBoolean("available")) validCount++
-            when (currentTab) {
-                0 -> dashboardCards[mac]?.bind(i, item)
-                1 -> advancedCards[mac]?.measurements(i, item)
-                2 -> advancedCards[mac]?.settings(i, detailForMac(mac), item)
+        val liveCount=(0 until devices.length()).count { devices.optJSONObject(it)?.optBoolean("available")==true }
+        if(global) globalOverview?.bind(devices) { mac -> selectBms(mac) }
+        else {
+            for(i in 0 until devices.length()){
+                val item=devices.optJSONObject(i) ?: continue
+                val mac=item.optString("mac")
+                if(mac != selectedBmsMac) continue
+                when(currentTab) {
+                    0 -> dashboardCards[mac]?.bind(i,item)
+                    1 -> advancedCards[mac]?.measurements(i,item)
+                    2 -> advancedCards[mac]?.settings(i,detailForMac(mac),item)
+                }
             }
         }
-        val suffix = when(currentTab) {
-            0 -> "Vue d'ensemble"
-            1 -> "Mesures détaillées"
-            else -> "Paramètres BMS · lecture seule"
-        }
-        telemetryStatus.text = validCount.toString() + "/" + devices.length() +
-            " JK en ligne · " + suffix
+        telemetryStatus.text = "$liveCount/${devices.length()} JK en ligne · " +
+            if(global) "Synthèse des batteries" else
+              "BMS ${macs.indexOf(selectedBmsMac)+1} · " +
+              when(currentTab){
+                  0 -> "Batterie"
+                  1 -> "Détails"
+                  else -> "Paramètres"
+              }
     }
 
     override fun onResume() {
