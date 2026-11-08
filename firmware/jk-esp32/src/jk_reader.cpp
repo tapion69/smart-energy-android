@@ -46,6 +46,7 @@ struct Device {
   float writeTarget = 0;
   uint32_t writeAt = 0;
   uint32_t writeSentAt = 0;
+  bool writeMismatchSeen = false;
 };
 static Device devices[MAX_BMS];
 static uint8_t configured = 0;
@@ -131,7 +132,8 @@ void onValidatedFrame(const uint8_t *frame, const smartjk::Reading *basic, void 
         const size_t k = size_t(item.writeIndex);
         const bool matches = settings.available[k] &&
           fabsf(settings.value[k] - item.writeTarget) < 0.0011f;
-        item.writePhase = matches ? 3 : 4;
+        if(matches) item.writePhase = 3;
+        else item.writeMismatchSeen = true; // Later fresh frame may still confirm.
       }
     } else if (type == 3) {
       item.info = info;
@@ -280,7 +282,8 @@ void pollOne(Session &session, const char *mac) {
         item.writeSentAt = now;
       } else if (item.writePhase == 2 && item.writeSentAt &&
                  (uint32_t)(now - item.writeSentAt) > 15000) {
-        item.writePhase = 6; // Never retry a timed-out write.
+        item.writePhase = item.writeMismatchSeen ? 4 : 6;
+        // Never automatically repeat a timed-out or mismatched write.
       }
     }
     portEXIT_CRITICAL(&stateMux);
@@ -671,6 +674,7 @@ bool requestWrite(const char *mac, const char *key, float value,
     d.writeTarget=value;
     d.writeAt=now;
     d.writeSentAt=0;
+    d.writeMismatchSeen=false;
     d.writePhase=1;
     accepted=true;reason="";
     break;
