@@ -6,3 +6,4 @@ dependencies.lock
 managed_components/
 components/
 __pycache__/
+upstream-tailtiny/
