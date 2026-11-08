@@ -1,4 +1,4 @@
-# Smart JK ESP32 — firmware de test (0.2.5-dev)
+# Smart JK ESP32 — firmware de test (0.3.0-dev)
 
 **Fonctions actuellement codées** : diagnostic Wi-Fi et retour automatique au mode configuration après 30 secondes d'échec, point d'accès Wi-Fi de configuration, secret unique par appareil, lecture de l'identité, scan BLE, sélection et enregistrement persistant des MAC JK, configuration du Wi-Fi, retour au réseau local, et **première acquisition BLE expérimentale en lecture seule**.
 
@@ -181,3 +181,11 @@ sur l'ESP32 JK à l'adresse `0x10000`, sans effacer la NVS.
 Le firmware a corrigé la régénération accidentelle de codes utilisateur de 8 à 11 caractères au redémarrage et ajouté la reprise automatique du Wi-Fi domestique après repli temporaire vers l'AP. Détails, limites de récupération et plan de simplification dans `docs/JK-RECUPERATION-WIFI-ET-ASSOCIATION.md`.
 
 La modification ne répare **pas** un code déjà remplacé dans la NVS : ne flasher ni effacer sans avoir prévu la récupération du secret actif par USB série et la remise en place du Wi-Fi. Aucune logique du décodeur JK ou du VPN n'est modifiée.
+
+## 0.3.0-dev — quatre BLE persistants et écritures locales pilotes
+
+- Quatre sessions BLE indépendantes (un assembleur par appareil), aucune rotation 90 secondes. Cible de test 4, non encore validée sur quatre JK réels.
+- Trame de paramètres en lecture seule toujours accessible ; seules cinq options peu critiques sont temporairement éditables via API locale.
+- Routes POST `/api/v1/jk/write-arm` et `/api/v1/jk/write`, GET `/api/v1/jk/write-status?mac=...`. Autorisation courte, confirmation, rejet des cache périmés et vérification BMS 0x01 ; aucun renvoi automatique.
+- Pas d'écriture des MOS, seuils de sécurité, alarmes thermiques ni calibration SOC.
+- Le VPN en lecture seule reste inchangé pour éviter une dégradation de sa configuration ; écritures à distance à venir avec un protocole d'autorisation testé.
