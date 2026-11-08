@@ -8,7 +8,7 @@
     <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
     <uses-permission android:name="android.permission.NEARBY_WIFI_DEVICES" />
     <application
-        android:label="Smart Energy VPN 0.2.3"
+        android:label="Smart Energy VPN 0.2.4"
         android:icon="@drawable/smart_energy_icon"
         android:roundIcon="@drawable/smart_energy_icon"
         android:allowBackup="false"
