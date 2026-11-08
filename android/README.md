@@ -2,6 +2,10 @@
 
 Un projet Android Studio **réel**, en Kotlin natif, ciblant Android 10+.
 
+## Note firmware JK 0.2.3-dev (diagnostic facultatif)
+
+Le nouveau firmware **ESP32 JK 0.2.3-dev**, distinct de l'APK Android **0.2.4-dev**, ajoute un contrôle de cohérence de l'identité BMS à la réponse `/api/v1/details` et des compteurs/indices non sensibles sur les trames 0x03. Il n'altère ni l'app, ni les lectures 0x01/0x02, ni la passerelle Tailscale. Il **ne garantit pas** le décodage du modèle/version si la trame 0x03 JK V19 n'est pas connue. Tester uniquement après validation CI et flash APP-ONLY sans effacement NVS.
+
 ## Hotfix 0.2.4 (branch experiment/esp32-vpn-gateway)
 
 - Corrige la coloration des cellules par **numéros min/max**, sans faire rougir ou bleuir toutes celles qui partagent une tension arrondie. Numéros natifs du BMS si vérifiés, sinon première cellule min/max, comme notre module Bluetooth.
