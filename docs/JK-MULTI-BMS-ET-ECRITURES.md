@@ -69,8 +69,8 @@ Plan d'implémentation :
 
 ## Proposition d'interface multi-BMS
 
-- Accueil : récapitulatif de 4 BMS (SOC, tension, courant, puissance, température, dernière réception et état BLE), capacité et SOC global calculés selon les capacités connues; aucune donnée obsolète présentée comme actuelle.
-- Navigation : onglets (ou barre horizontale mobile) par BMS; sous-onglets « Mesures », « Cellules », « Paramètres », « Informations ».
+- Accueil : 4 KPI seulement : SOC global pondéré par capacité lorsque celle-ci est connue, courant **moyen** en A, puissance **moyenne** en W et tension globale présentée comme moyenne des tensions des BMS connectés. Pas de capacité globale affichée. Les moyennes excluent les BMS hors ligne ou aux données périmées, et indiquent le nombre de BMS réellement inclus. Ne pas confondre courant/puissance moyens avec les sommes physiques d'un système parallèle. Le dessous de l'accueil présente les 4 cartes BMS et leur statut.
+- Navigation : onglets (ou barre horizontale mobile) par BMS; chaque BMS **conserve la page Batterie existante** (SOC, tension, courant, watts, 16 cellules et barres colorées, T1–T5/MOS, alarmes), ainsi que les écrans Détails et Paramètres déjà développés. Un onglet Cellules dédié peut compléter, pas remplacer, la page Batterie.
 - Paramètres : lecture seule par défaut, changement manuel ciblé et statut de relecture, journal d'audit. Les autorisations local/Tailscale sont visibles et contrôlées séparément.
 - Une maquette HTML indépendante, sans accès réseau ni commandes matérielles, a été préparée pour valider la présentation avant développement natif Kotlin.
 
