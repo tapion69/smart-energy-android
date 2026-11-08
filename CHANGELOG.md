@@ -3,6 +3,8 @@
 ## 0.2.3-dev ESP32 JK — identité vérifiée et diagnostic de trames (2026-11-08)
 
 - Identité BMS: validation supplémentaire du cache avant réponse API, pas de modèle absent avec `available=true`.
+- Alignement sur le module JK Bluetooth HA : suppression du padding ASCII des champs reçus et conversion dynamique de date YYMMDD en YYYY-MM-DD (sans valeurs de BMS codées en dur).
+- Tests multi-modèles synthétiques pour vérifier la récupération dynamique de modèles, versions, noms et dates différents.
 - Diagnostics strictement non sensibles `identity_decoder_revision`, `decoder_revision`, `identity_integrity_ok`, `type3_frames_seen`, `last_rejection` et `unrecognized_frames`. Aucun contenu brut de trame 0x03, mot de passe ou numéro de série dans ces diagnostics.
 - Contrôle borné des chaînes pour éviter toute lecture mémoire hors limites si un enregistrement en cache est altéré.
 - Tests de régression pour identités JSON incohérentes, versions incorrectes, cache sans modèle et chaînes non terminées.
