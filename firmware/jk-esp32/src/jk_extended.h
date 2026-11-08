@@ -255,7 +255,19 @@ inline bool likelyJKModel(const char *v) {
 }
 // Check cached identity again at the API boundary. Frame CRC and firmware
 // version alone cannot certify a model and its version fields.
+// Reject missing terminators BEFORE passing cached buffers to strlen().
+inline bool terminatedWithin(const char *field, size_t size) {
+  for (size_t i = 0; i < size; ++i) if (field[i] == 0) return true;
+  return false;
+}
 inline bool usableIdentity(const Info &info) {
+  if (!terminatedWithin(info.vendor, sizeof(info.vendor)) ||
+      !terminatedWithin(info.hardware, sizeof(info.hardware)) ||
+      !terminatedWithin(info.software, sizeof(info.software)) ||
+      !terminatedWithin(info.deviceName, sizeof(info.deviceName)) ||
+      !terminatedWithin(info.serialNumber, sizeof(info.serialNumber)) ||
+      !terminatedWithin(info.manufactureDate, sizeof(info.manufactureDate)))
+    return false;
   if (!info.confirmed || !likelyJKModel(info.vendor)) return false;
   const bool hw = info.hardware[0] && safeIdentifier(info.hardware, 2);
   const bool sw = info.software[0] && safeIdentifier(info.software, 2);
