@@ -8,11 +8,13 @@
 #include <ESPmDNS.h>
 #include <NimBLEDevice.h>
 #include "jk_reader.h"
+#include "setup_code_policy.h"
 #include <ArduinoJson.h>
 #include <ctype.h>
 
-static const char *VERSION = "0.2.4-dev";
-static const uint32_t WIFI_JOIN_TIMEOUT_MS = 30000; // Return to setup after 30s
+static const char *VERSION = "0.2.5-dev";
+static const uint32_t WIFI_JOIN_TIMEOUT_MS = 30000; // Return to temporary setup after 30s
+static const uint32_t SETUP_AUTORETRY_MS = 120000; // Retry saved Wi-Fi after brief fallback
 static const int SETUP_BUTTON = 0; // BOOT is physical proof for pairing recovery.
 static const uint32_t RECOVERY_HOLD_MS = 4000; // open short LAN recovery window
 static const uint32_t SETUP_HOLD_MS = 10000;  // long hold enters setup AP
@@ -24,6 +26,8 @@ String hostName;
 String setupSsid;
 String setupCode;
 bool setupMode = false;
+bool automaticSetupFallback = false;
+uint32_t setupFallbackAt = 0;
 bool mdnsRunning = false;
 uint32_t nextMdnsAttemptAt = 0;
 uint32_t restartAt = 0;
@@ -84,7 +88,9 @@ void onWifiEvent(WiFiEvent_t event, WiFiEventInfo_t info) {
     Serial.printf("[WiFi] STA disconnected; reason=%u\\n", (unsigned)disconnectReason);
   }
 }
-void startSetup() {
+void startSetup(bool automaticFallback = false) {
+  automaticSetupFallback = automaticFallback;
+  setupFallbackAt = millis();
   recoveryWindowAt = 0;
   wifiAttemptAt = 0;
   nextMdnsAttemptAt = 0;
@@ -108,6 +114,8 @@ void startSetup() {
   Serial.println("==================================");
 }
 void connectHome() {
+  automaticSetupFallback = false;
+  setupFallbackAt = 0;
   recoveryWindowAt = 0;
   setupMode = false;
   everConnected = false;
@@ -130,6 +138,7 @@ void onInfo() {
   doc["identity_decoder_revision"] = "jk02-info-json-owned-4";
   doc["device_id"] = hostName;
   doc["setup_mode"] = setupMode;
+  doc["wifi_auto_recovery"] = setupMode && automaticSetupFallback;
   doc["wifi_connected"] = WiFi.status() == WL_CONNECTED;
   doc["wifi_status_code"] = (int)WiFi.status();
   doc["wifi_saved"] = prefs.getString("ssid", "").length() > 0;
@@ -275,12 +284,9 @@ void onChangeCode() {
     error(400, "code_length_8_to_32_required");
     return;
   }
-  for (size_t i = 0; i < newCode.length(); ++i) {
-    unsigned char ch = (unsigned char)newCode[i];
-    if (ch < 33 || ch > 126) {
-      error(400, "code_ascii_printable_no_spaces");
-      return;
-    }
+  if (!setupcode::valid(newCode.c_str(), newCode.length())) {
+    error(400, "code_ascii_printable_no_spaces");
+    return;
   }
   if (prefs.putString("setupCode", newCode) != newCode.length()) {
     error(500, "storage_failed");
@@ -403,7 +409,9 @@ void setup() {
 
   prefs.begin("smart-jk", false);
   setupCode = prefs.getString("setupCode", "");
-  if (setupCode.length() < 12) {
+  if (!setupcode::valid(setupCode.c_str(), setupCode.length())) {
+    // Only absent/invalid credentials are regenerated; valid 8-11 byte user
+    // codes must persist just like 12-32 byte codes after every reboot.
     // Unique per-board secret, shown ONLY via local USB serial for this dev build.
     const char charset[] = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
     setupCode = "";
@@ -459,8 +467,19 @@ void loop() {
       Serial.printf("[WiFi] Failed after %lu seconds: status=%d reason=%u. Reopening setup AP.\n",
                     (unsigned long)(WIFI_JOIN_TIMEOUT_MS / 1000), (int)WiFi.status(),
                     (unsigned)disconnectReason);
-      startSetup(); // Credentials + selected JK remain in Preferences.
+      startSetup(true); // Retry saved Wi-Fi later; leave NVS and BLE selection intact.
     }
+  }
+  // When the router was temporarily unavailable, do NOT strand the reader
+  // forever in setup AP. Retry automatically only if setup was entered by
+  // a Wi-Fi failure and nobody is using the temporary setup connection.
+  // Manual BOOT setup stays active until user configuration is complete.
+  if (setupMode && automaticSetupFallback && setupFallbackAt &&
+      (uint32_t)(millis() - setupFallbackAt) >= SETUP_AUTORETRY_MS &&
+      WiFi.softAPgetStationNum() == 0 &&
+      prefs.getString("ssid", "").length() > 0) {
+    Serial.println("[WiFi] Retrying saved Wi-Fi after setup fallback (no NVS change).");
+    connectHome();
   }
   if (restartAt && (int32_t)(millis() - restartAt) >= 0) {
     delay(150);
