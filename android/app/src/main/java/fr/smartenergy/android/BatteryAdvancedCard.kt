@@ -190,7 +190,7 @@ class BatteryAdvancedCard(context: Context) : LinearLayout(context) {
                     }
                     row(panel,title,result)
                     if (p.optBoolean("editable") && onEdit != null) {
-                        val link=txt("Modifier ce réglage  ›",12f,true,accent)
+                        val link=txt("Modifier ce réglage  ›",12f,true,mint)
                         link.setPadding(dp(6),dp(5),dp(6),dp(10))
                         link.setOnClickListener { onEdit(p) }
                         panel.addView(link)
