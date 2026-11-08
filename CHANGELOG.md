@@ -1,5 +1,13 @@
 # Journal des modifications
 
+## 0.2.4-dev ESP32 JK — correction de chaînes JSON temporaires (2026-11-08)
+
+- Cause probable des identités absentes malgré des trames CRC validées : références à des buffers de la copie locale `Device item` détruits avant `serializeJson()`.
+- Force une copie JSON avec `String(...)` des champs d'identité, diagnostic, MAC et état BLE issus des BMS.
+- Identifiant firmware `jk02-info-json-owned-4`, distinct du décodeur précédent.
+- Aucun modèle/version/nom/numéro de série codé en dur ; aucune modification de la lecture Bluetooth, de l'APK 0.2.4 ou du deuxième ESP32 Tailscale.
+- Correctif soumis aux tests CI ; validation réelle nécessaire avant de considérer l'incident comme clos.
+
 ## 0.2.3-dev ESP32 JK — identité vérifiée et diagnostic de trames (2026-11-08)
 
 - Identité BMS: validation supplémentaire du cache avant réponse API, pas de modèle absent avec `available=true`.
