@@ -1,0 +1,59 @@
+name: Smart Energy ESP32 VPN Gateway (experimental)
+on:
+  push:
+    branches: [experiment/esp32-vpn-gateway]
+    paths:
+      - 'firmware/vpn-gateway/**'
+      - '.github/workflows/build-vpn-gateway.yml'
+  workflow_dispatch:
+
+jobs:
+  policy:
+    name: VPN routing and security policy tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Host security regression tests
+        run: |
+          cc -std=gnu11 -Wall -Wextra -Werror \
+            firmware/vpn-gateway/tests/test_policy.c \
+            -o /tmp/se-gateway-policy
+          /tmp/se-gateway-policy
+
+  esp32:
+    name: Build isolated classic ESP32 VPN gateway
+    needs: policy
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Fetch pinned TailTiny v3.1.0 components (experimental)
+        run: |
+          git clone --quiet https://github.com/Asimmimx/tailtiny.git /tmp/tailtiny
+          git -C /tmp/tailtiny checkout --detach d1ec2ae45e252e8dc737452be0f6afe1ac2e3edb
+          mkdir -p firmware/vpn-gateway/components
+          cp -a /tmp/tailtiny/components/tailtiny firmware/vpn-gateway/components/
+          cp -a /tmp/tailtiny/components/wireguard_lwip firmware/vpn-gateway/components/
+          echo "TailTiny pinned commit: $(git -C /tmp/tailtiny rev-parse HEAD)"
+      - name: ESP-IDF 5.3.2 build (no customer credentials)
+        uses: espressif/esp-idf-ci-action@v1
+        with:
+          esp_idf_version: v5.3.2
+          target: esp32
+          path: firmware/vpn-gateway
+      - name: Verify firmware image and flash offsets
+        run: |
+          test -s firmware/vpn-gateway/build/smart_energy_vpn_gateway.bin
+          test -s firmware/vpn-gateway/build/bootloader/bootloader.bin
+          test -s firmware/vpn-gateway/build/partition_table/partition-table.bin
+          test -s firmware/vpn-gateway/build/flasher_args.json
+      - name: Upload unconfigured test firmware (needs local credential build)
+        uses: actions/upload-artifact@v4
+        with:
+          name: smart-energy-vpn-gateway-esp32-experimental-unconfigured
+          path: |
+            firmware/vpn-gateway/build/smart_energy_vpn_gateway.bin
+            firmware/vpn-gateway/build/bootloader/bootloader.bin
+            firmware/vpn-gateway/build/partition_table/partition-table.bin
+            firmware/vpn-gateway/build/flasher_args.json
+          if-no-files-found: error
+          retention-days: 10
