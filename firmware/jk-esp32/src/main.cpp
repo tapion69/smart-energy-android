@@ -13,13 +13,16 @@
 #include <ArduinoJson.h>
 #include <ctype.h>
 
-static const char *VERSION = "0.3.0-dev";
+static const char *VERSION = "0.3.1-dev";
 static const uint32_t WIFI_JOIN_TIMEOUT_MS = 30000; // Return to temporary setup after 30s
 static const uint32_t SETUP_AUTORETRY_MS = 120000; // Retry saved Wi-Fi after brief fallback
 static const int SETUP_BUTTON = 0; // BOOT is physical proof for pairing recovery.
 static const uint32_t RECOVERY_HOLD_MS = 4000; // open short LAN recovery window
 static const uint32_t SETUP_HOLD_MS = 10000;  // long hold enters setup AP
 static const uint32_t RECOVERY_WINDOW_MS = 45000;
+static const uint32_t PHYSICAL_PAIR_WINDOW_MS = 120000;
+static const uint32_t PHYSICAL_CONFIRM_HOLD_MS = 2000;
+static const uint32_t PHYSICAL_COMMIT_WINDOW_MS = 45000;
 
 Preferences prefs;
 WebServer http(80);
@@ -45,6 +48,22 @@ volatile uint8_t disconnectReason = 0;
 uint32_t writeArmUntil = 0;
 String writeArmMac;
 
+// A brief, physically requested, one-client onboarding AP. It is open ONLY
+// during physical pairing, and no normal JK API is accessible over it.
+// Stage a unique ticket and require a SECOND hardware BOOT confirmation before
+// committing a new code. The code and Wi-Fi are never returned by an endpoint.
+bool physicalPairing = false;
+bool physicalStaged = false;
+bool physicalConfirmed = false;
+uint32_t physicalStartedAt = 0;
+uint32_t physicalConfirmedAt = 0;
+uint32_t physicalTicket = 0;
+uint8_t physicalFailedStages = 0;
+String physicalNewCode;
+String physicalNewSsid;
+String physicalNewWifiPass;
+
+
 void respond(int status, JsonDocument &doc) {
   String json;
   serializeJson(doc, json);
@@ -57,6 +76,7 @@ void error(int code, const char *message) {
   respond(code, doc);
 }
 bool requireControl() {
+  if (physicalPairing) { error(423, "physical_pairing_in_progress"); return false; }
   // Development-only LAN access: a unique per-device code must be supplied.
   // TODO production: replace plaintext HTTP with authenticated encrypted channel.
   if (http.header("X-Setup-Code") != setupCode) {
@@ -92,7 +112,49 @@ void onWifiEvent(WiFiEvent_t event, WiFiEventInfo_t info) {
     Serial.printf("[WiFi] STA disconnected; reason=%u\\n", (unsigned)disconnectReason);
   }
 }
+void connectHome();
+void clearPhysicalPairing() {
+  physicalPairing = false;
+  physicalStaged = false;
+  physicalConfirmed = false;
+  physicalStartedAt = 0;
+  physicalConfirmedAt = 0;
+  physicalTicket = 0;
+  physicalFailedStages = 0;
+  physicalNewCode = "";
+  physicalNewSsid = "";
+  physicalNewWifiPass = "";
+}
+
+void startPhysicalPairing() {
+  clearPhysicalPairing();
+  automaticSetupFallback = false;
+  setupFallbackAt = 0;
+  recoveryWindowAt = 0;
+  wifiAttemptAt = 0;
+  if (mdnsRunning) { MDNS.end(); mdnsRunning = false; }
+  WiFi.disconnect(true);
+  WiFi.mode(WIFI_AP_STA);
+  setupMode = true;
+  physicalPairing = true;
+  physicalStartedAt = millis();
+  // Open AP cannot be avoided on a display-less board with no USB, sticker
+  // secret or BLE enrollment. Physical proof is therefore required TWICE.
+  const bool ok = WiFi.softAP(setupSsid.c_str(), nullptr, 1, false, 1);
+  if (!ok) {
+    clearPhysicalPairing();
+    if (prefs.getString("ssid", "").isEmpty()) {
+      // An unknown old WPA2 code is still safer than a permanent open AP.
+      WiFi.softAP(setupSsid.c_str(), setupCode.c_str(), 1, false, 1);
+    } else {
+      connectHome();
+    }
+    return;
+  }
+  Serial.println("[Pairing] Temporary one-client AP open for 120 s; second BOOT required.");
+}
 void startSetup(bool automaticFallback = false) {
+  clearPhysicalPairing();
   automaticSetupFallback = automaticFallback;
   setupFallbackAt = millis();
   recoveryWindowAt = 0;
@@ -118,6 +180,7 @@ void startSetup(bool automaticFallback = false) {
   Serial.println("==================================");
 }
 void connectHome() {
+  clearPhysicalPairing();
   automaticSetupFallback = false;
   setupFallbackAt = 0;
   recoveryWindowAt = 0;
@@ -159,6 +222,14 @@ void onInfo() {
   doc["ota"] = false;
   doc["parameter_writes"] = "experimental_low_risk_local_only";
   doc["physical_recovery"] = true; // does NOT reveal the old password.
+  doc["boot_pairing"] = true;
+  doc["physical_pairing_mode"] = physicalPairing &&
+    (uint32_t)(millis()-physicalStartedAt)<PHYSICAL_PAIR_WINDOW_MS;
+  doc["physical_pairing_requires_second_boot"] = true;
+  doc["physical_pairing_seconds_left"] = physicalPairing ?
+    (uint32_t)(millis()-physicalStartedAt)<PHYSICAL_PAIR_WINDOW_MS ?
+      (PHYSICAL_PAIR_WINDOW_MS-(uint32_t)(millis()-physicalStartedAt))/1000 : 0
+    : 0;
   respond(200, doc);
 }
 void onConfiguredBms() {
@@ -336,7 +407,8 @@ void onPhysicalRecovery() {
   }
   String requestedDevice = incoming["device_id"].as<String>();
   String newSecret = incoming["new_code"].as<String>();
-  if (requestedDevice != hostName || newSecret.length() < 16 || newSecret.length() > 32) {
+  if (requestedDevice != hostName ||
+      !setupcode::valid(newSecret.c_str(), newSecret.length())) {
     error(400, "invalid_recovery_request");
     return;
   }
@@ -363,6 +435,97 @@ void onPhysicalRecovery() {
   Serial.println("[Pairing] Physical recovery approved; access code rotated. Wi-Fi and JK saved.");
 }
 
+bool physicalPairWindow() {
+  return setupMode && physicalPairing && physicalStartedAt &&
+         (uint32_t)(millis()-physicalStartedAt) < PHYSICAL_PAIR_WINDOW_MS;
+}
+bool physicalApClient() {
+  if (!physicalPairWindow()) return false;
+  const IPAddress peer = http.client().remoteIP();
+  // Reject requests arriving on a different interface or from WAN/Tailnet.
+  return peer[0] == 192 && peer[1] == 168 && peer[2] == 4 &&
+         peer[3] >= 2 && peer[3] <= 254 &&
+         WiFi.softAPgetStationNum() == 1;
+}
+void onPhysicalStage() {
+  if (!physicalApClient()) {error(403,"physical_boot_setup_required");return;}
+  if (physicalFailedStages >= 3) {error(429,"stage_attempts_exceeded");return;}
+  ++physicalFailedStages;
+  JsonDocument req;
+  if (deserializeJson(req,http.arg("plain"))) {error(400,"invalid_json");return;}
+  const String device = req["device_id"].as<String>();
+  const String code = req["new_code"].as<String>();
+  const String ssid = req["ssid"].as<String>();
+  const String pass = req["wifi_password"].as<String>();
+  if (device != hostName ||
+      !setupcode::valid(code.c_str(), code.length())) {
+    error(400,"invalid_device_or_code_8_to_32");return;
+  }
+  if ((!ssid.isEmpty() && (ssid.length()>32 || pass.length()<8 || pass.length()>63)) ||
+      (ssid.isEmpty() && (!pass.isEmpty() || prefs.getString("ssid","").isEmpty()))) {
+    error(400,"wifi_2_4ghz_credentials_required");return;
+  }
+  // New pairing attempt voids any previous staged/confirmed request.
+  physicalNewCode=code;
+  physicalNewSsid=ssid;
+  physicalNewWifiPass=pass;
+  physicalTicket=esp_random();
+  if(!physicalTicket)physicalTicket=1;
+  physicalStaged=true;
+  physicalConfirmed=false;
+  physicalConfirmedAt=0;
+  JsonDocument reply;
+  reply["staged"]=true;reply["requires_second_boot"]=true;
+  reply["ticket"]=physicalTicket;
+  reply["seconds_left"]=(PHYSICAL_PAIR_WINDOW_MS-(uint32_t)(millis()-physicalStartedAt))/1000;
+  respond(202,reply);
+}
+void onPhysicalStatus() {
+  if (!physicalApClient()) {error(403,"physical_boot_setup_required");return;}
+  const uint32_t ticket=uint32_t(strtoul(http.arg("ticket").c_str(),nullptr,10));
+  if(!physicalStaged || !ticket || ticket!=physicalTicket) {
+    error(403,"unknown_pairing_ticket");return;
+  }
+  JsonDocument reply;
+  reply["staged"]=true;
+  reply["confirmed_by_boot"]=physicalConfirmed &&
+     (uint32_t)(millis()-physicalConfirmedAt)<PHYSICAL_COMMIT_WINDOW_MS;
+  reply["seconds_left"]=(PHYSICAL_PAIR_WINDOW_MS-(uint32_t)(millis()-physicalStartedAt))/1000;
+  respond(200,reply);
+}
+void onPhysicalCommit() {
+  if (!physicalApClient()) {error(403,"physical_boot_setup_required");return;}
+  JsonDocument req;
+  if(deserializeJson(req,http.arg("plain"))){error(400,"invalid_json");return;}
+  const uint32_t ticket=req["ticket"].as<uint32_t>();
+  if(!physicalStaged || !physicalConfirmed || !physicalTicket ||
+     ticket!=physicalTicket ||
+     (uint32_t)(millis()-physicalConfirmedAt)>=PHYSICAL_COMMIT_WINDOW_MS) {
+    error(403,"second_boot_confirmation_required");return;
+  }
+  // Consume physical permission BEFORE altering any persistent state.
+  physicalStaged=false;
+  physicalConfirmed=false;
+  physicalTicket=0;
+  const bool codeOk=prefs.putString("setupCode",physicalNewCode)==physicalNewCode.length();
+  if(!codeOk){error(500,"code_storage_failed");return;}
+  setupCode=physicalNewCode;
+  bool wifiOk=true;
+  if(!physicalNewSsid.isEmpty()){
+    wifiOk=prefs.putString("ssid",physicalNewSsid)==physicalNewSsid.length() &&
+           prefs.putString("wifiPass",physicalNewWifiPass)==physicalNewWifiPass.length();
+  }
+  if(!wifiOk){error(500,"wifi_storage_failed_check_via_usb");return;}
+  JsonDocument reply;
+  reply["paired"]=true;
+  reply["device_id"]=hostName;
+  reply["wifi_saved"]=true;
+  reply["restart_required"]=true;
+  respond(200,reply);
+  // Never leak chosen code via HTTP or serial; reboot to closed WPA2 or STA.
+  physicalNewCode="";physicalNewSsid="";physicalNewWifiPass="";
+  restartAt=millis()+2200;
+}
 void onSetWifi() {
   // The same paired device can update Wi-Fi from the trusted home LAN.
   // Prototype uses plaintext HTTP and MUST NOT be exposed to the Internet.
@@ -399,7 +562,6 @@ bool allowedWriteConnection() {
 void onArmParameterWrite() {
   if(!requireControl())return;
   if(!allowedWriteConnection()){error(403,"local_wifi_required");return;}
-  if(setupCode.length()<16){error(403,"strong_code_16_characters_required_for_writes");return;}
   JsonDocument req;
   if(deserializeJson(req,http.arg("plain"))){error(400,"invalid_json");return;}
   String mac=req["mac"].as<String>();
@@ -514,6 +676,9 @@ void setup() {
   http.on("/api/v1/wifi/scan", HTTP_GET, onWifiScan);
   http.on("/api/v1/access", HTTP_POST, onChangeCode);
   http.on("/api/v1/pair/recover", HTTP_POST, onPhysicalRecovery);
+  http.on("/api/v1/pair/boot/stage", HTTP_POST, onPhysicalStage);
+  http.on("/api/v1/pair/boot/status", HTTP_GET, onPhysicalStatus);
+  http.on("/api/v1/pair/boot/commit", HTTP_POST, onPhysicalCommit);
   http.on("/api/v1/telemetry", HTTP_GET, onTelemetry);
   http.on("/api/v1/details", HTTP_GET, onDetails);
   http.on("/api/v1/jk/write-arm", HTTP_POST, onArmParameterWrite);
@@ -570,38 +735,34 @@ void loop() {
     delay(150);
     ESP.restart();
   }
-  // GPIO0 is a strapping pin: press only AFTER startup.
-  // 4s opens recovery without disrupting Wi-Fi, 10s opens the setup AP.
-  // Neither action reveals setupCode over HTTP.
+  // GPIO0 is a strapping pin; BOOT MUST be pressed only after power-up.
+  // First 4-second press opens a 120-second one-client physical pairing AP.
+  // After the Android app stages a new code, a SECOND 2-second press confirms
+  // that a human is still physically present. No old code/USB is needed.
   if (digitalRead(SETUP_BUTTON) == LOW) {
     if (!buttonPressedAt) buttonPressedAt = millis();
-    const uint32_t heldFor = (uint32_t)(millis() - buttonPressedAt);
-    if (!recoveryHoldTriggered && !setupMode && WiFi.status() == WL_CONNECTED &&
-        heldFor >= RECOVERY_HOLD_MS) {
-      recoveryHoldTriggered = true;
-      recoveryWindowAt = millis();
-      recoveryAttempts = 0;
-      Serial.println("[Pairing] Physical confirmation: LAN recovery open for 45 seconds.");
+  } else if (buttonPressedAt) {
+    const uint32_t heldFor=(uint32_t)(millis()-buttonPressedAt);
+    buttonPressedAt=0;
+    if (physicalPairWindow() && physicalStaged && !physicalConfirmed &&
+        heldFor>=PHYSICAL_CONFIRM_HOLD_MS && heldFor<SETUP_HOLD_MS) {
+      physicalConfirmed=true;
+      physicalConfirmedAt=millis();
+      Serial.println("[Pairing] Second BOOT confirmation received for pending device.");
+    } else if (!physicalPairing && heldFor>=RECOVERY_HOLD_MS &&
+               heldFor<SETUP_HOLD_MS) {
+      wifiIssue="physical_pairing";
+      startPhysicalPairing();
+    } else if (!physicalPairing && heldFor>=SETUP_HOLD_MS) {
+      wifiIssue="manual_setup";
+      startSetup(false);
     }
-    if (!setupHoldTriggered && heldFor >= SETUP_HOLD_MS) {
-      if (!setupMode) {
-        setupHoldTriggered = true;
-        recoveryWindowAt = 0;
-        wifiIssue = "manual_setup";
-        startSetup(false);
-      } else if (automaticSetupFallback) {
-        // User intentionally requests to remain in provisioning AP.
-        // Cancel auto-retries, do not rotate the code or erase saved Wi-Fi.
-        setupHoldTriggered = true;
-        automaticSetupFallback = false;
-        wifiIssue = "manual_setup";
-        Serial.println("[WiFi] Manual setup selected: automatic retries paused.");
-      }
-    }
-  } else {
-    buttonPressedAt = 0;
-    recoveryHoldTriggered = false;
-    setupHoldTriggered = false;
+  }
+  // The pairing AP must NEVER remain open indefinitely.
+  if (physicalPairing && (uint32_t)(millis()-physicalStartedAt)>=PHYSICAL_PAIR_WINDOW_MS) {
+    Serial.println("[Pairing] Physical window expired; shutting down open AP.");
+    if(prefs.getString("ssid","").isEmpty())startSetup(false);
+    else connectHome();
   }
   if (recoveryWindowAt && !physicalWindowOpen()) {
     recoveryWindowAt = 0;
