@@ -88,12 +88,14 @@ class JkGlobalOverview(private val ctx: Context) : LinearLayout(ctx) {
         val live=entries.filter { it.optBoolean("available") && it.optJSONObject("values") != null }
         val allLive=live.size == entries.size && entries.isNotEmpty()
         val vals=live.mapNotNull { it.optJSONObject("values") }
-        val haveCap=vals.isNotEmpty() && vals.all { it.optDouble("nominal_capacity_ah",0.0)>0.0 }
-        val soc=if(haveCap) {
+        val haveCap=allLive && vals.isNotEmpty() && vals.all { it.optDouble("nominal_capacity_ah",0.0)>0.0 }
+        val soc=if(!allLive) null else if(haveCap) {
             val total=vals.sumOf{it.optDouble("nominal_capacity_ah")}
             (vals.sumOf{it.optDouble("soc_pct")*it.optDouble("nominal_capacity_ah")}/total)
                 .toInt().coerceIn(0,100)
-        } else null
+        } else if(vals.all { it.has("soc_pct") })
+            vals.map{it.optInt("soc_pct")}.average().toInt().coerceIn(0,100)
+        else null
         fun average(key:String,unit:String,dec:Int):String {
             if(vals.isEmpty() || vals.any {!it.has(key)})return "—"
             return String.format(Locale.FRANCE,"%." + dec + "f %s",
@@ -123,7 +125,7 @@ class JkGlobalOverview(private val ctx: Context) : LinearLayout(ctx) {
         }
         line.addView(metrics,LayoutParams(0,-2,1f))
         board.addView(line)
-        board.addView(text(if(allLive) "Données fraîches · Moyennes des BMS, pas une somme."
+        board.addView(text(if(allLive) "Données fraîches · ${if(haveCap) "SOC pondéré" else "SOC moyen"} · V/A/W moyens."
           else "Mesures incomplètes : un ou plusieurs BMS sont hors ligne.",11f,muted))
         if(alarmed.isNotEmpty()){
             for(bms in alarmed){
