@@ -174,7 +174,7 @@ void startSetup(bool automaticFallback = false) {
   Serial.println();
   Serial.println("========= SMART JK SETUP =========");
   Serial.printf("SSID: %s\n", setupSsid.c_str());
-  Serial.printf("Wi-Fi password AND setup code: %s\n", setupCode.c_str());
+  Serial.println("Secret hidden; use physical BOOT to pair without USB.");
   Serial.println("Connect from APK only while pairing is active.");
   Serial.printf("Setup API: http://%s\n", WiFi.softAPIP().toString().c_str());
   Serial.println("==================================");
