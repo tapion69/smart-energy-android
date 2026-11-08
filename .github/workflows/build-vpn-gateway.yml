@@ -32,7 +32,6 @@ jobs:
           git -C /tmp/tailtiny checkout --detach d1ec2ae45e252e8dc737452be0f6afe1ac2e3edb
           mkdir -p firmware/vpn-gateway/components
           cp -a /tmp/tailtiny/components/tailtiny firmware/vpn-gateway/components/
-          cp -a /tmp/tailtiny/components/wireguard_lwip firmware/vpn-gateway/components/
           echo "TailTiny pinned commit: $(git -C /tmp/tailtiny rev-parse HEAD)"
       - name: ESP-IDF 5.3.2 build (no customer credentials)
         uses: espressif/esp-idf-ci-action@v1
