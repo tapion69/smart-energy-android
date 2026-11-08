@@ -80,6 +80,11 @@ class BatteryDashboardCard(context: Context) : LinearLayout(context) {
         val cells = card()
         cells.addView(txt("Cellules", 18f, true))
         cells.addView(cellStats, LayoutParams(-1, -2).apply { topMargin = d(8) })
+        val legend = LinearLayout(context).apply { orientation = HORIZONTAL }
+        legend.addView(txt("● Minimum", 11f, true, cellLow))
+        legend.addView(txt("● Maximum", 11f, true, cellHigh),
+            LayoutParams(-2, -2).apply { leftMargin = d(14) })
+        cells.addView(legend, LayoutParams(-1, -2).apply { topMargin = d(7) })
         cells.addView(divider(), LayoutParams(-1, d(1)).apply {
             topMargin = d(10); bottomMargin = d(10)
         })
@@ -251,8 +256,9 @@ class BatteryDashboardCard(context: Context) : LinearLayout(context) {
             view.contentDescription = "Cellule $number : " +
                 (if (v.isFinite()) String.format(Locale.FRANCE, "%.3f volts", v) else "indisponible") +
                 when (role) { -1 -> ", tension minimale"; 1 -> ", tension maximale"; else -> "" }
-            bar.progress = if (v.isFinite())
+            val nextProgress = if (v.isFinite())
                 (((v - 2.5) / 1.2).coerceIn(0.0, 1.0) * 1000).toInt() else 0
+            bar.setProgress(nextProgress, started && ValueAnimator.areAnimatorsEnabled())
             if (started && currentRole == role) return
             val target = when (role) {
                 -1 -> cellLow
