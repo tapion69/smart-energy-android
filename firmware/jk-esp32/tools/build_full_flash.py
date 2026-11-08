@@ -35,8 +35,10 @@ def assemble():
     out = bytearray(b"\xFF" * spans[-1][1])
     for start, end, path in spans:
         data = path.read_bytes()
-        if len(data) == 0 or data[0] == 0xFF:
-            raise RuntimeError(f"Missing/invalid segment header {path}")
+        if len(data) == 0:
+            raise RuntimeError(f"Empty flash segment {path}")
+        if start in (0x1000, 0x10000) and data[0] != 0xE9:
+            raise RuntimeError(f"Invalid Espressif image at 0x{start:X}: {path}")
         out[start:end] = data
         print(f"0x{start:06X}-0x{end:06X} {path.name} ({len(data)} bytes)")
     OUTPUT.write_bytes(out)
