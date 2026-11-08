@@ -151,3 +151,15 @@ Voir `docs/ACCES-DISTANT-VPN.md`.
 - Ne pas installer si le lecteur JK actuel ne rejoint plus le réseau et que le code NVS a déjà été remplacé : il faut d'abord en récupérer le code actif de manière non destructive.
 
 **Signature / migration test :** l'APK de test 0.3.0 utilise le suffixe `vpntrial30`, distinct de `vpntrial24`. Les tests GitHub Actions peuvent employer des clés debug différentes ; installer la 0.3.0 à côté de la 0.2.4 évite l'obligation de désinstaller cette dernière. La nouvelle APK doit être associée une fois au lecteur JK, sans toucher à la configuration des BMS. Un APK release réellement mise à jour nécessite une signature stable personnelle ou configurée en CI.
+
+## 0.3.1-dev : association avec BOOT sans connaître le code
+
+1. Flasher le nouveau lecteur JK en APP-ONLY à 0x10000, sans Erase Flash, si l'appareil est encore dans une version antérieure. Ne pas maintenir BOOT au démarrage : risque de mode flash.
+2. Démarrer le lecteur, puis maintenir BOOT **4 secondes** et relâcher. Le point d'accès temporaire SmartJK-Setup-XXXXXX n'accepte qu'un client pendant 120 secondes.
+3. Dans l'APK 0.3.1, « Trouver un ESP32 proche », puis « Associer avec BOOT (première fois / code oublié) ». Choisir **un code ASCII de 8 à 32 caractères sans espaces**. Renseigner le Wi-Fi domestique 2,4 GHz et son mot de passe sur un ESP32 vierge, ou laisser les deux champs vides pour garder l'ancien Wi-Fi.
+4. Quand l'application annonce la demande préparée, maintenir BOOT **2 secondes supplémentaires**, relâcher, puis choisir « Après le 2e BOOT : confirmer l'association » dans l'application.
+5. L'APK n'enregistre le code dans Android Keystore qu'après confirmation du firmware. Le lecteur redémarre sans perte des MAC JK.
+
+Un code **8 caractères** fonctionne aussi pour les quelques paramètres pilotes éditables en local. Un code long et difficile à deviner est recommandé. Les seuils de protection restent verrouillés. L'ESP32 Tailscale ne change pas et reste en lecture seule ; pour qu'il continue à lire le JK, le code JK devra être remis à la même valeur que celle programmée dans le VPN et l'adresse IP JK devra être retrouvée.
+
+**Sécurité :** l'AP temporaire est ouvert pendant la procédure et les données d'association de ce prototype transitent encore sans chiffrement applicatif ; deux validations physiques n'empêchent pas une attaque radio avancée. Ne pas présenter cette procédure comme un appairage durci de production avant protocole chiffré et vérification d'identité du lecteur.
