@@ -33,6 +33,8 @@ struct Device {
   uint32_t badFrames = 0;
   uint32_t rejectedMeasurements = 0;
   uint32_t rejectedIdentityFrames = 0;
+  uint32_t seenType3Frames = 0;
+  char lastIdentityFailure[36] = {};
   bool bleConnected = false;
   uint32_t connections = 0;
   uint32_t disconnections = 0;
@@ -71,13 +73,27 @@ void onValidatedFrame(const uint8_t *frame, const smartjk::Reading *basic, void 
   } else if (type == 1) {
     if (!jkextra::decodeSettings(frame, settings)) return;
   } else if (type == 3) {
-    if (!jkextra::decodeInfo(frame, info)) {
-      portENTER_CRITICAL(&stateMux);
-      if (index < configured && strcmp(devices[index].mac, activeMac) == 0)
-        devices[index].rejectedIdentityFrames++;
-      portEXIT_CRITICAL(&stateMux);
-      return;
+    // Keep only safe classification counters, never raw type-3 frame bytes:
+    // those frames may include BMS passcodes and personal fields.
+    char prefix[17] = {};
+    jkextra::readPrintable(frame, 6, 16, prefix, sizeof(prefix));
+    const char *rejectHint = jkextra::likelyJKModel(prefix) ?
+      "jk_prefix_versions_unusable" :
+      ((frame[6] == '{' || frame[6] == '"') ?
+       "json_like_or_shifted_layout" : "unknown_model_prefix");
+    const bool recognized = jkextra::decodeInfo(frame, info);
+    portENTER_CRITICAL(&stateMux);
+    if (index < configured && strcmp(devices[index].mac, activeMac) == 0) {
+      Device &item = devices[index];
+      item.seenType3Frames++;
+      if (!recognized) {
+        item.rejectedIdentityFrames++;
+        strncpy(item.lastIdentityFailure, rejectHint, sizeof(item.lastIdentityFailure)-1);
+        item.lastIdentityFailure[sizeof(item.lastIdentityFailure)-1] = 0;
+      }
     }
+    portEXIT_CRITICAL(&stateMux);
+    if (!recognized) return;
   } else {
     return;
   }
@@ -527,10 +543,16 @@ void fillDetails(JsonDocument &out) {
       settings["reason"] = "no_fresh_crc_checked_settings_frame";
     }
     JsonObject info = d["info"].to<JsonObject>();
-    const bool infoAvailable = item.info.confirmed && item.lastInfoMs &&
+    const bool cachedIdentityPresent = item.info.confirmed && item.lastInfoMs;
+    const bool identityIntegrityOk = jkextra::usableIdentity(item.info);
+    const bool infoAvailable = cachedIdentityPresent && identityIntegrityOk &&
       (uint32_t)(now - item.lastInfoMs) < 3600000;
     info["available"] = infoAvailable;
+    info["decoder_revision"] = "jk02-info-strict-3";
+    info["identity_integrity_ok"] = identityIntegrityOk;
+    info["type3_frames_seen"] = item.seenType3Frames;
     info["unrecognized_frames"] = item.rejectedIdentityFrames;
+    if (item.lastIdentityFailure[0]) info["last_rejection"] = item.lastIdentityFailure;
     if (infoAvailable) {
       info["age_seconds"] = (now - item.lastInfoMs) / 1000;
       const jkextra::Info &v = item.info;
@@ -544,9 +566,11 @@ void fillDetails(JsonDocument &out) {
       info["power_on_count"] = v.powerOnCount;
       info["uptime_hours"] = v.uptimeS / 3600.0f;
     } else {
-      info["reason"] = item.rejectedIdentityFrames > 0 ?
-          "unrecognized_type3_identity_layout" :
-          "no_fresh_crc_checked_device_info_frame";
+      info["reason"] = cachedIdentityPresent && !identityIntegrityOk ?
+          "identity_record_integrity_failed" :
+          (item.rejectedIdentityFrames > 0 ?
+           "unrecognized_type3_identity_layout" :
+           "no_fresh_crc_checked_device_info_frame");
     }
   }
 }
