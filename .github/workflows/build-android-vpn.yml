@@ -54,6 +54,8 @@ jobs:
           /tmp/test-jk-write
           g++ -std=c++11 -Wall -Wextra -Werror firmware/jk-esp32/tests/test_setup_code_policy.cpp -o /tmp/test-jk-code-policy
           /tmp/test-jk-code-policy
+          g++ -std=c++11 -Wall -Wextra -Werror firmware/jk-esp32/tests/test_boot_pair_policy.cpp -o /tmp/test-jk-boot-pair
+          /tmp/test-jk-boot-pair
           python firmware/jk-esp32/tests/test_json_ownership.py
       - name: Build classic ESP32 reader firmware
         run: pio run -d firmware/jk-esp32
