@@ -12,7 +12,7 @@
 - Écritures pilotes limitées aux options affichage, veille, enregistrement périodique et mode flottement. **Seuils de protection, MOS et sécurité thermique non modifiables** dans cette version. Test préalable impératif.
 
 ### APK Android
-- **Version 0.3.0-dev, code 15**, conserve l'identité de l'APK de test 0.2.4 et ses données chiffrées si la signature est compatible.
+- **Version 0.3.0-dev, code 15**, installée **côte à côte** avec la 0.2.4 de test (`.vpntrial30`), pour ne pas supprimer l'ancien Keystore/association ni entrer en conflit de signature avec les APK GitHub Actions. La nouvelle APK devra être associée une fois au JK après récupération de l'accès.
 - Page Accueil pour 2 à 4 JK : jauge SOC global pondéré selon les capacités reçues, Tension moyenne, Watts moyens, Ampères moyens, Alarmes avec lien vers la batterie concernée. Les données périmées ne comptent pas.
 - Onglets Accueil / BMS 1–4, avec conservation des cartes Batterie, Détails, Paramètres individuelles existantes.
 - Paramètres autorisés affichent une action Modifier, avec revue ancien/nouveau, confirmation, envoi unique et attente de confirmation par lecture du BMS.
