@@ -1,5 +1,18 @@
 # Journal des modifications
 
+## 0.2.4-dev Android + 0.2.2-dev JK ESP32 — correctifs cellules/alarmes et identité (2026-11-08)
+
+- **APK Android** : corrige les couleurs des cellules : une seule cellule rouge (minimum) et une seule bleue (maximum), déterminées par leurs **numéros de cellule**, même si plusieurs tensions sont égales au millivolt. Si toutes les tensions sont égales, pas de faux min/max. Transition animée conservée.
+- L'APK privilégie `cell_min_number` et `cell_max_number` fournis par le firmware JK 0.2.2 ; elle utilise un calcul déterministe par première cellule à l'extrême pour les anciennes versions JK 0.2.0.
+- **Alarmes BMS** : « Aucune alarme active » s'affiche dès le premier rapport avec masque d'erreur à zéro ; correction de l'état « En attente » bloqué.
+- **Informations du BMS** : explique clairement pourquoi une identité JK 0x03 est masquée, sans énormes lignes illisibles, et affiche à défaut le profil de mesures et les cellules actives réellement confirmés. Ne présente pas le profil JK02 comme le modèle matériel exact.
+- **Firmware JK 0.2.2-dev** : publie les numéros physiques min/max depuis les octets JK02 native max/min (24S : 62/63, 32S : 78/79) après vérification qu'ils correspondent réellement à la trame ; utilise un calcul de secours en cas d'index invalide. Intègre aussi les contrôles de trame d'identité introduits dans JK 0.2.1.
+- Le décodeur d'identité 0x03 demeure expérimental : un modèle/numéro de série exact ne peut pas être affiché tant que la trame réelle du BMS n'est pas reconnue. Aucune trame brute ni mot de passe du BMS n'est exposé.
+- APK de test installée séparément sous `.vpntrial24` pour préserver les autres installations et leurs clés Android. Réassociation locale de ce paquet de test nécessaire une fois.
+- Le firmware JK 0.2.2 **APP-ONLY** s'écrit à l'offset `0x10000` **sans effacement NVS** sur l'ESP32 JK classique. Il n'est pas nécessaire pour corriger l'accueil Android ; ne pas flasher le deuxième ESP32 VPN.
+- Tests JK synthétiques 24S/32S, indices natifs/incohérents, tests JVM de sélection des cellules et compilation Android/ESP32 réussis en CI.
+
+
 ## 0.2.3-dev — accueil JK enrichi, cellules dynamiques et icône Smart Energy (2026-11-08)
 
 - **Android APK expérimentale** : intègre le logo Smart Energy approuvé, adapté au petit format d'icône Android (éléments maison/solaire/batterie/VPN) et affiché également dans l'en-tête.
