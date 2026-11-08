@@ -133,5 +133,21 @@ int main() {
   memcpy(two + 300, second, 300);
   assert(stream.append(two, sizeof two, assembled));
   assert(assembled.layout == 32 && stream.validFrames == 2);
+  // Four independent streams with interleaved fragments must never mix.
+  Assembler parallel[4];
+  uint8_t packets[4][300];
+  Reading perDevice[4] = {};
+  for (int i=0;i<4;++i) {
+    memcpy(packets[i],first,sizeof first);
+    packets[i][173]=(uint8_t)(60+i);
+    checksum(packets[i]);
+    assert(!parallel[i].append(packets[i],47,perDevice[i]));
+  }
+  for (int i=3;i>=0;--i) {
+    assert(parallel[i].append(packets[i]+47,253,perDevice[i]));
+    assert(parallel[i].validFrames==1);
+    assert(perDevice[i].soc==60+i);
+  }
+  printf("JK02 4-stream interleaved framing regression passed\n");
   printf("JK02 24S/32S parser + CRC + fragmentation tests passed\n");
 }
