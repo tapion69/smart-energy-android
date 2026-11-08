@@ -1422,7 +1422,7 @@ class MainActivity : Activity() {
             when (currentTab) {
                 0 -> dashboardCards[mac]?.bind(i, item)
                 1 -> advancedCards[mac]?.measurements(i, item)
-                2 -> advancedCards[mac]?.settings(i, detailForMac(mac))
+                2 -> advancedCards[mac]?.settings(i, detailForMac(mac), item)
             }
         }
         val suffix = when(currentTab) {
