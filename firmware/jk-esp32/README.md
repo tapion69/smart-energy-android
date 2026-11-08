@@ -114,3 +114,25 @@ L'API authentifiée `GET /api/v1/details` renvoie les paramètres et information
 ## 0.2.1-dev — validation stricte de l'identité BMS
 
 Certaines trames de type 0x03 ont un checksum correct, mais ne suivent pas le schéma des informations d'identité attendu. Le prototype affichait alors des fragments ressemblant à du JSON et des caractères erronés dans les champs nom/version/série. La v0.2.1 vérifie maintenant le préfixe du modèle JK/PB et les caractères autorisés dans chaque champ. Si la disposition de trame n'est pas reconnue, l'identification entière reste **indisponible** ; les mesures et paramètres des autres types ne sont pas touchés. Aucun champ de code d'accès du BMS n'est lu ni renvoyé.
+
+## 0.2.3-dev — identité JK : vérification secondaire et diagnostic minimal
+
+Un retour sur JK V19 a montré `info.available=true` avec modèle absent et
+versions incohérentes, alors que le firmware indiquait 0.2.2-dev. Cette
+combinaison contredit les gardes du code source 0.2.2 et peut refléter un
+binaire de construction différente ou une altération de l'état en mémoire.
+
+La v0.2.3 ajoute un second contrôle de cohérence avant l'API, avec
+`identity_integrity_ok`, `decoder_revision`, `type3_frames_seen`,
+`unrecognized_frames` et `last_rejection`. L'endpoint /api/v1/info expose
+`identity_decoder_revision=jk02-info-strict-3` pour reconnaître le binaire
+réellement exécuté, au-delà de son seul numéro de version. Une identité dont
+le modèle ou les versions ne sont pas plausibles est déclarée indisponible.
+
+Les diagnostics ne contiennent **aucun octet brut** de la trame 0x03, code
+BMS, numéro de série, MAC ou mot de passe. Le BLE persistant, les mesures
+0x02, les paramètres 0x01, l'APK et le second ESP32 VPN restent inchangés.
+Ce correctif ne reconstruit pas encore une variante de trame 0x03 inconnue :
+il empêche d'en certifier à tort les données et fournit un diagnostic non
+sensible pour la suite. Ne flasher l'APP-ONLY JK à 0x10000 sans Erase Flash
+qu'après réussite des tests et sauvegarde de la configuration.
