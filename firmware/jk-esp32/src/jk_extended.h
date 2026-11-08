@@ -208,7 +208,7 @@ struct Info {
   char hardware[9] = {};
   char software[9] = {};
   char deviceName[17] = {};
-  char manufactureDate[9] = {};
+  char manufactureDate[11] = {}; // Derived YYYY-MM-DD, not a device constant
   char serialNumber[12] = {};
   uint32_t powerOnCount = 0;
   uint32_t uptimeS = 0;
@@ -226,6 +226,13 @@ inline void readPrintable(const uint8_t *f, size_t offset, size_t len,
     dest[n] = char(ch);
   }
   dest[n] = 0;
+  // Home Assistant's JK02 decoder uses ASCII .strip() on each fixed-width
+  // field. Some BMS pad versions/model with spaces instead of NUL bytes.
+  // Trim these padding bytes before validating; never substitute a value.
+  while (n && dest[n - 1] == ' ') dest[--n] = 0;
+  size_t first = 0;
+  while (first < n && dest[first] == ' ') ++first;
+  if (first) memmove(dest, dest + first, n - first + 1);
 }
 // JK variants may send a CRC-valid type-03 frame with different content
 // layouts (including printable JSON fragments). A valid checksum proves the
@@ -287,20 +294,30 @@ inline bool decodeInfo(const uint8_t *f, Info &out) {
   readPrintable(f,22,8,info.hardware,sizeof(info.hardware));
   readPrintable(f,30,8,info.software,sizeof(info.software));
   readPrintable(f,46,16,info.deviceName,sizeof(info.deviceName));
-  readPrintable(f,78,8,info.manufactureDate,sizeof(info.manufactureDate));
+  char dateRaw[9] = {};
+  readPrintable(f,78,8,dateRaw,sizeof(dateRaw));
   readPrintable(f,86,11,info.serialNumber,sizeof(info.serialNumber));
 
   if (!safeIdentifier(info.hardware, 2)) info.hardware[0] = 0;
   if (!safeIdentifier(info.software, 2)) info.software[0] = 0;
   if (!safeIdentifier(info.deviceName, 2, true)) info.deviceName[0] = 0;
   if (!safeIdentifier(info.serialNumber, 5)) info.serialNumber[0] = 0;
-  // Date is usually YYMMDD. If not precisely recognized, omit it.
-  const size_t dateLen = strlen(info.manufactureDate);
-  bool dateOk = dateLen==6 || dateLen==8;
-  for (size_t i=0; i<dateLen; ++i)
-    if (info.manufactureDate[i]<'0' || info.manufactureDate[i]>'9')
-      dateOk=false;
-  if (!dateOk) info.manufactureDate[0] = 0;
+  // Match Home Assistant: derive ISO 8601 from a verified YYMMDD field.
+  // This is read from the real type-3 BMS frame, never a hardcoded date.
+  if (strlen(dateRaw) == 6) {
+    bool digits = true;
+    for (size_t n = 0; n < 6; ++n)
+      if (dateRaw[n] < '0' || dateRaw[n] > '9') digits = false;
+    if (digits) {
+      const int month = (dateRaw[2] - '0') * 10 + dateRaw[3] - '0';
+      const int day = (dateRaw[4] - '0') * 10 + dateRaw[5] - '0';
+      if (month >= 1 && month <= 12 && day >= 1 && day <= 31) {
+        snprintf(info.manufactureDate, sizeof(info.manufactureDate),
+                 "20%c%c-%c%c-%c%c",
+                 dateRaw[0],dateRaw[1],dateRaw[2],dateRaw[3],dateRaw[4],dateRaw[5]);
+      }
+    }
+  }
   const uint32_t uptimeS = smartjk::u32(f,38);
   const uint32_t powerOn = smartjk::u32(f,42);
   // A dubious field must not be presented as a confirmed counter.
