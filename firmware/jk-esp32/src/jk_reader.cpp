@@ -418,8 +418,10 @@ void fillTelemetry(JsonDocument &out) {
     item = devices[i];
     portEXIT_CRITICAL(&stateMux);
     JsonObject device = list.add<JsonObject>();
-    device["mac"] = item.mac;
-    device["state"] = item.state;
+    // item is a local copy. Force JsonDocument-owned strings before return.
+    // ArduinoJson 7.4.2 may otherwise retain a pointer to a const char array.
+    device["mac"] = String(item.mac);
+    device["state"] = String(item.state);
     device["ble_connected"] = item.bleConnected;
     device["connections"] = item.connections;
     device["disconnections"] = item.disconnections;
@@ -515,7 +517,7 @@ void fillDetails(JsonDocument &out) {
     item = devices[i];
     portEXIT_CRITICAL(&stateMux);
     JsonObject d = list.add<JsonObject>();
-    d["mac"] = item.mac;
+    d["mac"] = String(item.mac); // Owned by the JSON document
     JsonObject settings = d["settings"].to<JsonObject>();
     const bool available = item.settings.confirmed && item.lastSettingsMs &&
       (uint32_t)(now - item.lastSettingsMs) < 1800000;
@@ -548,21 +550,24 @@ void fillDetails(JsonDocument &out) {
     const bool infoAvailable = cachedIdentityPresent && identityIntegrityOk &&
       (uint32_t)(now - item.lastInfoMs) < 3600000;
     info["available"] = infoAvailable;
-    info["decoder_revision"] = "jk02-info-strict-3";
+    info["decoder_revision"] = "jk02-info-json-owned-4";
     info["identity_integrity_ok"] = identityIntegrityOk;
     info["type3_frames_seen"] = item.seenType3Frames;
     info["unrecognized_frames"] = item.rejectedIdentityFrames;
-    if (item.lastIdentityFailure[0]) info["last_rejection"] = item.lastIdentityFailure;
+    if (item.lastIdentityFailure[0])
+      info["last_rejection"] = String(item.lastIdentityFailure);
     if (infoAvailable) {
       info["age_seconds"] = (now - item.lastInfoMs) / 1000;
+      // All fields below originate from type-3 BLE data. Copy each value
+      // into the JSON allocator: item is destroyed before respond() serializes.
       const jkextra::Info &v = item.info;
-      if (v.vendor[0]) info["model"] = v.vendor;
-      if (v.deviceName[0]) info["name"] = v.deviceName;
-      if (v.hardware[0]) info["hardware_version"] = v.hardware;
-      if (v.software[0]) info["software_version"] = v.software;
-      if (v.manufactureDate[0]) info["manufacturing_date"] = v.manufactureDate;
+      if (v.vendor[0]) info["model"] = String(v.vendor);
+      if (v.deviceName[0]) info["name"] = String(v.deviceName);
+      if (v.hardware[0]) info["hardware_version"] = String(v.hardware);
+      if (v.software[0]) info["software_version"] = String(v.software);
+      if (v.manufactureDate[0]) info["manufacturing_date"] = String(v.manufactureDate);
       // Never include passcodes or user data; serial is local read-only.
-      if (v.serialNumber[0]) info["serial_number"] = v.serialNumber;
+      if (v.serialNumber[0]) info["serial_number"] = String(v.serialNumber);
       info["power_on_count"] = v.powerOnCount;
       info["uptime_hours"] = v.uptimeS / 3600.0f;
     } else {
