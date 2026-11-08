@@ -94,6 +94,22 @@ En revanche, l'action **« Code perdu ? Réassocier avec BOOT »** a un effet r�
 - À prévoir : diagnostic séparant `réseau inaccessible`, `code refusé`, `VPN bloquant LAN`, `IP modifiée`, `configuration passerelle VPN désynchronisée`, et synchronisation **sécurisée** des autorisations sans diffuser ou réinjecter les secrets dans des journaux.
 - Ne pas faire de rotation automatique de code au simple basculement réseau. Prévoir une procédure explicite pour reprovisionner le deuxième ESP32 VPN lors d'un renouvellement de code JK.
 
+## Présentation validée V4 — alarmes en quatrième métrique
+
+- Carte globale unique au style de la page Batterie existante : jauge de **SOC global** à gauche, et **4 métriques encadrées** à droite dans cet ordre : **Tension globale**, **Watts moyens**, **Ampères moyens**, **Alarmes**.
+- Ne plus mettre un grand panneau alarmes séparé. La quatrième métrique indique `Aucune` si tous les BMS sont disponibles et sans alarme, `À vérifier` s'il manque des données, ou le nombre d'alarmes et un lien individuel vers les BMS concernés.
+- Les alarmes des pages individuelles restent présentes. Une maquette V4 HTML locale indépendante a été construite et testée (boutons de simulation alarme/réinitialisation et navigation vers un BMS). Aucun firmware ni APK réel modifié à cette étape.
+
+## Constat terrain — repli en point d'accès SmartJK-Setup
+
+Une capture Wi-Fi téléphone montre le point d'accès `SmartJK-Setup-XXXXXX` visible et le téléphone sur une Livebox 5 GHz. Dans `firmware/jk-esp32/src/main.cpp`, l'ESP32 ouvre automatiquement `startSetup()` lorsque sa connexion Wi-Fi de station a disparu plus de 30 s ou si ses identifiants SSID n'ont pas été conservés. La présence du point d'accès est donc un **indice fort de repli en mode configuration**, différent d'une erreur `invalid_setup_code`.
+
+La modification du code via `POST /api/v1/access` ne change que la préférence `setupCode` et ne redémarre pas le système tant que `setupMode=false`. L'ancien code ne fonctionne plus, mais le changement de code **ne doit pas, en lui-même, changer le SSID Wi-Fi sauvegardé**. Un problème de réseau 2,4 GHz, d'accès Livebox, de mot de passe Wi-Fi ou une perte de connexion doit être vérifié séparément. L'ESP32 classique ne se connecte pas à un SSID 5 GHz uniquement ; l'usage d'une Livebox à SSID séparés doit exposer un réseau 2,4 GHz.
+
+Procédure smartphone : vérifier Tailscale désactivé, connexion Wi-Fi domestique, mode configuration `SmartJK-Setup-...` visible et pouvoir suivre dans l'APK la configuration réseau sans tourner le code à nouveau. Vérifier la disponibilité du SSID 2,4 GHz et son mot de passe. Ne pas utiliser BOOT « Réassocier » comme remède générique car cette opération **renouvelle le code** et peut désynchroniser l'ESP32 VPN.
+
+À améliorer : diagnostiquer clairement `wifi_join_timeout`, `wifi_link_lost`, `ip_changed`, `code_refused`, `vpn_lan_route_unavailable` dans l'APK, sans imposer de réassociation et sans exposer des secrets.
+
 ## Non-régression et séparation des produits
 
 - L'APK Android actuelle ne doit pas perdre ses données, le firmware ESP32 JK connu ne doit pas perdre le Wi-Fi ni les adresses enregistrées.
