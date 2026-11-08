@@ -1,5 +1,14 @@
 # Journal des modifications
 
+## 0.2.3-dev ESP32 JK — identité vérifiée et diagnostic de trames (2026-11-08)
+
+- Identité BMS: validation supplémentaire du cache avant réponse API, pas de modèle absent avec `available=true`.
+- Diagnostics strictement non sensibles `identity_decoder_revision`, `decoder_revision`, `identity_integrity_ok`, `type3_frames_seen`, `last_rejection` et `unrecognized_frames`. Aucun contenu brut de trame 0x03, mot de passe ou numéro de série dans ces diagnostics.
+- Contrôle borné des chaînes pour éviter toute lecture mémoire hors limites si un enregistrement en cache est altéré.
+- Tests de régression pour identités JSON incohérentes, versions incorrectes, cache sans modèle et chaînes non terminées.
+- Modifie uniquement le lecteur ESP32 JK et ses tests/docs ; l'application Android 0.2.4, les données 0x01/0x02 et le deuxième ESP32 Tailscale ne changent pas.
+- Correctif conservateur : **ne reconstitue pas encore** les véritables champs d'une variante de trame 0x03 inconnue. Ne flasher l'APP-ONLY qu'après validation CI et vérification de sa configuration.
+
 ## 0.2.4-dev Android + 0.2.2-dev JK ESP32 — correctifs cellules/alarmes et identité (2026-11-08)
 
 - **APK Android** : corrige les couleurs des cellules : une seule cellule rouge (minimum) et une seule bleue (maximum), déterminées par leurs **numéros de cellule**, même si plusieurs tensions sont égales au millivolt. Si toutes les tensions sont égales, pas de faux min/max. Transition animée conservée.
