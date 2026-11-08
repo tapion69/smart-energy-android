@@ -1,5 +1,7 @@
 package fr.smartenergy.android
 
+import android.animation.ArgbEvaluator
+import android.animation.ValueAnimator
 import android.content.Context
 import android.content.res.ColorStateList
 import android.graphics.Canvas
@@ -24,6 +26,9 @@ class BatteryDashboardCard(context: Context) : LinearLayout(context) {
     private val accent = Color.rgb(59, 228, 173)
     private val panel = Color.rgb(22, 35, 53)
     private val track = Color.rgb(48, 66, 84)
+    private val cellLow = Color.rgb(255, 105, 115)
+    private val cellHigh = Color.rgb(95, 170, 255)
+    private val alarmColor = Color.rgb(255, 182, 98)
 
     private val deviceName = txt("Batterie JK", 17f, true, accent)
     private val deviceAddress = txt("", 11f, false, muted)
@@ -39,6 +44,12 @@ class BatteryDashboardCard(context: Context) : LinearLayout(context) {
     private val t1 = txt("—", 14f, true)
     private val t2 = txt("—", 14f, true)
     private val tMos = txt("—", 14f, true)
+    private val t3 = txt("—", 14f, true)
+    private val t4 = txt("—", 14f, true)
+    private val t5 = txt("—", 14f, true)
+    private val alarmSummary = txt("En attente", 13f, true, muted)
+    private val alarmDetails = LinearLayout(context).apply { orientation = VERTICAL }
+    private var lastAlarmSignature = ""
     private val cycles = txt("—", 22f, true)
     private val contentArea = LinearLayout(context).apply { orientation = VERTICAL }
     private val bars = ArrayList<CellItem>()
@@ -75,23 +86,44 @@ class BatteryDashboardCard(context: Context) : LinearLayout(context) {
         cells.addView(grid)
         contentArea.addView(cells, LayoutParams(-1, -2).apply { bottomMargin = d(12) })
 
-        val footer = LinearLayout(context).apply { orientation = HORIZONTAL }
+        // Full-width temperatures prevent the narrow columns clipping on phones.
         val temperatures = card()
-        temperatures.addView(txt("Températures", 15f, true))
-        temperatures.addView(temperatureRow("T1", t1))
-        temperatures.addView(temperatureRow("T2", t2))
-        temperatures.addView(temperatureRow("MOS", tMos))
-        footer.addView(temperatures, LayoutParams(0, -2, 1f).apply { rightMargin = d(5) })
-        val info = card()
-        info.addView(txt("Cycles", 15f, true))
-        info.addView(cycles, LayoutParams(-1, -2).apply { topMargin = d(13) })
-        info.addView(divider(), LayoutParams(-1, d(1)).apply {
-            topMargin = d(13); bottomMargin = d(12)
-        })
-        info.addView(txt("Lecture seule", 12f, true, accent))
-        info.addView(txt("Mesures expérimentales", 11f, false, muted))
-        footer.addView(info, LayoutParams(0, -2, 1f).apply { leftMargin = d(5) })
-        contentArea.addView(footer)
+        temperatures.addView(txt("Températures · toutes les sondes", 17f, true))
+        temperatures.addView(txt("Une sonde absente reste « — », jamais 0 °C.", 11f, false, muted),
+            LayoutParams(-1, -2).apply { topMargin = d(3); bottomMargin = d(7) })
+        fun addTemperaturePair(a: String, valueA: TextView, b: String, valueB: TextView) {
+            val row = LinearLayout(context).apply { orientation = HORIZONTAL }
+            row.addView(temperatureRow(a, valueA), LayoutParams(0, -2, 1f).apply {
+                rightMargin = d(7)
+            })
+            row.addView(temperatureRow(b, valueB), LayoutParams(0, -2, 1f).apply {
+                leftMargin = d(7)
+            })
+            temperatures.addView(row)
+        }
+        addTemperaturePair("Sonde 1", t1, "Sonde 2", t2)
+        addTemperaturePair("Sonde 3", t3, "Sonde 4", t4)
+        addTemperaturePair("Sonde 5", t5, "MOS", tMos)
+        contentArea.addView(temperatures, LayoutParams(-1, -2).apply { bottomMargin = d(12) })
+
+        val alarms = card()
+        alarms.addView(txt("Alarmes BMS", 17f, true))
+        alarms.addView(alarmSummary, LayoutParams(-1, -2).apply { topMargin = d(8) })
+        alarms.addView(alarmDetails)
+        alarms.addView(txt("Lecture informative : ne remplace pas les protections du BMS.",
+            11f, false, muted), LayoutParams(-1, -2).apply { topMargin = d(8) })
+        contentArea.addView(alarms, LayoutParams(-1, -2).apply { bottomMargin = d(12) })
+
+        val cycleCard = card()
+        val cycleRow = LinearLayout(context).apply {
+            orientation = HORIZONTAL; gravity = Gravity.CENTER_VERTICAL
+        }
+        cycleRow.addView(txt("Cycles", 15f, true), LayoutParams(0, -2, 1f))
+        cycleRow.addView(cycles)
+        cycleCard.addView(cycleRow)
+        cycleCard.addView(txt("Données réelles · lecture seule", 11f, false, muted),
+            LayoutParams(-1, -2).apply { topMargin = d(5) })
+        contentArea.addView(cycleCard)
         addView(contentArea)
         addView(error, LayoutParams(-1, -2).apply { topMargin = d(8) })
         contentArea.visibility = GONE
@@ -140,13 +172,33 @@ class BatteryDashboardCard(context: Context) : LinearLayout(context) {
         cycles.text = values.optInt("cycles").toString()
         t1.text = temperature(values, "temp1_c")
         t2.text = temperature(values, "temp2_c")
+        t3.text = temperature(values, "temp3_c")
+        t4.text = temperature(values, "temp4_c")
+        t5.text = temperature(values, "temp5_c")
         tMos.text = temperature(values, "mos_temp_c")
+        bindAlarms(values)
         val cells = values.optJSONArray("cells")
         val size = cells?.length() ?: 0
         if (size != bars.size) buildBars(size)
+        val valid = (0 until size).mapNotNull { i ->
+            val cell = cells?.optJSONObject(i)
+            val v = cell?.optDouble("voltage_v", Double.NaN) ?: Double.NaN
+            if (v.isFinite() && v in 1.5..4.5) v else null
+        }
+        val low = valid.minOrNull()
+        val high = valid.maxOrNull()
+        // If every cell is equal, there is no meaningful red/blue ranking.
+        val hasDistinctExtremes = low != null && high != null && high - low >= 0.0005
         for (i in 0 until size) {
             val cell = cells?.optJSONObject(i) ?: continue
-            bars[i].update(cell.optInt("number"), cell.optDouble("voltage_v"))
+            val v = cell.optDouble("voltage_v", Double.NaN)
+            val role = when {
+                !hasDistinctExtremes || !v.isFinite() -> 0
+                kotlin.math.abs(v - low!!) < 0.0005 -> -1
+                kotlin.math.abs(v - high!!) < 0.0005 -> 1
+                else -> 0
+            }
+            bars[i].update(cell.optInt("number"), v, role)
         }
     }
 
@@ -174,7 +226,9 @@ class BatteryDashboardCard(context: Context) : LinearLayout(context) {
     }
 
     private inner class CellItem(ctx: Context) {
-        val view = LinearLayout(ctx).apply { orientation = HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
+        val view = LinearLayout(ctx).apply {
+            orientation = HORIZONTAL; gravity = Gravity.CENTER_VERTICAL
+        }
         private val label = txt("", 11f, true)
         private val value = txt("", 11f)
         private val bar = ProgressBar(ctx, null, android.R.attr.progressBarStyleHorizontal).apply {
@@ -182,16 +236,77 @@ class BatteryDashboardCard(context: Context) : LinearLayout(context) {
             progressTintList = ColorStateList.valueOf(accent)
             progressBackgroundTintList = ColorStateList.valueOf(track)
         }
+        private var currentRole = 0
+        private var currentColor = accent
+        private var started = false
+        private var colorAnimation: ValueAnimator? = null
         init {
             view.addView(label, LayoutParams(d(27), -2))
             view.addView(bar, LayoutParams(0, d(7), 1f))
             view.addView(value, LayoutParams(-2, -2).apply { leftMargin = d(5) })
         }
-        fun update(number: Int, v: Double) {
+        fun update(number: Int, v: Double, role: Int) {
             label.text = "C" + number
-            value.text = String.format(Locale.FRANCE, "%.3f", v)
-            // Consistent absolute scale, avoids exaggerating 3mV differences.
-            bar.progress = (((v - 2.5) / 1.2).coerceIn(0.0, 1.0) * 1000).toInt()
+            value.text = if (v.isFinite()) String.format(Locale.FRANCE, "%.3f", v) else "—"
+            view.contentDescription = "Cellule $number : " +
+                (if (v.isFinite()) String.format(Locale.FRANCE, "%.3f volts", v) else "indisponible") +
+                when (role) { -1 -> ", tension minimale"; 1 -> ", tension maximale"; else -> "" }
+            bar.progress = if (v.isFinite())
+                (((v - 2.5) / 1.2).coerceIn(0.0, 1.0) * 1000).toInt() else 0
+            if (started && currentRole == role) return
+            val target = when (role) {
+                -1 -> cellLow
+                1 -> cellHigh
+                else -> accent
+            }
+            colorAnimation?.cancel()
+            if (started && ValueAnimator.areAnimatorsEnabled()) {
+                colorAnimation = ValueAnimator.ofObject(ArgbEvaluator(), currentColor, target).apply {
+                    duration = 550L
+                    addUpdateListener {
+                        val color = it.animatedValue as Int
+                        bar.progressTintList = ColorStateList.valueOf(color)
+                        label.setTextColor(if (role == 0) ink else color)
+                        value.setTextColor(if (role == 0) ink else color)
+                    }
+                    start()
+                }
+            } else {
+                bar.progressTintList = ColorStateList.valueOf(target)
+                label.setTextColor(if (role == 0) ink else target)
+                value.setTextColor(if (role == 0) ink else target)
+            }
+            currentRole = role
+            currentColor = target
+            started = true
+        }
+    }
+
+    private fun bindAlarms(values: JSONObject) {
+        val hasMask = values.has("error_mask") && !values.isNull("error_mask")
+        val rawMask = values.optLong("error_mask", 0L)
+        val warnings = if (hasMask) JkAlarmLabels.activeBits(rawMask) else emptyList()
+        val signature = if (!hasMask) "missing" else warnings.joinToString(",")
+        if (signature == lastAlarmSignature) return
+        lastAlarmSignature = signature
+        alarmDetails.removeAllViews()
+        when {
+            !hasMask -> {
+                alarmSummary.text = "État des alarmes indisponible"
+                alarmSummary.setTextColor(muted)
+            }
+            warnings.isEmpty() -> {
+                alarmSummary.text = "● Aucune alarme active"
+                alarmSummary.setTextColor(accent)
+            }
+            else -> {
+                alarmSummary.text = "⚠ " + warnings.size + " alarme(s) active(s)"
+                alarmSummary.setTextColor(alarmColor)
+                for (bit in warnings) {
+                    alarmDetails.addView(txt("• " + JkAlarmLabels.label(bit),
+                        12f, true, alarmColor), LayoutParams(-1, -2).apply { topMargin = d(6) })
+                }
+            }
         }
     }
 
