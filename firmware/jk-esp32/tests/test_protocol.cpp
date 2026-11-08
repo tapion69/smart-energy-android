@@ -77,6 +77,21 @@ int main() {
   Reading extrema{};
   assert(decodeFrame(tied, extrema));
   assert(extrema.cellMinNumber == 1 && extrema.cellMaxNumber == 8);
+  // When JK firmware provides min/max slot IDs, trust one index rather than
+  // coloring every cell sharing the same 0.001 V rounded voltage.
+  tied[62] = 9; // BMS reports cell 9 as max (cell 8 ties)
+  tied[63] = 2; // BMS reports cell 2 as min (cell 1 ties)
+  checksum(tied);
+  assert(decodeFrame(tied, extrema));
+  assert(extrema.cellMinNumber == 2 && extrema.cellMaxNumber == 9);
+  tied[63] = 42; // invalid BMS index -> deterministic fallback
+  tied[62] = 1;  // invalid mismatch (cell1 is minimum)
+  checksum(tied);
+  assert(decodeFrame(tied, extrema));
+  assert(extrema.cellMinNumber == 1 && extrema.cellMaxNumber == 8);
+  // Restore absent native metadata before sparse-slot regression.
+  tied[62] = 0; tied[63] = 0;
+  checksum(tied);
   assert(fabsf(extrema.cellMinV - 3.298f) < 0.001f);
   assert(fabsf(extrema.cellMaxV - 3.302f) < 0.001f);
   // Sparse JK physical slots must not be renumbered when reporting extrema.
