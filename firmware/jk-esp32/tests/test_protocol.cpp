@@ -139,7 +139,7 @@ int main() {
   Reading perDevice[4] = {};
   for (int i=0;i<4;++i) {
     memcpy(packets[i],first,sizeof first);
-    packets[i][173]=(uint8_t)(60+i);
+    packets[i][141]=(uint8_t)(60+i); // JK02_24S SOC offset
     checksum(packets[i]);
     assert(!parallel[i].append(packets[i],47,perDevice[i]));
   }
