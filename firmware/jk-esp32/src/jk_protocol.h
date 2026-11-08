@@ -92,6 +92,21 @@ inline bool decodeProfile(const uint8_t* frame, const Profile& p, Reading& out) 
     sum += v;
   }
   if (r.cellCount < 4) return false;
+  // JK02 telemetry also provides the BMS-selected actual cell numbers
+  // at offsets (mask + 8) MAX and (mask + 9) MIN.
+  // Accept them only when they refer to an enabled cell that truly has
+  // the matching extremal millivolts; otherwise keep the first-tie fallback.
+  // (24S: 62/63; 32S: 78/79)
+  const uint8_t nativeMax = frame[p.mask + 8];
+  const uint8_t nativeMin = frame[p.mask + 9];
+  if (nativeMin >= 1 && nativeMin <= p.cellSlots &&
+      r.cellActive[nativeMin - 1] &&
+      u16(frame, 6 + 2 * (nativeMin - 1)) == minMv)
+    r.cellMinNumber = nativeMin;
+  if (nativeMax >= 1 && nativeMax <= p.cellSlots &&
+      r.cellActive[nativeMax - 1] &&
+      u16(frame, 6 + 2 * (nativeMax - 1)) == maxMv)
+    r.cellMaxNumber = nativeMax;
   r.voltageV = u32(frame, p.voltage) / 1000.0f;
   r.currentA = i32(frame, p.current) / 1000.0f;
   r.powerW = r.voltageV * r.currentA;
