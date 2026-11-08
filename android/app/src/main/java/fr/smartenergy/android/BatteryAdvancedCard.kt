@@ -63,21 +63,6 @@ class BatteryAdvancedCard(context: Context) : LinearLayout(context) {
         if(!o.has(k)||o.isNull(k))return "—"
         return if(o.optBoolean(k))"Oui" else "Non"
     }
-    private val alarm = mapOf(
-        0 to "Résistance fil",1 to "Surchauffe MOS",2 to "Nombre de cellules incorrect",
-        5 to "Surtension batterie",6 to "Surintensité charge",7 to "Court-circuit charge",
-        8 to "Température charge haute",9 to "Température charge basse",
-        10 to "Communication interne",11 to "Sous-tension cellule",
-        12 to "Sous-tension batterie",13 to "Surintensité décharge",
-        14 to "Court-circuit décharge",15 to "Température décharge haute",
-        16 to "MOS charge anormal",17 to "MOS décharge anormal",
-        18 to "GPS déconnecté",19 to "Changement de mot de passe",
-        20 to "Échec activation décharge",21 to "Surchauffe batterie",
-        22 to "Anomalie sonde",23 to "Anomalie module PL",
-        24 to "Échec réarmement court-circuit",25 to "Surintensité décharge II",
-        26 to "Surintensité décharge III",27 to "Température décharge basse",
-        28 to "Verrouillage GPS"
-    )
     fun measurements(index:Int, device:JSONObject) {
         val signature="m"+index+device.toString()
         if(lastSignature==signature)return
@@ -103,11 +88,11 @@ class BatteryAdvancedCard(context: Context) : LinearLayout(context) {
                 0->"Inactif";1->"Charge";2->"Décharge";else->"Inconnu"
             })
         val mask=values.optLong("error_mask")
-        val bits=(0..31).filter{it!=4 && (mask and (1L shl it))!=0L}
+        val bits=JkAlarmLabels.activeBits(mask)
         if(!values.has("error_mask"))row(header,"Alarmes","Non disponibles")
         else if(bits.isEmpty())row(header,"Alarmes actives","Aucune")
         else for(bit in bits)row(header,"Alarme "+bit,
-            alarm[bit]?:"Alarme non identifiée",orange)
+            JkAlarmLabels.label(bit),orange)
 
         val energy=panel("Capacité, énergie et équilibrage")
         for((label,key,unit) in listOf(
