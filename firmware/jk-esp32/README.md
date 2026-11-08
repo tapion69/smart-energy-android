@@ -1,4 +1,4 @@
-# Smart JK ESP32 — firmware de test (0.2.4-dev)
+# Smart JK ESP32 — firmware de test (0.2.5-dev)
 
 **Fonctions actuellement codées** : diagnostic Wi-Fi et retour automatique au mode configuration après 30 secondes d'échec, point d'accès Wi-Fi de configuration, secret unique par appareil, lecture de l'identité, scan BLE, sélection et enregistrement persistant des MAC JK, configuration du Wi-Fi, retour au réseau local, et **première acquisition BLE expérimentale en lecture seule**.
 
@@ -175,3 +175,9 @@ Le décodeur est identifiable par `identity_decoder_revision=jk02-info-json-owne
 Le traitement BLE, l'APK Android et le second ESP32 VPN ne changent pas.
 Vérifier la compilation et les tests GitHub Actions avant tout flash APP-ONLY
 sur l'ESP32 JK à l'adresse `0x10000`, sans effacer la NVS.
+
+## 0.2.5-dev : code d'accès et secours Wi-Fi
+
+Le firmware a corrigé la régénération accidentelle de codes utilisateur de 8 à 11 caractères au redémarrage et ajouté la reprise automatique du Wi-Fi domestique après repli temporaire vers l'AP. Détails, limites de récupération et plan de simplification dans `docs/JK-RECUPERATION-WIFI-ET-ASSOCIATION.md`.
+
+La modification ne répare **pas** un code déjà remplacé dans la NVS : ne flasher ni effacer sans avoir prévu la récupération du secret actif par USB série et la remise en place du Wi-Fi. Aucune logique du décodeur JK ou du VPN n'est modifiée.
