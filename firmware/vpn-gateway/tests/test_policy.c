@@ -15,7 +15,7 @@ int main(void) {
     assert(se_route_get("/api/v1/voltronic/status?host=evil.com", true) == SE_ROUTE_DENIED);
     assert(se_route_get("/api/v1/jk/../../wifi", true) == SE_ROUTE_DENIED);
 
-    assert(se_is_private_ipv4("192.168.1.53"));
+    assert(se_is_private_ipv4("192.168.1.100"));
     assert(se_is_private_ipv4("10.10.1.4"));
     assert(se_is_private_ipv4("172.16.0.2"));
     assert(se_is_private_ipv4("172.31.255.254"));
@@ -24,8 +24,8 @@ int main(void) {
     assert(!se_is_private_ipv4("8.8.8.8"));
     assert(!se_is_private_ipv4("127.0.0.1"));
     assert(!se_is_private_ipv4("169.254.1.1"));
-    assert(!se_is_private_ipv4("192.168.1.53:80"));
-    assert(!se_is_private_ipv4("192.168.1.53.bad.test"));
+    assert(!se_is_private_ipv4("192.168.1.100:80"));
+    assert(!se_is_private_ipv4("192.168.1.100.bad.test"));
     assert(!se_is_private_ipv4(""));
 
     assert(se_is_tailnet_ipv4(0x64400001UL));
