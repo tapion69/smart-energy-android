@@ -1,6 +1,18 @@
-# Smart Energy Android — prototype Android v0.2.1-dev
+# Smart Energy Android — prototype Android v0.2.3-dev
 
 Un projet Android Studio **réel**, en Kotlin natif, ciblant Android 10+.
+
+## Version v0.2.3-dev (branche experiment/esp32-vpn-gateway)
+
+- Installer l'APK de test **Smart Energy VPN (test)** à côté de l'application existante ; ne pas désinstaller l'ancienne application.
+- Un premier appairage local avec l'ESP32 JK et son code est obligatoire sur cette application de test distincte.
+- Le tableau de bord affiche températures T1, T2, T3, T4, T5, MOS, alarmes en lecture seule et cellules min/max dynamiques (rouge minimum, bleu maximum). Les valeurs absentes restent indisponibles.
+- Icône de lancement et en-tête utilisent le pictogramme Smart Energy approuvé, décliné en petit format sans la ligne de texte.
+- Depuis Android, activer Tailscale puis renseigner **l'IP Tailscale personnelle de l'ESP32 VPN** et le **X-Gateway-Token distinct du JK** ; l'app chiffre le token via Android Keystore après validation du JK déjà associé localement.
+- L'ESP32 VPN v0.1.2-v4mapped et l'ESP32 JK existants restent inchangés. Les lectures GET de la passerelle assurent la compatibilité.
+- Le lecteur JK 0.2.0 peut retourner des champs d'identité BMS corrompus : la v0.2.3 masque les champs non plausibles dans l'app, mais **ne peut pas reconstituer les véritables champs d'une trame inconnue**. Une évolution du décodeur ESP32 pourrait rester nécessaire.
+- Aucun cloud Smart Energy ni ouverture de port, aucun secret personnel compilé dans l'APK publiée.
+- Limites : connexion Tailscale installée séparément, premier appairage local requis, branche de développement sans mise à jour OTA ni signature APK pérenne.
 
 ## Fonctionnalités codées (0.1.0-dev)
 
