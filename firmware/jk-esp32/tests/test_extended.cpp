@@ -80,6 +80,9 @@ int main() {
   memcpy(tampered.hardware, "invalid!", 8);
   tampered.hardware[8]=0;
   assert(!jkextra::usableIdentity(tampered));
+  tampered=i;
+  memset(tampered.vendor, 'J', sizeof(tampered.vendor));
+  assert(!jkextra::usableIdentity(tampered)); // no terminator, no over-read
   // Field issue observed in real firmware: some checksum-valid JK 0x03
   // payloads contain JSON-like fragments rather than model/hardware data.
   // Never display those strings as trusted identity or serial number.
