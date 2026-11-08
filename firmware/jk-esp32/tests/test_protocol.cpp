@@ -64,6 +64,27 @@ int main() {
   assert(reading.tempAvailable[0] && reading.tempAvailable[1] && reading.tempAvailable[2]);
   assert(!reading.tempSafetyVerified);
   assert(reading.cycles == 35 && reading.chargingMos && reading.dischargingMos);
+  assert(reading.cellMinNumber == 1 && reading.cellMaxNumber == 1);
+  // Multiple cells share the minimum/maximum to the mV, yet exactly one
+  // physical index must be chosen, as in the author's JK Bluetooth module.
+  uint8_t tied[300];
+  memcpy(tied, first, 300);
+  set16(tied, 6 + 0 * 2, 3298);
+  set16(tied, 6 + 1 * 2, 3298);
+  set16(tied, 6 + 7 * 2, 3302);
+  set16(tied, 6 + 8 * 2, 3302);
+  checksum(tied);
+  Reading extrema{};
+  assert(decodeFrame(tied, extrema));
+  assert(extrema.cellMinNumber == 1 && extrema.cellMaxNumber == 8);
+  assert(fabsf(extrema.cellMinV - 3.298f) < 0.001f);
+  assert(fabsf(extrema.cellMaxV - 3.302f) < 0.001f);
+  // Sparse JK physical slots must not be renumbered when reporting extrema.
+  set32(tied, 54, 0xfffe); // remove physical cell 1 from the 24S mask
+  set32(tied, 118, 49502); // sum of all active millivolts
+  checksum(tied);
+  assert(decodeFrame(tied, extrema));
+  assert(extrema.cellMinNumber == 2 && extrema.cellMaxNumber == 8);
   Assembler stream{};
   Reading assembled{};
   assert(!stream.append(first, 1, assembled));
@@ -80,6 +101,7 @@ int main() {
   assert(frameValid(second));
   assert(decodeFrame(second, reading));
   assert(reading.layout == 32 && reading.cellCount == 16 && reading.soc == 48);
+  assert(reading.cellMinNumber == 1 && reading.cellMaxNumber == 1);
   assert(!reading.tempAvailable[0] && !reading.tempAvailable[1] && !reading.tempAvailable[2]);
   assert(!reading.tempSafetyVerified);
   assert(fabsf(reading.voltageV - 53.28f) < 0.01f);
