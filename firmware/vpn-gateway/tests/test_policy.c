@@ -34,6 +34,24 @@ int main(void) {
     assert(!se_is_tailnet_ipv4(0x0a000001UL));
     assert(!se_is_tailnet_ipv4(0xc0a80135UL));
 
+    // Regression: ESP-IDF dual-stack listener returns ::ffff:IPv4 AF_INET6.
+    uint32_t extracted = 0;
+    const uint8_t mapped_vpn[16] = {0,0,0,0,0,0,0,0,0,0,255,255,100,112,119,17};
+    const uint8_t mapped_peer[16] = {0,0,0,0,0,0,0,0,0,0,255,255,100,64,118,109};
+    const uint8_t mapped_lan[16] = {0,0,0,0,0,0,0,0,0,0,255,255,192,168,1,61};
+    const uint8_t native_v6[16] = {0x20,0x01,0x0d,0xb8,0,0,0,0,0,0,0,0,0,0,0,1};
+    const uint8_t truncated_prefix[16] = {0,0,0,0,0,0,0,0,0,0,255,0,100,112,119,17};
+    assert(se_ipv4_from_mapped_v6_bytes(mapped_vpn, &extracted));
+    assert(extracted == 0x64707711UL);
+    assert(se_ipv4_from_mapped_v6_bytes(mapped_peer, &extracted));
+    assert(se_is_tailnet_ipv4(extracted));
+    assert(se_ipv4_from_mapped_v6_bytes(mapped_lan, &extracted));
+    assert(!se_is_tailnet_ipv4(extracted));
+    assert(!se_ipv4_from_mapped_v6_bytes(native_v6, &extracted));
+    assert(!se_ipv4_from_mapped_v6_bytes(truncated_prefix, &extracted));
+    assert(!se_ipv4_from_mapped_v6_bytes(NULL, &extracted));
+    assert(!se_ipv4_from_mapped_v6_bytes(mapped_vpn, NULL));
+
     assert(se_is_fixed_read_path("/api/v1/telemetry"));
     assert(se_is_fixed_read_path("/status"));
     assert(!se_is_fixed_read_path("http://evil.com"));
