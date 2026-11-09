@@ -8,11 +8,14 @@ No personal tokens are uploaded to GitHub or stored in the executable.
 from __future__ import annotations
 
 import ipaddress
+import io
 import json
 import os
 from pathlib import Path
 import queue
 import re
+import urllib.request
+import zipfile
 import shutil
 import subprocess
 import sys
@@ -219,7 +222,7 @@ class Flasher(tk.Tk):
         for row, (label, key, password) in enumerate(rows, start=2):
             self._field(root, label, key, row, password)
         ttk.Label(
-            root, text="Configuration locale privée. Prérequis : Git + ESP-IDF 5.3.2.\n"
+            root, text="Configuration locale privée. ESP-IDF 5.3.2 requis. Git inutile.\n"
                        "Le flasheur compile chez toi, puis flashe UNIQUEMENT l'ESP32 VPN.\n"
                        "Jamais de secret dans le dépôt ou les fichiers de diagnostic.",
             wraplength=720
@@ -286,8 +289,6 @@ class Flasher(tk.Tk):
             export = Path(self.idf_export.get()).resolve()
             if not export.is_file() or export.name.lower() != "export.bat":
                 raise ValueError("Choisis le fichier export.bat d'ESP-IDF 5.3.2.")
-            if not shutil.which("git"):
-                raise ValueError("Git for Windows est nécessaire pour préparer TailTiny.")
             if not messagebox.askyesno(
                 "Confirmer ESP32 VPN", "Cette opération est réservée à l'ESP32 VPN dédié.\n"
                 "Elle recompilera le firmware avec TES secrets locaux, "
@@ -316,24 +317,38 @@ class Flasher(tk.Tk):
 
     def _do_vpn(self, port: str, project: Path, export: Path,
                 values: dict[str, str]) -> None:
-        source = project / "upstream-tailtiny"
-        if not (source / ".git").is_dir():
-            self._log("Téléchargement du code TailTiny depuis sa source officielle…")
-            self._exec(["git", "clone", "https://github.com/Asimmimx/tailtiny.git",
-                        str(source)], project)
-        self._exec(["git", "-C", str(source), "checkout", "--detach",
-                    TAILTINY_COMMIT], project)
-        revision = subprocess.check_output(
-            ["git", "-C", str(source), "rev-parse", "HEAD"],
-            text=True, encoding="utf-8"
-        ).strip()
-        if revision != TAILTINY_COMMIT:
-            raise RuntimeError("Version TailTiny inattendue. Flash annulé.")
-        component = source / "components" / "tailtiny"
+        # Git is not required: fetch exactly the audited TailTiny commit
+        # over HTTPS and extract ONLY its known component tree.
         target = project / "components" / "tailtiny"
-        if not component.is_dir():
-            raise RuntimeError("Composant TailTiny manquant.")
-        shutil.copytree(component, target, dirs_exist_ok=True)
+        if not target.is_dir():
+            source_url = ("https://github.com/Asimmimx/tailtiny/archive/"
+                          + TAILTINY_COMMIT + ".zip")
+            self._log("Récupération du composant TailTiny épinglé (sans Git)…")
+            with urllib.request.urlopen(source_url, timeout=50) as response:
+                content = response.read(25_000_001)
+            if len(content) > 25_000_000:
+                raise RuntimeError("Archive TailTiny anormalement volumineuse.")
+            with zipfile.ZipFile(io.BytesIO(content)) as archive:
+                prefix = "tailtiny-" + TAILTINY_COMMIT + "/components/tailtiny/"
+                members = [m for m in archive.infolist() if m.filename.startswith(prefix)]
+                if not members:
+                    raise RuntimeError("Composant TailTiny manquant dans le commit vérifié.")
+                target.mkdir(parents=True, exist_ok=True)
+                for member in members:
+                    relative = member.filename[len(prefix):]
+                    if not relative or member.is_dir():
+                        continue
+                    parts = Path(relative).parts
+                    if any(p in (".", "..") for p in parts) or Path(relative).is_absolute():
+                        raise RuntimeError("Archive externe : chemin dangereux.")
+                    if member.file_size > 4_000_000:
+                        raise RuntimeError("Fichier TailTiny anormalement volumineux.")
+                    dest = target.joinpath(*parts)
+                    dest.parent.mkdir(parents=True, exist_ok=True)
+                    with archive.open(member) as src, dest.open("wb") as dst:
+                        shutil.copyfileobj(src, dst)
+            if not (target / "CMakeLists.txt").is_file():
+                raise RuntimeError("Composant TailTiny incomplet. Flash annulé.")
         credentials = project / "sdkconfig.credentials"
         # The user's secrets never appear in a command-line argument.
         if credentials.exists():
