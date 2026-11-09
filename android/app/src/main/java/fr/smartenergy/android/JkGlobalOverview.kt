@@ -19,7 +19,7 @@ import java.util.Locale
 /**
  * Four-JK overview. No mocked values: every number comes from fresh type-02 BLE data.
  * SOC is capacity-weighted only when all online BMS have verified capacities.
- * Voltage, watts and amperes are ARITHMETIC MEANS (not series/parallel totals).
+ * Voltage is averaged; current and power are SUMS for independent parallel JK packs.
  * 'Aucune' for alarms requires valid, fresh measurements from every configured BMS.
  */
 class JkGlobalOverview(private val ctx: Context) : LinearLayout(ctx) {
@@ -101,6 +101,15 @@ class JkGlobalOverview(private val ctx: Context) : LinearLayout(ctx) {
             return String.format(Locale.FRANCE,"%." + dec + "f %s",
                 vals.sumOf{it.optDouble(key)}/vals.size,unit)
         }
+        fun total(key: String, unit: String, dec: Int): String {
+            val values = vals.map { item ->
+                if (!item.has(key) || item.isNull(key)) Double.NaN
+                else item.optDouble(key, Double.NaN)
+            }
+            val totalValue = JkAggregateMath.sumWhenComplete(values, entries.size)
+                ?: return "—"
+            return String.format(Locale.FRANCE, "%." + dec + "f %s", totalValue, unit)
+        }
         val alarmed=entries.filter {
             it.optBoolean("available") && it.optJSONObject("values")?.optBoolean("alarm_active") == true
         }
@@ -117,15 +126,15 @@ class JkGlobalOverview(private val ctx: Context) : LinearLayout(ctx) {
         val metrics=LinearLayout(ctx).apply { orientation=VERTICAL }
         for ((label,value,warn) in listOf(
             Triple("Tension",average("voltage_v","V",2),false),
-            Triple("Watts moyens",average("power_w","W",0),false),
-            Triple("Ampères moyens",average("current_a","A",1),false),
+            Triple("Puissance totale",total("power_w","W",0),false),
+            Triple("Courant total",total("current_a","A",1),false),
             Triple("Alarmes",alarms,alarmed.isNotEmpty())
         )) {
             metrics.addView(metric(label,value,warn),LayoutParams(-1,-2).apply{bottomMargin=dp(5)})
         }
         line.addView(metrics,LayoutParams(0,-2,1f))
         board.addView(line)
-        board.addView(text(if(allLive) "Données fraîches · ${if(haveCap) "SOC pondéré" else "SOC moyen"} · V/A/W moyens."
+        board.addView(text(if(allLive) "Données fraîches · ${if(haveCap) "SOC pondéré" else "SOC moyen"} · tension moyenne · A/W additionnés."
           else "Mesures incomplètes : un ou plusieurs BMS sont hors ligne.",11f,muted))
         if(alarmed.isNotEmpty()){
             for(bms in alarmed){
