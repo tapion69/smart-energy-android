@@ -745,8 +745,10 @@ class MainActivity : Activity() {
                 }
                 val route = when (path) {
                     "/api/v1/health" -> "/api/v1/health"
-                    "/api/v1/telemetry" -> "/api/v1/jk/telemetry"
-                    "/api/v1/details" -> "/api/v1/jk/details"
+                    "/api/v1/telemetry" -> if(activeReaderSlot==1) "/api/v1/jk/telemetry"
+                        else "/api/v1/jk/${activeReaderSlot}/telemetry"
+                    "/api/v1/details" -> if(activeReaderSlot==1) "/api/v1/jk/details"
+                        else "/api/v1/jk/${activeReaderSlot}/details"
                     else -> throw IllegalStateException("Route non autorisée sur la passerelle VPN.")
                 }
                 URL("http://" + host + ":18767" + route).openConnection() as HttpURLConnection
