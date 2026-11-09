@@ -1,7 +1,7 @@
 name: Smart Energy Android VPN Gateway (experimental)
 on:
   push:
-    branches: [experiment/esp32-vpn-gateway, experiment/smart-energy-v0.3.0-multibms, experiment/smart-energy-v0.3.2-multibms-diagnostic, experiment/smart-energy-v0.3.8-ble-shared-discovery, experiment/smart-energy-v0.3.8-shared-gap-recovery, experiment/smart-energy-v0.3.8-single-ble-manager, experiment/smart-energy-v0.3.8-totals-write-diagnostics, experiment/smart-energy-v0.3.8-full-parameter-editor, experiment/smart-energy-v0.3.8-ble-link-stability, experiment/smart-energy-v0.3.9-vpn-route-fix]
+    branches: [experiment/esp32-vpn-gateway, experiment/smart-energy-v0.3.0-multibms, experiment/smart-energy-v0.3.2-multibms-diagnostic, experiment/smart-energy-v0.3.8-ble-shared-discovery, experiment/smart-energy-v0.3.8-shared-gap-recovery, experiment/smart-energy-v0.3.8-single-ble-manager, experiment/smart-energy-v0.3.8-totals-write-diagnostics, experiment/smart-energy-v0.3.8-full-parameter-editor, experiment/smart-energy-v0.3.8-ble-link-stability, experiment/smart-energy-v0.3.9-vpn-route-fix, experiment/smart-energy-v0.3.10-bms-selection]
     paths:
       - 'android/**'
       - 'firmware/jk-esp32/**'
@@ -29,14 +29,14 @@ jobs:
       - name: Upload test APK
         uses: actions/upload-artifact@v4
         with:
-          name: smart-energy-android-v0.3.9-vpn-route-fix-debug-test
+          name: smart-energy-android-v0.3.10-bms-selection-debug-test
           path: android/app/build/outputs/apk/debug/app-debug.apk
           retention-days: 14
 
   jk-esp32:
     # This branch modifies Android routing ONLY. No JK or Tailscale firmware
     # should be flashed to fix the app-side transport choice.
-    if: github.ref_name != 'experiment/smart-energy-v0.3.9-vpn-route-fix'
+    if: github.ref_name != 'experiment/smart-energy-v0.3.9-vpn-route-fix' && github.ref_name != 'experiment/smart-energy-v0.3.10-bms-selection'
     name: Test and build JK ESP32 0.3.8 (unchanged firmware)
     runs-on: ubuntu-latest
     steps:
