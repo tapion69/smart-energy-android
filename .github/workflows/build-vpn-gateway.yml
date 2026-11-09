@@ -45,14 +45,22 @@ jobs:
           test -s firmware/vpn-gateway/build/bootloader/bootloader.bin
           test -s firmware/vpn-gateway/build/partition_table/partition-table.bin
           test -s firmware/vpn-gateway/build/flasher_args.json
-      - name: Upload unconfigured test firmware (needs local credential build)
+      - name: Produce public precompiled USB provisioning images (classic ESP32)
+        run: |
+          python -m pip install "esptool==4.9.0"
+          python -m esptool --chip esp32 merge_bin \
+            --flash_mode dio --flash_freq 40m --flash_size 4MB \
+            -o firmware/vpn-gateway/build/smart-energy-vpn-USB-FACTORY-ESP32-0x0.bin \
+            0x1000 firmware/vpn-gateway/build/bootloader/bootloader.bin \
+            0x8000 firmware/vpn-gateway/build/partition_table/partition-table.bin \
+            0x10000 firmware/vpn-gateway/build/smart_energy_vpn_gateway.bin
+          test -s firmware/vpn-gateway/build/smart-energy-vpn-USB-FACTORY-ESP32-0x0.bin
+      - name: Upload public generic firmware images (no user credentials)
         uses: actions/upload-artifact@v4
         with:
-          name: smart-energy-vpn-gateway-esp32-experimental-unconfigured
+          name: SmartEnergy-VPN-ESP32-USB-PRECOMPILED
           path: |
+            firmware/vpn-gateway/build/smart-energy-vpn-USB-FACTORY-ESP32-0x0.bin
             firmware/vpn-gateway/build/smart_energy_vpn_gateway.bin
-            firmware/vpn-gateway/build/bootloader/bootloader.bin
-            firmware/vpn-gateway/build/partition_table/partition-table.bin
-            firmware/vpn-gateway/build/flasher_args.json
           if-no-files-found: error
-          retention-days: 10
+          retention-days: 30
