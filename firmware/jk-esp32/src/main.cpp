@@ -14,7 +14,7 @@
 #include <ArduinoJson.h>
 #include <ctype.h>
 
-static const char *VERSION = "0.3.7-dev";
+static const char *VERSION = "0.3.8-dev";
 static const uint32_t WIFI_JOIN_TIMEOUT_MS = 30000; // Return to temporary setup after 30s
 static const uint32_t SETUP_AUTORETRY_MS = 120000; // Retry saved Wi-Fi after brief fallback
 static const int SETUP_BUTTON = 0; // BOOT is physical proof for pairing recovery.
@@ -44,6 +44,7 @@ uint32_t wifiAttemptAt = 0;
 bool everConnected = false;
 String wifiIssue = "";
 volatile uint8_t disconnectReason = 0;
+volatile uint32_t wifiDropCount = 0; // since ESP boot, no persistent storage
 // Parameter writes are disabled by default, per-device, and expire quickly.
 uint32_t writeArmUntil = 0;
 String writeArmMac;
@@ -110,6 +111,7 @@ String normalizedMac(const String &input) {
 void onWifiEvent(WiFiEvent_t event, WiFiEventInfo_t info) {
   if (event == ARDUINO_EVENT_WIFI_STA_DISCONNECTED) {
     disconnectReason = info.wifi_sta_disconnected.reason;
+    ++wifiDropCount;
     Serial.printf("[WiFi] STA disconnected; reason=%u\\n", (unsigned)disconnectReason);
   }
 }
@@ -210,6 +212,9 @@ void onInfo() {
   doc["wifi_auto_recovery"] = setupMode && automaticSetupFallback;
   doc["wifi_connected"] = WiFi.status() == WL_CONNECTED;
   doc["wifi_status_code"] = (int)WiFi.status();
+  doc["wifi_disconnect_count"] = wifiDropCount;
+  doc["free_heap_bytes"] = ESP.getFreeHeap();
+  doc["min_free_heap_bytes"] = ESP.getMinFreeHeap();
   doc["wifi_saved"] = prefs.getString("ssid", "").length() > 0;
   doc["wifi_issue"] = wifiIssue;
   doc["last_disconnect_reason"] = disconnectReason;
