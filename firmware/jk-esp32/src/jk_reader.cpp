@@ -8,12 +8,8 @@
 #include "jk_extended.h"
 #include "jk_write.h"
 #include <NimBLEDevice.h>
-// Inspect only the *initiating* GAP procedure. This does not interrupt any
-// established JK-BMS connection (NimBLE error 2 = BLE_HS_EALREADY).
-extern "C" {
-#include "host/ble_gap.h"
-#include "host/ble_hs.h"
-}
+// NimBLEDevice.h (NimBLE-Arduino 2.4.0) already exposes ble_gap_conn_active(),
+// ble_gap_conn_cancel() and BLE_HS_EALREADY via its bundled NimBLE GAP headers.
 #include <WiFi.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/semphr.h>
