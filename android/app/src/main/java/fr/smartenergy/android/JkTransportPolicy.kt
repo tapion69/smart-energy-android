@@ -7,6 +7,21 @@ package fr.smartenergy.android
 object JkTransportPolicy {
     enum class Route { GATEWAY_VPN, LOCAL_WIFI, CONFIGURE_VPN, NO_CONNECTION }
 
+    // The first reader retains legacy VPN paths for deployed gateways.
+    // Readers 2/3 require the 0.2.0-dev-multi3 private gateway.
+    // Never transform arbitrary HTTP paths or allow writes.
+    fun vpnReadPath(reader:Int,path:String):String? {
+        if(reader !in 1..3) return null
+        return when(path) {
+            "/api/v1/health" -> path
+            "/api/v1/telemetry" -> if(reader==1) "/api/v1/jk/telemetry"
+                else "/api/v1/jk/$reader/telemetry"
+            "/api/v1/details" -> if(reader==1) "/api/v1/jk/details"
+                else "/api/v1/jk/$reader/details"
+            else -> null
+        }
+    }
+
     fun select(
         vpnActive: Boolean,
         preference: String,
