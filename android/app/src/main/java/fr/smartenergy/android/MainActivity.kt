@@ -145,6 +145,7 @@ class MainActivity : Activity() {
     private lateinit var fleetPanel:LinearLayout
     private lateinit var fleetOverview:JkGlobalOverview
     private val fleetOwnerByMac=mutableMapOf<String,Int>()
+    private val fleetNumberByMac=mutableMapOf<String,Int>()
     private var lastLocalSettingsRefreshAt=0L
     private val telemetryTicker = object : Runnable {
         override fun run() {
@@ -508,10 +509,6 @@ class MainActivity : Activity() {
         telemetryPanel = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         add(dashboardPage, telemetryPanel, 8)
         add(dashboardPage, action("⟳ Actualiser les mesures") { refreshTelemetry() }, 8)
-        add(dashboardPage, action("Se connecter via ESP32 VPN / Tailscale") {
-            prefs.edit().putString("connection_preference","gateway").apply()
-            connectGatewayRemote()
-        }, 8)
         add(dashboardPage, label("Mesures expérimentales. Les réglages du BMS ne peuvent être modifiés qu'après un déverrouillage explicite.", 12f, color = subdued), 8)
         val advanced=configurationPage
         add(advanced,label("Configuration et associations",25f,true),18)
@@ -2125,6 +2122,7 @@ class MainActivity : Activity() {
         val all=JSONArray()
         val now=android.os.SystemClock.elapsedRealtime()
         fleetOwnerByMac.clear()
+        fleetNumberByMac.clear()
         for(slot in 1..3) {
             val saved=registeredMacs(slot)
             val cached=fleetCache[slot]
@@ -2148,6 +2146,7 @@ class MainActivity : Activity() {
                 }
                 all.put(display)
                 fleetOwnerByMac[mac]=slot
+                fleetNumberByMac[mac]=index+1
             }
         }
         fleetOverview.bind(all,
@@ -2158,7 +2157,7 @@ class MainActivity : Activity() {
             },
             { mac,index ->
                 val slot=fleetOwnerByMac[mac] ?: 1
-                displayBmsName(mac,"ESP $slot · BMS ${index+1}")
+                displayBmsName(mac,"ESP $slot · BMS ${fleetNumberByMac[mac] ?: index+1}")
             })
     }
 
