@@ -18,6 +18,7 @@
 #include <new>
 
 extern bool setupMode; // main.cpp manages Wi-Fi provisioning state.
+extern volatile uint32_t wifiDropCount; // diagnostic since boot only
 namespace jkreader {
 namespace {
 static constexpr uint8_t MAX_BMS = 4;
@@ -723,6 +724,10 @@ void fillTelemetry(JsonDocument &out) {
   out["temperature_safety_verified"] = false;
   out["configured_count"] = count;
   out["wifi_connected"] = WiFi.status()==WL_CONNECTED;
+  out["wifi_disconnect_count"] = wifiDropCount;
+  out["wifi_rssi_dbm"] = WiFi.status()==WL_CONNECTED ? WiFi.RSSI() : 0;
+  out["free_heap_bytes"] = ESP.getFreeHeap();
+  out["min_free_heap_bytes"] = ESP.getMinFreeHeap();
   out["uptime_seconds"] = millis()/1000;
   out["cache_only"] = true;
   out["recommended_poll_ms"] = 2500;
