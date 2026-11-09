@@ -14,20 +14,65 @@ static constexpr uint8_t REGISTERS[jkextra::PARAM_COUNT] = {
 };
 static_assert(sizeof(REGISTERS)/sizeof(REGISTERS[0]) == jkextra::PARAM_COUNT,
               "Parameter/register mapping must match HA module");
-// Only low-risk display/logging/standby/float user options in initial field
-// pilot. Protection thresholds, MOS control, alarm disabling, heater and SOC
-// calibration are deliberately excluded until confirmed per firmware.
+// JK02 profile registers are all represented by the same verified type-01
+// parameter definitions. "Editable" means command construction is supported,
+// NOT that a given BMS firmware has yet been hardware-validated for writing.
 inline bool editable(size_t i) {
-  if (i>=jkextra::PARAM_COUNT) return false;
-  switch(REGISTERS[i]) {
-    case 0x2B: // display always on
-    case 0x2D: // smart sleep
-    case 0x2F: // periodic data storage
-    case 0x30: // floating mode
-    case 0x39: // smart sleep delay h
-      return true;
-    default: return false;
+  return i < jkextra::PARAM_COUNT;
+}
+// 0 = everyday display/logging, 1 = operational, 2 = protection-critical.
+// These levels enforce confirmations both in the APK and on the ESP32 API.
+inline uint8_t riskLevel(size_t i) {
+  if(!editable(i)) return 2;
+  const uint8_t reg=REGISTERS[i];
+  switch(reg) {
+    case 0x2B: case 0x2D: case 0x2F: case 0x30: case 0x39:
+      return 0;
+    case 0x01: case 0x06: case 0x12: case 0x13: case 0x1F:
+    case 0x21: case 0x22: case 0x25: case 0x27: case 0x2E:
+    case 0x37: case 0x38:
+      return 1;
+    default:
+      return 2;
   }
+}
+// Reject inconsistent settings before any BLE command is queued. Compare a
+// proposed value with other fresh, CRC-checked settings from the same BMS.
+// Fail closed if a required dependent setting is not readable.
+inline bool consistentCandidate(size_t changed, float candidate,
+                                const jkextra::Settings &saved) {
+  if(!editable(changed) || !saved.confirmed) return false;
+  const uint8_t changedReg=REGISTERS[changed];
+  const struct Pair { uint8_t lower, upper; } rules[]={
+    {0x02,0x03}, // cell UVP < UVP recovery
+    {0x03,0x05}, // UVP recovery < OVP recovery
+    {0x05,0x04}, // cell OVP recovery < OVP
+    {0x0A,0x09}, // requested float voltage <= charge request (strict below)
+    {0x15,0x14}, // charge overtemperature recovery < trip
+    {0x17,0x16}, // discharge overtemperature recovery < trip
+    {0x18,0x19}, // charge undertemperature trip < recovery
+    {0x38,0x37}  // heating stop/start may vary by hardware; see below
+  };
+  for(size_t r=0;r<sizeof(rules)/sizeof(rules[0]);++r) {
+    const Pair &p=rules[r];
+    // Heating start/stop direction varies by firmware and project wiring.
+    if(p.lower==0x38) continue;
+    if(changedReg!=p.lower && changedReg!=p.upper) continue;
+    int lowIdx=-1, highIdx=-1;
+    for(size_t i=0;i<jkextra::PARAM_COUNT;++i) {
+      if(REGISTERS[i]==p.lower)lowIdx=int(i);
+      if(REGISTERS[i]==p.upper)highIdx=int(i);
+    }
+    if(lowIdx<0 || highIdx<0 ||
+       !saved.available[size_t(lowIdx)] || !saved.available[size_t(highIdx)])
+      return false;
+    const float lo=changedReg==p.lower?candidate:saved.value[size_t(lowIdx)];
+    const float hi=changedReg==p.upper?candidate:saved.value[size_t(highIdx)];
+    // Float/charge requests can legitimately be equal on some models.
+    if(p.lower==0x0A) { if(lo>hi) return false; }
+    else if(lo>=hi) return false;
+  }
+  return true;
 }
 inline int find(const char *key) {
   if(!key) return -1;
