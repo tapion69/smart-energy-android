@@ -1,0 +1,42 @@
+name: JK ESP32 BLE stall recovery 0.3.11 (experimental)
+on:
+  push:
+    branches:
+      - experiment/smart-energy-v0.3.11-ble-stall-recovery
+    paths:
+      - 'firmware/jk-esp32/**'
+      - '.github/workflows/build-ble-stall-recovery.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  jk-esp32:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install pinned PlatformIO
+        run: python -m pip install "platformio==6.1.18"
+      - name: Run JK read-only, parser and watchdog tests
+        run: |
+          set -euo pipefail
+          for test in test_protocol test_extended test_write test_setup_code_policy test_boot_pair_policy test_ble_manager_policy test_ble_link_policy; do
+            g++ -std=c++11 -Wall -Wextra -Werror "firmware/jk-esp32/tests/${test}.cpp" -o "/tmp/${test}"
+            "/tmp/${test}"
+          done
+          python firmware/jk-esp32/tests/test_ble_manager_architecture.py
+          python firmware/jk-esp32/tests/test_json_ownership.py
+      - name: Build ESP32 JK reader
+        run: pio run -d firmware/jk-esp32
+      - name: Verify app-only update at 0x10000
+        run: test -s firmware/jk-esp32/.pio/build/esp32dev/firmware.bin
+      - name: Upload experimental JK app-only image (NEVER erase NVS)
+        uses: actions/upload-artifact@v4
+        with:
+          name: smart-jk-esp32-v0.3.11-dev-APP-ONLY-offset-0x10000
+          path: firmware/jk-esp32/.pio/build/esp32dev/firmware.bin
+          retention-days: 14
