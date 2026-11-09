@@ -44,3 +44,14 @@ Le projet \`tools/windows-flasher\` contient un utilitaire \`SmartEnergyFlasher.
 7. Avant usage public : stockage/provisionnement sécurisé des secrets, signature de firmware et release APK, OTA avec rollback, et instrumentation de déconnexions/erreurs.
 
 **Sources** : \`android/app/src/main/java/fr/smartenergy/android/MainActivity.kt\`, \`BatteryAdvancedCard.kt\`, \`JkGlobalOverview.kt\`, \`firmware/vpn-gateway/main/main.c\`, \`gateway_policy.h\`, \`tools/windows-flasher/\`.
+
+
+## Actualisation 0.3.13-dev — 9 novembre 2026 (remplace les limites 0.3.12 ci-dessus)
+
+La synthèse multi-lecteurs **est désormais implémentée** sur l'écran principal : jusqu'à six BMS répartis sur trois ESP32 JK, noms personnalisés, séparation des sources. Les valeurs périmées (>15 s dans le cache de l'application) sont déclarées hors ligne, jamais additionnées aux valeurs fraîches. Les pages détaillées continuent d'afficher le lecteur choisi. Le mode Debug de la configuration est désactivé par défaut et masque les compteurs radio, GAP, RSSI, Wi-Fi et mémoire sur l'écran principal.
+
+Le firmware JK **0.3.13-dev** interroge les paramètres au démarrage de chaque connexion BLE, puis toutes les **30 minutes**. Une requête locale authentifiée `POST /api/v1/jk/settings-refresh` provoque une lecture ciblée quand l'utilisateur entre explicitement en mode modification ; les paramètres sont relus après chaque écriture avant confirmation. La garde exigeant une lecture récente (<60 s) reste active, et l'APK rafraîchit tant que ce mode est réellement actif. Les mesures temps réel continuent à 2,5 s environ côté Android, sans lancer un scan BLE.
+
+Windows : la version expérimentale du flasheur ne demande **plus Git**, uniquement ESP-IDF pour la compilation VPN personnalisée. Une image VPN universelle configurable par USB/NVS supprimera cette dernière dépendance, mais ce firmware n'existe pas encore. Le fichier JK de la branche dev reste destiné à **l'ESP32 classique**, pas à l'ESP32-S3 N16R8. Cible S3 à valider séparément.
+
+Nouvelle APK de test : **0.3.13-dev**, identifiant Android `.vpntrial313` pour installation côte à côte. Les configurations des autres variantes debug ne sont pas automatiquement importées.
