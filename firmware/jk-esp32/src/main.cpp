@@ -14,7 +14,7 @@
 #include <ArduinoJson.h>
 #include <ctype.h>
 
-static const char *VERSION = "0.3.8-dev";
+static const char *VERSION = "0.3.11-dev";
 static const uint32_t WIFI_JOIN_TIMEOUT_MS = 30000; // Return to temporary setup after 30s
 static const uint32_t SETUP_AUTORETRY_MS = 120000; // Retry saved Wi-Fi after brief fallback
 static const int SETUP_BUTTON = 0; // BOOT is physical proof for pairing recovery.
