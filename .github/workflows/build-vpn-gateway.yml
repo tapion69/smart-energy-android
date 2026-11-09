@@ -1,7 +1,7 @@
 name: Smart Energy ESP32 VPN Gateway (experimental)
 on:
   push:
-    branches: [experiment/esp32-vpn-gateway]
+    branches: [dev]
     paths:
       - 'firmware/vpn-gateway/**'
       - '.github/workflows/build-vpn-gateway.yml'
