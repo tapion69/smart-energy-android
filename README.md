@@ -1,5 +1,16 @@
 # Smart Energy Android
 
+## Nouveau VPN universel précompilé — 0.3.0-dev (expérimental)
+
+Pour les **nouveaux ESP32 classiques dédiés au VPN**, l'application Windows `SmartEnergyVPNFlasher.exe` embarque les images VPN précompilées : **aucun Git, ESP-IDF ni Python pour l'utilisateur**. Le programme transmet le Wi-Fi, les identifiants Tailscale et les trois cibles JK en USB physique, puis le firmware sauvegarde la configuration dans la NVS. L'ancien ESP32 VPN fonctionne toujours sans modification. Une version **ESP32-S3 N16R8** devra être compilée et testée séparément.
+
+[Mode d'emploi du flasheur](tools/windows-flasher/README.md) — [Compilation du kit EXE avec firmware intégré](https://github.com/tapion69/smart-energy-android/actions/workflows/build-vpn-gateway.yml).
+
+**Sécurité :** prototype non validé matériellement, secrets stockés dans la NVS actuellement non chiffrée. Ne pas mettre en production ni flasher la passerelle VPN déjà opérationnelle sans test avec une carte de réserve.
+
+---
+
+
 **Projet en développement — un premier code source de test est présent, mais aucune APK de release ni firmware validé n'est publié.**
 
 Application Android autonome (sans Home Assistant) pour consulter les données des **JK BMS** et des **onduleurs Voltronic/Axpert** par l'intermédiaire de passerelles ESP32 dédiées.
