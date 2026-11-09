@@ -37,4 +37,18 @@ class JkTransportPolicyTest {
         assertEquals(Route.NO_CONNECTION,
             JkTransportPolicy.select(false,"auto",false,false,false))
     }
+
+    @org.junit.Test fun vpnReaderSlotsKeepLegacyAndRejectUnknownRoutes() {
+        org.junit.Assert.assertEquals("/api/v1/jk/telemetry",
+            JkTransportPolicy.vpnReadPath(1,"/api/v1/telemetry"))
+        org.junit.Assert.assertEquals("/api/v1/jk/2/telemetry",
+            JkTransportPolicy.vpnReadPath(2,"/api/v1/telemetry"))
+        org.junit.Assert.assertEquals("/api/v1/jk/3/details",
+            JkTransportPolicy.vpnReadPath(3,"/api/v1/details"))
+        org.junit.Assert.assertEquals("/api/v1/health",
+            JkTransportPolicy.vpnReadPath(3,"/api/v1/health"))
+        org.junit.Assert.assertNull(JkTransportPolicy.vpnReadPath(4,"/api/v1/telemetry"))
+        org.junit.Assert.assertNull(JkTransportPolicy.vpnReadPath(2,"/api/v1/jk/write"))
+        org.junit.Assert.assertNull(JkTransportPolicy.vpnReadPath(2,"/api/v1/wifi"))
+    }
 }
