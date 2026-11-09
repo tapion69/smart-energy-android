@@ -115,6 +115,10 @@ class MainActivity : Activity() {
     private val advancedCards = linkedMapOf<String, BatteryAdvancedCard>()
     private var dashboardMacs = emptyList<String>()
     private var currentTab = 0 // 0 Batterie, 1 Détails, 2 Paramètres
+    private var parameterEditingEnabled = false // Never persisted; always locked on navigation.
+    private var activeReaderSlot = 1
+    private lateinit var readerSelector: LinearLayout
+    private lateinit var readerHeader: TextView
     private var selectedBmsMac = "" // empty = global overview if multiple BMS
     private var mountedBmsMac = ""
     private lateinit var bmsTabStrip: android.widget.HorizontalScrollView
@@ -407,6 +411,7 @@ class MainActivity : Activity() {
     }
 
     private fun drawUi() {
+        activeReaderSlot=prefs.getInt("active_reader_slot",1).coerceIn(1,3)
         val scroll = ScrollView(this).apply { setBackgroundColor(this@MainActivity.background) }
         val root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
@@ -428,11 +433,35 @@ class MainActivity : Activity() {
         brand.addView(label("SMART ENERGY", 17f, true, mint),
             LinearLayout.LayoutParams(-2, -2).apply { leftMargin = d(8) })
         add(root, brand, 2)
-        add(root, label("Tableau de bord JK", 25f, true), 18)
+        val dashboardPage=LinearLayout(this).apply { orientation=LinearLayout.VERTICAL }
+        val configurationPage=LinearLayout(this).apply { orientation=LinearLayout.VERTICAL }
+        fun showConfiguration(show:Boolean) {
+            dashboardPage.visibility=if(show) View.GONE else View.VISIBLE
+            configurationPage.visibility=if(show) View.VISIBLE else View.GONE
+            parameterEditingEnabled=false
+            mountedTab=-1
+            if(!show) lastTelemetry?.let { showTelemetry(it) }
+            scroll.post { scroll.scrollTo(0,0) }
+        }
+        val navigation=LinearLayout(this).apply { orientation=LinearLayout.HORIZONTAL }
+        for((title,config) in listOf("Tableau de bord" to false,"Configuration et association" to true)) {
+            val item=action(title) { showConfiguration(config) }
+            item.textSize=12f
+            navigation.addView(item,LinearLayout.LayoutParams(0,d(48),1f).apply {
+                rightMargin=d(4);leftMargin=d(4)
+            })
+        }
+        add(root,navigation,14)
+        root.addView(dashboardPage)
+        root.addView(configurationPage)
+        val startInConfig=storedCode().isBlank()
+        dashboardPage.visibility=if(startInConfig) View.GONE else View.VISIBLE
+        configurationPage.visibility=if(startInConfig) View.VISIBLE else View.GONE
+        add(dashboardPage, label("Tableau de bord JK", 25f, true), 18)
         status = label("Connexion à la passerelle…", 13f, false, subdued)
-        add(root, status, 8)
+        add(dashboardPage, status, 8)
         telemetryStatus = label("En attente des mesures réelles du JK", 13f, false, subdued)
-        add(root, telemetryStatus, 10)
+        add(dashboardPage, telemetryStatus, 10)
         val tabs = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
         tabOverview = action("Batterie") { switchDashboardTab(0) }
         tabExtended = action("Détails") { switchDashboardTab(1) }
@@ -450,27 +479,28 @@ class MainActivity : Activity() {
             addView(bmsTabRow)
             visibility = View.GONE
         }
-        add(root, bmsTabStrip, 8)
-        add(root, detailsTabRow, 8)
+        add(dashboardPage, bmsTabStrip, 8)
+        add(dashboardPage, detailsTabRow, 8)
         parameterFeedback=label("",12f,false,mint).apply { visibility=View.GONE }
-        add(root, parameterFeedback, 6)
+        add(dashboardPage, parameterFeedback, 6)
         highlightActiveTab()
         telemetryPanel = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
-        add(root, telemetryPanel, 8)
-        add(root, action("⟳ Actualiser les mesures") { refreshTelemetry() }, 8)
-        add(root, action("Se connecter via ESP32 VPN / Tailscale") {
+        add(dashboardPage, telemetryPanel, 8)
+        add(dashboardPage, action("⟳ Actualiser les mesures") { refreshTelemetry() }, 8)
+        add(dashboardPage, action("Se connecter via ESP32 VPN / Tailscale") {
             prefs.edit().putString("connection_preference","gateway").apply()
             connectGatewayRemote()
         }, 8)
-        add(root, label("Mesures expérimentales. Les modifications manuelles locales restent limitées et ne remplacent jamais les protections du BMS.", 12f, color = subdued), 8)
-        val advanced = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            visibility = if (storedCode().isBlank()) View.VISIBLE else View.GONE
-        }
-        add(root, action("⚙ Configuration et association") {
-            advanced.visibility = if (advanced.visibility == View.VISIBLE) View.GONE else View.VISIBLE
-        }, 20)
-        root.addView(advanced)
+        add(dashboardPage, label("Mesures expérimentales. Les réglages du BMS ne peuvent être modifiés qu'après un déverrouillage explicite.", 12f, color = subdued), 8)
+        val advanced=configurationPage
+        add(advanced,label("Configuration et associations",25f,true),18)
+        val readers=section(advanced,"Mes passerelles ESP32 JK (2 BMS maximum chacune)")
+        add(readers,label("Trois lecteurs JK indépendants, soit jusqu'à six BMS. Sélectionne un lecteur avant de l'associer, le configurer ou choisir ses batteries.",12f,color=subdued))
+        readerSelector=LinearLayout(this).apply { orientation=LinearLayout.HORIZONTAL }
+        add(readers,readerSelector,6)
+        readerHeader=label("",13f,false,subdued)
+        add(readers,readerHeader,8)
+        refreshReaderSelector()
 
         val lan = section(advanced, "Connexion quotidienne — Wi-Fi maison")
         add(lan, label("L’application mémorise le code après association. Si une réinstallation l’a effacé, renseigne le code dans la section 2 puis clique ici : pas besoin de reconfigurer la box.", color = subdued))
@@ -548,7 +578,7 @@ class MainActivity : Activity() {
         add(a, label("Avec le mode BOOT 0.3.1, l'application rejoint automatiquement le Wi-Fi temporaire et demande une seconde confirmation physique ; il reste ouvert au maximum 2 minutes.", 12f, color = subdued))
 
         val b = section(advanced, "3. Gérer les JK BMS enregistrés")
-        add(b, label("Tes BMS sauvegardés s'affichent même lorsqu'ils sont déjà connectés et invisibles au scan BLE. Décoche une batterie puis enregistre pour la retirer de l'ESP32 ; tu pourras la recocher plus tard sans modifier son BMS.",13f,color=subdued))
+        add(b, label("Chaque lecteur accepte deux BMS dans l'application. Décoche un BMS puis sauvegarde pour le retirer ; son adresse reste connue pour le réassocier. Utilise Renommer pour personnaliser chaque batterie.",13f,color=subdued))
         add(b, action("Afficher mes BMS enregistrés") { loadSavedBms() }, 8)
         scanBtn = action("Rechercher de nouveaux appareils Bluetooth") { scanBle() }
         add(b, scanBtn)
@@ -1420,7 +1450,7 @@ class MainActivity : Activity() {
             val quality=if(row.discoveredNow && row.rssi!=null)
                 " · ${row.rssi} dBm" else ""
             val check=CheckBox(this).apply {
-                text="${row.name}\n${row.mac}${quality}\n${origin}"
+                text="${displayBmsName(row.mac,row.name)}\n${row.mac}${quality}\n${origin}"
                 setTextColor(normal)
                 isChecked=pending.contains(row.mac)
                 setOnCheckedChangeListener { _,checked ->
@@ -1428,6 +1458,7 @@ class MainActivity : Activity() {
                 }
             }
             add(scanPanel,check,6)
+            add(scanPanel,action("Renommer ce BMS") { renameBms(row.mac) },2)
             scanChoices.add(check)
         }
     }
@@ -1495,8 +1526,8 @@ class MainActivity : Activity() {
             return
         }
         val wanted=JkBmsRegistry.normalized(chosen)
-        if(wanted.size!=chosen.size || wanted.size>4) {
-            state("Sélection invalide : 0 à 4 adresses MAC uniques autorisées sur cet ESP32.")
+        if(wanted.size!=chosen.size || wanted.size>2) {
+            state("Sélection invalide : au maximum deux BMS par lecteur ESP32 JK.")
             return
         }
         val removing=registeredBms.filter { it !in wanted }
@@ -1659,6 +1690,7 @@ class MainActivity : Activity() {
     }
 
     private fun switchDashboardTab(tab: Int) {
+        if(tab!=currentTab) parameterEditingEnabled=false
         if (tab == currentTab) {
             if (tab == 2) refreshDetails()
             return
@@ -1706,6 +1738,10 @@ class MainActivity : Activity() {
     }
 
     private fun editJkParameter(mac: String, param: JSONObject) {
+        if(!parameterEditingEnabled) {
+            writeFeedback("Active d'abord le mode modifications dans Paramètres.")
+            return
+        }
         if(remoteGatewayConnection || remoteVpnConnection) {
             AlertDialog.Builder(this).setTitle("Écriture distante désactivée")
                 .setMessage("Notre ESP32 VPN est exclusivement en lecture. " +
@@ -1852,7 +1888,128 @@ class MainActivity : Activity() {
         }
     }
 
+
+    // A single encrypted Android Keystore backs the existing pairing codes.
+    // Each reader has independent code, identity, LAN address and BMS registry.
+    // The private VPN endpoint/token remain common to all three readers.
+    private val readerKeys get() = listOf("pairing_code_cipher","device_id",
+        "setup_ssid","local_ip","paired_bms_json","known_jk_macs")
+    private fun slotKey(slot:Int,key:String) = "reader_${slot}_${key}"
+
+    private fun refreshReaderSelector() {
+        readerSelector.removeAllViews()
+        for(slot in 1..3) {
+            val active=slot==activeReaderSlot
+            val item=action("ESP $slot") { switchReaderSlot(slot) }
+            item.textSize=13f
+            item.backgroundTintList=ColorStateList.valueOf(
+                if(active) mint else Color.rgb(38,57,77))
+            item.setTextColor(if(active) background else normal)
+            readerSelector.addView(item,LinearLayout.LayoutParams(0,d(46),1f).apply {
+                rightMargin=d(4)
+            })
+        }
+        readerHeader.text="Lecteur sélectionné : ESP $activeReaderSlot. " +
+            "Chaque lecteur possède son propre Wi-Fi, code d'accès et deux BMS."
+    }
+
+    private fun switchReaderSlot(target:Int) {
+        if(target !in 1..3 || target==activeReaderSlot) return
+        if(lanConnectionPending || setupTransport) {
+            state("Termine la connexion ou l'association en cours avant de changer d'ESP32.")
+            return
+        }
+        val editor=prefs.edit()
+        // Snapshot the active reader; slot 1 imports legacy APK preferences.
+        for(key in readerKeys)
+            editor.putString(slotKey(activeReaderSlot,key),prefs.getString(key,"") ?: "")
+        // Restore the chosen profile before starting new network operations.
+        for(key in readerKeys) {
+            val name=slotKey(target,key)
+            if(prefs.contains(name)) editor.putString(key,prefs.getString(name,"") ?: "")
+            else editor.remove(key)
+        }
+        editor.putInt("active_reader_slot",target).commit()
+        activeReaderSlot=target
+        lanVerified=false
+        remoteGatewayConnection=false
+        remoteVpnConnection=false
+        localHost=prefs.getString("local_ip","") ?: ""
+        activeSetupCode=storedCode()
+        selectedDeviceId=prefs.getString("device_id","") ?: ""
+        releaseConnection()
+        registeredBms.clear()
+        chosen.clear()
+        lastScannedBms=emptyList()
+        scanPanel.removeAllViews()
+        selectedBmsMac=""
+        parameterEditingEnabled=false
+        lastTelemetry=null
+        lastDetails=null
+        lastDetailsFetchedAt=0L
+        dashboardMacs=emptyList()
+        mountedTab=-1
+        telemetryPanel.removeAllViews()
+        status.text="ESP32 JK $target sélectionné. Connecte cette passerelle."
+        telemetryStatus.text="En attente des mesures de l'ESP32 JK $target."
+        lanIp.setText(localHost)
+        apName.setText(prefs.getString("setup_ssid","") ?: "")
+        setupCode.text.clear()
+        refreshReaderSelector()
+        if(selectedDeviceId.isNotBlank() && storedCode().isNotBlank()) {
+            when(selectedRoute()) {
+                JkTransportPolicy.Route.GATEWAY_VPN -> connectGatewayRemote()
+                JkTransportPolicy.Route.LOCAL_WIFI -> connectHomeLan(false)
+                else -> state("ESP32 $target : configure ou choisis le mode de connexion.")
+            }
+        }
+    }
+
+    private fun displayBmsName(mac:String,default:String):String {
+        val custom=prefs.getString("bms_name_"+mac.replace(":",""),"") ?: ""
+        return custom.ifBlank { default }.take(32)
+    }
+    private fun renameBms(mac:String) {
+        val field=input("Nom du BMS (ex. Batterie solaire 1)")
+        field.setText(prefs.getString("bms_name_"+mac.replace(":",""),"") ?: "")
+        AlertDialog.Builder(this)
+            .setTitle("Renommer la batterie")
+            .setMessage("Ce nom est conservé sur ce téléphone. Aucun réglage du BMS n'est modifié.")
+            .setView(field)
+            .setNegativeButton("Annuler",null)
+            .setPositiveButton("Enregistrer") { _,_ ->
+                val name=field.text.toString().trim().take(32)
+                prefs.edit().putString("bms_name_"+mac.replace(":",""),name).apply()
+                renderBmsRegistry()
+                mountedTab=-1
+                lastTelemetry?.let { showTelemetry(it) }
+            }.show()
+    }
+
+    private fun toggleParameterEditMode() {
+        if(parameterEditingEnabled) {
+            parameterEditingEnabled=false
+            mountedTab=-1
+            lastTelemetry?.let { showTelemetry(it) }
+            return
+        }
+        if(remoteGatewayConnection || remoteVpnConnection || !lanVerified || setupTransport) {
+            writeFeedback("Les modifications exigent une connexion locale directe au lecteur JK.")
+            return
+        }
+        AlertDialog.Builder(this)
+            .setTitle("Attention : modifications des paramètres")
+            .setMessage("Tu entres dans les modifications de paramètres du BMS. Des valeurs incorrectes peuvent endommager la batterie ou neutraliser des protections. Chaque changement demandera une confirmation individuelle ; les protections critiques exigent une confirmation supplémentaire. Aucune modification automatique.")
+            .setNegativeButton("Annuler",null)
+            .setPositiveButton("Activer le mode modification") { _,_ ->
+                parameterEditingEnabled=true
+                mountedTab=-1
+                lastTelemetry?.let { showTelemetry(it) }
+            }.show()
+    }
+
     private fun selectBms(mac: String) {
+        parameterEditingEnabled=false
         selectedBmsMac = mac
         mountedBmsMac = ""
         mountedTab = -1
@@ -1879,7 +2036,7 @@ class MainActivity : Activity() {
             })
         }
         button("Accueil", "")
-        for ((index,mac) in macs.withIndex()) button("BMS ${index+1}",mac)
+        for ((index,mac) in macs.withIndex()) button(displayBmsName(mac,"BMS ${index+1}"),mac)
     }
 
     private fun showTelemetry(response: JSONObject) {
@@ -1930,7 +2087,9 @@ class MainActivity : Activity() {
             }
         }
         val liveCount=(0 until devices.length()).count { devices.optJSONObject(it)?.optBoolean("available")==true }
-        if(global) globalOverview?.bind(devices) { mac -> selectBms(mac) }
+        if(global) globalOverview?.bind(devices,
+            { mac -> selectBms(mac) },
+            { mac,index -> displayBmsName(mac,"BMS ${index+1}") })
         else {
             for(i in 0 until devices.length()){
                 val item=devices.optJSONObject(i) ?: continue
@@ -1939,7 +2098,9 @@ class MainActivity : Activity() {
                 when(currentTab) {
                     0 -> dashboardCards[mac]?.bind(i,item)
                     1 -> advancedCards[mac]?.measurements(i,item)
-                    2 -> advancedCards[mac]?.settings(i,detailForMac(mac),item) {param ->
+                    2 -> advancedCards[mac]?.settings(i,detailForMac(mac),item,
+                        parameterEditingEnabled,
+                        { toggleParameterEditMode() }) { param ->
                         editJkParameter(mac,param)
                     }
                 }
