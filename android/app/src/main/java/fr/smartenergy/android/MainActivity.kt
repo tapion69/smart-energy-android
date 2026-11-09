@@ -137,6 +137,15 @@ class MainActivity : Activity() {
     private lateinit var parameterFeedback: TextView
     private var lastParameterFeedback: String = ""
     @Volatile private var telemetryBusy = false
+    private var debugEnabled=false
+    private val fleetWorker=Executors.newSingleThreadExecutor()
+    @Volatile private var fleetBusy=false
+    private val fleetCache=mutableMapOf<Int,Pair<Long,JSONObject>>() // UI-thread only
+    private var nextFleetSlot=1
+    private lateinit var fleetPanel:LinearLayout
+    private lateinit var fleetOverview:JkGlobalOverview
+    private val fleetOwnerByMac=mutableMapOf<String,Int>()
+    private var lastLocalSettingsRefreshAt=0L
     private val telemetryTicker = object : Runnable {
         override fun run() {
             if (!lanVerified && !lanConnectionPending && !setupTransport) {
@@ -186,10 +195,14 @@ class MainActivity : Activity() {
             }
             if (lanVerified || (setupTransport && apNetwork != null)) {
                 refreshTelemetry()
-                if (currentTab == 2 && android.os.SystemClock.elapsedRealtime() - lastDetailsFetchedAt > 30000L) {
+                // The /details API returns a cache. Do not fetch it every 30 s.
+                // The ESP32 itself now reads BMS settings every 30 min, plus
+                // a one-shot fresh read on explicit edit/after each write.
+                if(currentTab==2 &&
+                   android.os.SystemClock.elapsedRealtime()-lastDetailsFetchedAt>1800000L)
                     refreshDetails()
-                }
             }
+            pollOtherFleetReader()
             uiHandler.postDelayed(this, 2500)
         }
     }
@@ -411,6 +424,7 @@ class MainActivity : Activity() {
     }
 
     private fun drawUi() {
+        debugEnabled=prefs.getBoolean("debug_enabled",false)
         activeReaderSlot=prefs.getInt("active_reader_slot",1).coerceIn(1,3)
         val scroll = ScrollView(this).apply { setBackgroundColor(this@MainActivity.background) }
         val root = LinearLayout(this).apply {
@@ -462,6 +476,10 @@ class MainActivity : Activity() {
         add(dashboardPage, status, 8)
         telemetryStatus = label("En attente des mesures réelles du JK", 13f, false, subdued)
         add(dashboardPage, telemetryStatus, 10)
+        fleetPanel=LinearLayout(this).apply { orientation=LinearLayout.VERTICAL }
+        fleetOverview=JkGlobalOverview(this)
+        fleetPanel.addView(fleetOverview,LinearLayout.LayoutParams(-1,-2))
+        add(dashboardPage,fleetPanel,10)
         val tabs = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
         tabOverview = action("Batterie") { switchDashboardTab(0) }
         tabExtended = action("Détails") { switchDashboardTab(1) }
@@ -501,6 +519,20 @@ class MainActivity : Activity() {
         readerHeader=label("",13f,false,subdued)
         add(readers,readerHeader,8)
         refreshReaderSelector()
+        val diagnosticSection=section(advanced,"Debug et diagnostics")
+        val diagnosticSwitch=CheckBox(this).apply {
+            text="Afficher les diagnostics avancés (BLE, radio, Wi-Fi, mémoire)"
+            setTextColor(normal)
+            isChecked=debugEnabled
+            setOnCheckedChangeListener { _,checked ->
+                debugEnabled=checked
+                prefs.edit().putBoolean("debug_enabled",checked).apply()
+                lastTelemetry?.let { showTelemetry(it) }
+            }
+        }
+        add(diagnosticSection,diagnosticSwitch)
+        add(diagnosticSection,label("Désactivé par défaut. Les alertes réelles du BMS restent visibles sur les cartes.",12f,color=subdued))
+        renderFleetOverview()
 
         val lan = section(advanced, "Connexion quotidienne — Wi-Fi maison")
         add(lan, label("L’application mémorise le code après association. Si une réinstallation l’a effacé, renseigne le code dans la section 2 puis clique ici : pas besoin de reconfigurer la box.", color = subdued))
@@ -2035,8 +2067,132 @@ class MainActivity : Activity() {
         for ((index,mac) in macs.withIndex()) button(displayBmsName(mac,"BMS ${index+1}"),mac)
     }
 
+
+    // Multi-reader overview: never sum old samples or silently ignore a
+    // configured BMS. Read each ESP32's independent HTTP cache, not extra BLE.
+    private fun registeredMacs(slot:Int):List<String> {
+        val key=if(slot==activeReaderSlot) "paired_bms_json"
+                else slotKey(slot,"paired_bms_json")
+        return try {
+            val array=JSONArray(prefs.getString(key,"[]") ?: "[]")
+            (0 until array.length()).mapNotNull { i ->
+                array.optString(i).takeIf { it.isNotBlank() }
+            }.distinct()
+        } catch (_:Exception) { emptyList() }
+    }
+
+    private fun renderFleetOverview() {
+        if(!::fleetOverview.isInitialized) return
+        val all=JSONArray()
+        val now=android.os.SystemClock.elapsedRealtime()
+        fleetOwnerByMac.clear()
+        for(slot in 1..3) {
+            val saved=registeredMacs(slot)
+            val cached=fleetCache[slot]
+            val fresh=cached!=null && now-cached.first<=15000L
+            val devices=cached?.second?.optJSONArray("devices")
+            val byMac=mutableMapOf<String,JSONObject>()
+            if(devices!=null) for(i in 0 until devices.length()) {
+                val item=devices.optJSONObject(i) ?: continue
+                val mac=item.optString("mac")
+                if(mac.isNotBlank())byMac[mac]=item
+            }
+            val addresses=(saved+byMac.keys).distinct()
+            for((index,mac) in addresses.withIndex()) {
+                val record=byMac[mac]
+                val display=if(fresh && record!=null)
+                    JSONObject(record.toString()) else JSONObject().put("mac",mac)
+                display.put("reader_slot",slot)
+                if(!fresh) {
+                    display.put("available",false)
+                    display.remove("values")
+                }
+                all.put(display)
+                fleetOwnerByMac[mac]=slot
+            }
+        }
+        fleetOverview.bind(all,
+            { mac ->
+                val slot=fleetOwnerByMac[mac] ?: activeReaderSlot
+                if(slot!=activeReaderSlot) switchReaderSlot(slot)
+                selectBms(mac)
+            },
+            { mac,index ->
+                val slot=fleetOwnerByMac[mac] ?: 1
+                displayBmsName(mac,"ESP $slot · BMS ${index+1}")
+            })
+    }
+
+    private fun slotPairingCode(slot:Int):String {
+        if(slot==activeReaderSlot) return storedCode()
+        val encoded=prefs.getString(slotKey(slot,"pairing_code_cipher"),"") ?: ""
+        if(encoded.isBlank())return ""
+        return try {
+            val data=Base64.decode(encoded,Base64.NO_WRAP)
+            if(data.size<29) "" else {
+                val cipher=Cipher.getInstance("AES/GCM/NoPadding")
+                cipher.init(Cipher.DECRYPT_MODE,encryptionKey(),
+                    GCMParameterSpec(128,data.copyOfRange(0,12)))
+                String(cipher.doFinal(data.copyOfRange(12,data.size)),Charsets.UTF_8)
+            }
+        }catch (_:Exception){""}
+    }
+
+    private fun pollOtherFleetReader() {
+        if(fleetBusy || setupTransport || lanConnectionPending) return
+        // The active reader already has a dedicated 2.5s refresh.
+        val slots=(1..3).filter { it!=activeReaderSlot &&
+            (registeredMacs(it).isNotEmpty() ||
+             prefs.getString(slotKey(it,"device_id"),"")?.isNotBlank()==true) }
+        if(slots.isEmpty())return
+        val slot=slots[nextFleetSlot++ % slots.size]
+        fleetBusy=true
+        fleetWorker.execute {
+            val result=try { fleetReadOnce(slot) } catch (_:Exception) { null }
+            runOnUiThread {
+                // Old successful data is deliberately allowed to age out.
+                if(result!=null)
+                    fleetCache[slot]=android.os.SystemClock.elapsedRealtime() to result
+                renderFleetOverview()
+                fleetBusy=false
+            }
+        }
+    }
+
+    private fun fleetReadOnce(slot:Int):JSONObject? {
+        val useVpn=vpnConnected()
+        val connection:HttpURLConnection
+        if(useVpn) {
+            val host=prefs.getString("remote_gateway_ip","") ?: ""
+            val token=storedGatewayToken()
+            if(!allowedTailnetIp(host) || !validGatewayToken(token))return null
+            val route=JkTransportPolicy.vpnReadPath(slot,"/api/v1/telemetry")
+                ?:return null
+            connection=URL("http://$host:18767$route").openConnection() as HttpURLConnection
+            connection.setRequestProperty("X-Gateway-Token",token)
+        } else {
+            val host=prefs.getString(slotKey(slot,"local_ip"),"") ?: ""
+            val code=slotPairingCode(slot)
+            if(!allowedLocalIp(host) || code.isBlank())return null
+            connection=URL("http://$host/api/v1/telemetry").openConnection()
+                as HttpURLConnection
+            connection.setRequestProperty("X-Setup-Code",code)
+        }
+        return try {
+            connection.connectTimeout=2800
+            connection.readTimeout=4000
+            connection.requestMethod="GET"
+            if(connection.responseCode!=200) return null
+            val result=JSONObject(connection.inputStream.bufferedReader().use { it.readText() })
+            if(result.optString("source")!="jk02-ffe1-read-only" ||
+               result.optJSONArray("devices")==null) null else result
+        } finally {connection.disconnect()}
+    }
+
     private fun showTelemetry(response: JSONObject) {
         lastTelemetry = response
+        fleetCache[activeReaderSlot]=android.os.SystemClock.elapsedRealtime() to response
+        renderFleetOverview()
         val devices = response.optJSONArray("devices")
         if (devices == null || devices.length() == 0) {
             telemetryStatus.text = if (devices == null)
@@ -2067,8 +2223,11 @@ class MainActivity : Activity() {
             detailsTabRow.visibility = if(global) View.GONE else View.VISIBLE
             renderBmsTabs(macs,multi)
             if(global) {
-                globalOverview = JkGlobalOverview(this)
-                telemetryPanel.addView(globalOverview,LinearLayout.LayoutParams(-1,-2))
+                // The multi-reader global overview is already shown above.
+                // Do not draw a misleading, selected-reader-only total.
+                telemetryPanel.addView(label(
+                    "Choisis une batterie pour afficher ses mesures détaillées.",13f,
+                    color=subdued),LinearLayout.LayoutParams(-1,-2))
             } else {
                 val mac = selectedBmsMac
                 if(currentTab == 0) {
@@ -2083,10 +2242,7 @@ class MainActivity : Activity() {
             }
         }
         val liveCount=(0 until devices.length()).count { devices.optJSONObject(it)?.optBoolean("available")==true }
-        if(global) globalOverview?.bind(devices,
-            { mac -> selectBms(mac) },
-            { mac,index -> displayBmsName(mac,"BMS ${index+1}") })
-        else {
+        if(!global) {
             for(i in 0 until devices.length()){
                 val item=devices.optJSONObject(i) ?: continue
                 val mac=item.optString("mac")
@@ -2167,7 +2323,7 @@ class MainActivity : Activity() {
         val diagnostics=offlineDiagnostics + linkDiagnostics +
             listOf(wifiNote,heapNote).filter { it.isNotBlank() }
         telemetryStatus.text = "$liveCount/${devices.length()} JK en ligne · $sectionTitle" +
-            if (diagnostics.isEmpty()) "" else "\n" + diagnostics.joinToString("\n")
+            if (!debugEnabled || diagnostics.isEmpty()) "" else "\n" + diagnostics.joinToString("\n")
     }
 
     override fun onResume() {
