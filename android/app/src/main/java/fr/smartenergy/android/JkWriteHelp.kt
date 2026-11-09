@@ -22,6 +22,12 @@ object JkWriteHelp {
             "Paramètre non autorisé ou valeur hors des limites"
         "write_permission_expired_or_not_armed" ->
             "Confirmation de modification expirée : recommencer après vérification"
+        "critical_protection_confirmation_required" ->
+            "Confirmation spéciale requise pour modifier une protection du BMS"
+        "safety_relationship_failed" ->
+            "Nouvelle valeur incompatible avec une autre limite de protection du BMS"
+        "already_at_target" ->
+            "La valeur demandée est déjà enregistrée sur ce BMS"
         "send_failed" -> "La commande BLE n'a pas été transmise"
         "timeout_unverified" -> "Aucune confirmation de la valeur par le BMS"
         "mismatch" -> "Le BMS renvoie une valeur différente de celle demandée"
