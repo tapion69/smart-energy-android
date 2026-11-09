@@ -2202,9 +2202,15 @@ class MainActivity : Activity() {
     }
 
     private fun fleetReadOnce(slot:Int):JSONObject? {
-        val useVpn=vpnConnected()
+        // Do not let an in-flight request use a profile that became active
+        // while the user was switching readers. The foreground owns that slot.
+        if(slot==activeReaderSlot) return null
+        val vpnActive=vpnConnected()
+        val forceVpn=prefs.getString("connection_preference","auto")=="gateway"
+        // Never silently substitute an old LAN address when VPN was selected.
+        if(forceVpn && !vpnActive)return null
         val connection:HttpURLConnection
-        if(useVpn) {
+        if(vpnActive) {
             val host=prefs.getString("remote_gateway_ip","") ?: ""
             val token=storedGatewayToken()
             if(!allowedTailnetIp(host) || !validGatewayToken(token))return null
