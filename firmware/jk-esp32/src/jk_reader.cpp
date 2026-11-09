@@ -49,6 +49,10 @@ struct Device {
   uint32_t gapBusyCount = 0;
   uint32_t gapCancelCount = 0;
   uint32_t gapStillBusyCount = 0;
+  uint32_t lastConnectDurationMs = 0;
+  bool gapBeforeConnect = false;
+  bool gapAfterConnect = false;
+  bool scanBeforeConnect = false;
   uint32_t connections = 0;
   uint32_t disconnections = 0;
   // One-shot, non-optimistic parameter write. 0=idle, 1=queued, 2=sent,
@@ -71,6 +75,11 @@ struct Session {
   NimBLEClient *client = nullptr;
   NimBLERemoteCharacteristic *notify = nullptr;
   bool subscribed = false;
+  uint32_t nextRetryAt = 0;
+  uint32_t lastRefreshAt = 0;
+  uint32_t lastSettingsRequestAt = 0;
+  uint32_t lastInfoRequestAt = 0;
+  uint8_t failures = 0;
 };
 static Session sessions[MAX_BMS];
 static volatile bool maintenanceRequested = false;
@@ -312,13 +321,32 @@ bool discoverSharedAddress(const char *wanted, NimBLEAddress &target) {
   return false;
 }
 
-void pollOne(Session &session, const char *mac) {
+void closeSession(Session &session,const char* nextState) {
+  NimBLEClient *client=session.client;
+  if(!client) return;
+  session.subscribed=false; // Prevent the async callback using freed notify.
+  session.notify=nullptr;
+  session.client=nullptr;
+  if(client->isConnected()) client->disconnect();
+  NimBLEDevice::deleteClient(client);
+  const int index=session.index;
+  portENTER_CRITICAL(&stateMux);
+  if(index<configured && strcmp(devices[index].mac,session.mac)==0) {
+    Device &d=devices[index];
+    if(d.bleConnected) ++d.disconnections;
+    d.bleConnected=false;
+    if(d.writePhase==1 || d.writePhase==2) d.writePhase=7;
+  }
+  portEXIT_CRITICAL(&stateMux);
+  if(nextState) updateState(index,session.mac,nextState);
+}
+bool openSession(Session &session, const char *mac) {
   const int index = session.index;
   strncpy(session.mac, mac, sizeof(session.mac) - 1);
   session.mac[sizeof(session.mac)-1] = 0;
   if(!recoverGapBeforeConnect(index,mac)) {
-    xSemaphoreGive(radioMutex);
-    return;
+    
+    return false;
   }
   updateState(index, mac, "searching_ble");
   markBleEvent(index, mac, BleEvent::Scan);
@@ -326,43 +354,46 @@ void pollOne(Session &session, const char *mac) {
   if (!discoverSharedAddress(mac, target)) {
     markBleEvent(index, mac, BleEvent::NotSeen);
     updateState(index, mac, "ble_not_seen");
-    xSemaphoreGive(radioMutex);
-    return;
+    
+    return false;
   }
   // Discover once for every missing JK; before initiating a new connection
   // explicitly wait for (or recover) any prior unfinished GAP initiation.
   if(!recoverGapBeforeConnect(index,mac)) {
-    xSemaphoreGive(radioMutex);
-    return;
+    
+    return false;
   }
   updateState(index, mac, "connecting_ble");
   NimBLEClient *client = NimBLEDevice::createClient();
   if (!client) {
     markBleEvent(index, mac, BleEvent::NoClient);
     updateState(index, mac, "ble_client_unavailable");
-    xSemaphoreGive(radioMutex);
-    return;
+    
+    return false;
   }
   // Same deliberate 15-second timeout used by our reliable Bleak/BlueZ add-on.
   client->setConnectTimeout(15000);
-  bool connected = false;
-  int bleError = 0;
-  // On NimBLE 2.4.0, rc=2 is BLE_HS_EALREADY: GAP still considers a previous
-  // connection attempt active. The screenshot confirmed exactly this code.
-  // Retry only this *transient* state, with bounded delays and no global
-  // adapter reset/disconnect (which would interrupt a healthy JK session).
-  for (uint8_t attempt = 0; attempt < 3; ++attempt) {
-    markBleEvent(index, mac, BleEvent::Connect);
-    connected = client->connect(target);
-    if (connected) break;
-    bleError = client->getLastError();
-    if (bleError != BLE_HS_EALREADY || attempt == 2) break;
-    updateState(index, mac, "ble_busy_retry");
-    // Backoff alone is insufficient if the initiator remains active in host.
-    // Recover only that pending procedure and preserve connected clients.
-    if (!recoverGapBeforeConnect(index,mac)) break;
-    vTaskDelay(pdMS_TO_TICKS(350 + attempt*350));
+  // Single manager owns ALL BLE initiations; leave per-BMS retries to its
+  // bounded scheduler. Avoid racing internal retries with new GAP attempts.
+  client->setConnectRetries(0);
+  client->setConnectionParams(32,48,0,600,48,32);
+  markBleEvent(index,mac,BleEvent::Connect);
+  const uint32_t t0=millis();
+  const bool gapBefore=ble_gap_conn_active()!=0;
+  const bool scanned=NimBLEDevice::getScan()->isScanning();
+  if(scanned) { NimBLEDevice::getScan()->stop(); vTaskDelay(pdMS_TO_TICKS(120)); }
+  const bool connected=client->connect(target);
+  const uint32_t elapsed=millis()-t0;
+  const bool gapAfter=ble_gap_conn_active()!=0;
+  portENTER_CRITICAL(&stateMux);
+  if(index<configured && strcmp(devices[index].mac,mac)==0) {
+    devices[index].lastConnectDurationMs=elapsed;
+    devices[index].gapBeforeConnect=gapBefore;
+    devices[index].gapAfterConnect=gapAfter;
+    devices[index].scanBeforeConnect=scanned;
   }
+  portEXIT_CRITICAL(&stateMux);
+  const int bleError=connected?0:client->getLastError();
   if (!connected) {
     markBleEvent(index, mac, BleEvent::ConnectFailed, bleError);
     Serial.printf("[JK] BLE client connect failed, slot=%d, code=%d\n", index + 1, bleError);
@@ -372,8 +403,8 @@ void pollOne(Session &session, const char *mac) {
     // initiation from this failed attempt.
     if(bleError==BLE_HS_EALREADY || ble_gap_conn_active())
       recoverGapBeforeConnect(index,mac);
-    xSemaphoreGive(radioMutex);
-    return;
+    
+    return false;
   }
   NimBLERemoteService *service =
       client->getService(NimBLEUUID("0000ffe0-0000-1000-8000-00805f9b34fb"));
@@ -385,8 +416,8 @@ void pollOne(Session &session, const char *mac) {
     updateState(index, mac, "ffe1_unavailable");
     client->disconnect();
     NimBLEDevice::deleteClient(client);
-    xSemaphoreGive(radioMutex);
-    return;
+    
+    return false;
   }
   session.assembler.reset();
   session.client = client;
@@ -401,8 +432,8 @@ void pollOne(Session &session, const char *mac) {
     updateState(index, mac, "ble_subscribe_failed");
     client->disconnect();
     NimBLEDevice::deleteClient(client);
-    xSemaphoreGive(radioMutex);
-    return;
+    
+    return false;
   }
 
   portENTER_CRITICAL(&stateMux);
@@ -422,137 +453,119 @@ void pollOne(Session &session, const char *mac) {
   sendReadCommand(characteristic, 0x97, withResponse);
   vTaskDelay(pdMS_TO_TICKS(650));
   if (client->isConnected()) sendReadCommand(characteristic, 0x96, withResponse);
-  xSemaphoreGive(radioMutex);
-  uint32_t lastRefreshAt = millis();
-  uint32_t lastSettingsRequestAt = millis();
-  uint32_t lastInfoRequestAt = millis();
+  
+  session.lastRefreshAt=millis();
+  session.lastSettingsRequestAt=millis();
+  session.lastInfoRequestAt=millis();
+  return true;
 
 
-  while (client->isConnected() && !setupMode && WiFi.status() == WL_CONNECTED) {
-    // Maintenance blocks new scans, not existing active streams.
-    bool configuredStill = false;
-    uint32_t lastReadingAt = 0;
-    portENTER_CRITICAL(&stateMux);
-    if (index < configured && strcmp(devices[index].mac, mac) == 0) {
-      configuredStill = true;
-      lastReadingAt = devices[index].lastReadingMs;
-    }
-    portEXIT_CRITICAL(&stateMux);
-    if (!configuredStill) break;
-
-
-    const uint32_t now = millis();
-    int pendingIndex = -1;
-    float pendingTarget = 0;
-    portENTER_CRITICAL(&stateMux);
-    if (index < configured && strcmp(devices[index].mac, mac) == 0) {
-      Device &item=devices[index];
-      if (item.writePhase == 1) {
-        pendingIndex = item.writeIndex;
-        pendingTarget = item.writeTarget;
-        item.writePhase = 2;
-        item.writeSentAt = now;
-      } else if (item.writePhase == 2 && item.writeSentAt &&
-                 (uint32_t)(now - item.writeSentAt) > 15000) {
-        item.writePhase = item.writeMismatchSeen ? 4 : 6;
-        // Never automatically repeat a timed-out or mismatched write.
-      }
-    }
-    portEXIT_CRITICAL(&stateMux);
-    if (pendingIndex >= 0) {
-      uint8_t packet[20] = {};
-      const bool valid = jkwrite::build(size_t(pendingIndex),pendingTarget,
-                                       jkwrite::isBoolean(size_t(pendingIndex)),packet);
-      const bool sent = valid && characteristic->writeValue(packet,sizeof(packet),withResponse);
-      if (!sent) {
-        portENTER_CRITICAL(&stateMux);
-        if (index < configured && strcmp(devices[index].mac,mac)==0 &&
-            devices[index].writePhase == 2) devices[index].writePhase = 5;
-        portEXIT_CRITICAL(&stateMux);
-      } else {
-        vTaskDelay(pdMS_TO_TICKS(350));
-        if (client->isConnected()) sendReadCommand(characteristic,0x96,withResponse);
-      }
-    }
-    // Keep settings and info reasonably fresh for the read-only UI even if
-    // somebody else changed the BMS configuration via the official app.
-    if ((uint32_t)(now-lastSettingsRequestAt) >= 300000) {
-      sendReadCommand(characteristic, 0x96, withResponse);
-      lastSettingsRequestAt = now;
-    }
-    if ((uint32_t)(now-lastInfoRequestAt) >= 900000) {
-      sendReadCommand(characteristic, 0x97, withResponse);
-      lastInfoRequestAt = now;
-    }
-    // JK02 usually pushes type-2 updates automatically. Only ask for 0x96 if
-    // no validated sample arrived for >= 8 s, throttled to one request / 8 s.
-    // Never disconnect a healthy BLE link just to refresh values.
-    if ((lastReadingAt == 0 || (uint32_t)(now - lastReadingAt) >= 8000) &&
-        (uint32_t)(now - lastRefreshAt) >= 8000) {
-      sendReadCommand(characteristic, 0x96, withResponse);
-      lastRefreshAt = now;
-      if (!lastReadingAt || (uint32_t)(now - lastReadingAt) > 30000) {
-        updateState(index, mac, "waiting_frames");
-      }
-    }
-    vTaskDelay(pdMS_TO_TICKS(250));
-  }
-
-  session.subscribed = false;
-  if (client->isConnected()) {
-    characteristic->unsubscribe();
-    client->disconnect();
-  }
-  portENTER_CRITICAL(&stateMux);
-  if (index < configured && strcmp(devices[index].mac, mac) == 0) {
-    devices[index].bleConnected = false;
-    devices[index].disconnections++;
-    if (devices[index].writePhase==1 || devices[index].writePhase==2)
-      devices[index].writePhase = 7; // Lost; never auto-retry.
-    devices[index].badFrames += session.assembler.badCrc;
-    devices[index].rejectedMeasurements += session.assembler.rejectedMeasurements;
-  }
-  portEXIT_CRITICAL(&stateMux);
-  session.notify = nullptr;
-  session.client = nullptr;
-  NimBLEDevice::deleteClient(client);
-  Serial.printf("[JK] BLE session ended: %s, reason=link_or_config_lost\n", mac);
-  updateState(index, mac, "ble_disconnected");
 }
 
-void worker(void *arg) {
-  Session *session = static_cast<Session *>(arg);
-  if (!session) { vTaskDelete(nullptr); return; }
-  const uint8_t index = session->index;
-  uint8_t failures = 0;
-  while (true) {
-    if (setupMode || WiFi.status() != WL_CONNECTED || maintenanceRequested) {
-      vTaskDelay(pdMS_TO_TICKS(500)); continue;
+void serviceSession(Session &session) {
+  if(!session.client || !session.client->isConnected() || !session.notify)return;
+  const int index=session.index;
+  const uint32_t now=millis();
+  NimBLERemoteCharacteristic *characteristic=session.notify;
+  const bool withResponse=!characteristic->canWriteNoResponse();
+  uint32_t lastReading=0;
+  int pending=-1;
+  float target=0;
+  portENTER_CRITICAL(&stateMux);
+  if(index<configured && strcmp(devices[index].mac,session.mac)==0) {
+    Device &d=devices[index];
+    lastReading=d.lastReadingMs;
+    if(d.writePhase==1) {
+      pending=d.writeIndex;target=d.writeTarget;
+    } else if(d.writePhase==2 && d.writeSentAt &&
+              (uint32_t)(now-d.writeSentAt)>15000) {
+      d.writePhase=d.writeMismatchSeen?4:6;
     }
-    char mac[18] = {};
+  }
+  portEXIT_CRITICAL(&stateMux);
+  if(pending>=0) {
+    uint8_t packet[20]={};
+    const bool valid=jkwrite::build(size_t(pending),target,
+                     jkwrite::isBoolean(size_t(pending)),packet);
+    const bool sent=valid && characteristic->writeValue(packet,sizeof(packet),withResponse);
     portENTER_CRITICAL(&stateMux);
-    if (index < configured) strncpy(mac, devices[index].mac, sizeof(mac)-1);
-    portEXIT_CRITICAL(&stateMux);
-    if (!mac[0]) { vTaskDelay(pdMS_TO_TICKS(1200)); continue; }
-    if (radioMutex && xSemaphoreTake(radioMutex, pdMS_TO_TICKS(24000)) == pdTRUE) {
-      if (!maintenanceRequested && !setupMode) {
-        uint32_t before = 0;
-        portENTER_CRITICAL(&stateMux);
-        if (index < configured && strcmp(devices[index].mac, mac) == 0)
-          before = devices[index].lastReadingMs;
-        portEXIT_CRITICAL(&stateMux);
-        pollOne(*session, mac); // releases radioMutex after connecting.
-        bool sample = false;
-        portENTER_CRITICAL(&stateMux);
-        if (index < configured && strcmp(devices[index].mac, mac) == 0)
-          sample = before != devices[index].lastReadingMs;
-        portEXIT_CRITICAL(&stateMux);
-        if (sample) failures=0; else if (failures<4) ++failures;
-      } else xSemaphoreGive(radioMutex);
+    if(index<configured && strcmp(devices[index].mac,session.mac)==0 &&
+       devices[index].writePhase==1) {
+      devices[index].writePhase=sent?2:5;
+      devices[index].writeSentAt=sent?millis():0;
     }
-    const uint32_t backoff = failures==0 ? 4500 :
-       (failures==1 ? 10000 : (failures==2 ? 20000 : 40000));
-    vTaskDelay(pdMS_TO_TICKS(backoff+index*300));
+    portEXIT_CRITICAL(&stateMux);
+    if(sent) {
+      vTaskDelay(pdMS_TO_TICKS(350));
+      if(session.client && session.client->isConnected())
+        sendReadCommand(characteristic,0x96,withResponse);
+    }
+  }
+  if(uint32_t(now-session.lastSettingsRequestAt)>=300000) {
+    sendReadCommand(characteristic,0x96,withResponse);
+    session.lastSettingsRequestAt=now;
+  }
+  if(uint32_t(now-session.lastInfoRequestAt)>=900000) {
+    sendReadCommand(characteristic,0x97,withResponse);
+    session.lastInfoRequestAt=now;
+  }
+  if((!lastReading || uint32_t(now-lastReading)>=8000) &&
+     uint32_t(now-session.lastRefreshAt)>=8000) {
+    sendReadCommand(characteristic,0x96,withResponse);
+    session.lastRefreshAt=now;
+    if(!lastReading || uint32_t(now-lastReading)>30000)
+      updateState(index,session.mac,"waiting_frames");
+  }
+}
+
+void manager(void*) {
+  for(uint8_t i=0;i<MAX_BMS;++i)sessions[i].index=i;
+  Serial.println("[JK] Single-owner BLE manager active, independent links");
+  while(true) {
+    const bool working=!setupMode && WiFi.status()==WL_CONNECTED;
+    for(uint8_t i=0;i<MAX_BMS;++i) {
+      Session &session=sessions[i];
+      char selected[18]={};
+      portENTER_CRITICAL(&stateMux);
+      if(i<configured)strncpy(selected,devices[i].mac,sizeof(selected)-1);
+      portEXIT_CRITICAL(&stateMux);
+      if(strcmp(session.mac,selected)!=0) {
+        closeSession(session,nullptr);
+        strncpy(session.mac,selected,sizeof(session.mac)-1);
+        session.mac[sizeof(session.mac)-1]=0;
+        session.failures=0;
+        session.nextRetryAt=millis()+uint32_t(i)*300;
+      }
+      if(!working) closeSession(session,"ble_waiting_wifi");
+      else if(session.client && !session.client->isConnected()) {
+        closeSession(session,"ble_disconnected");
+        if(session.failures<5)++session.failures;
+        session.nextRetryAt=millis()+4000;
+      } else if(session.client) serviceSession(session);
+    }
+    if(working && !maintenanceRequested && radioMutex &&
+       xSemaphoreTake(radioMutex,pdMS_TO_TICKS(100))==pdTRUE) {
+      if(!setupMode && !maintenanceRequested) {
+        for(uint8_t i=0;i<MAX_BMS;++i) {
+          Session &session=sessions[i];
+          if(!session.mac[0] || session.client ||
+             (int32_t)(millis()-session.nextRetryAt)<0)continue;
+          // One new link at a time. Other subscribed JKs keep streaming.
+          const bool ok=openSession(session);
+          if(ok) {
+            session.failures=0;session.nextRetryAt=0;
+          } else {
+            if(session.failures<5)++session.failures;
+            const uint32_t wait=session.failures==1?4000:
+              session.failures==2?9000:session.failures==3?16000:30000;
+            session.nextRetryAt=millis()+wait+uint32_t(i)*300;
+          }
+          break;
+        }
+      }
+      xSemaphoreGive(radioMutex);
+    }
+    vTaskDelay(pdMS_TO_TICKS(250));
   }
 }
 
@@ -649,9 +662,13 @@ void fillTelemetry(JsonDocument &out) {
     device["ble_gap_busy_count"] = item.gapBusyCount;
     device["ble_gap_cancel_count"] = item.gapCancelCount;
     device["ble_gap_still_busy_count"] = item.gapStillBusyCount;
+    device["ble_connect_duration_ms"] = item.lastConnectDurationMs;
+    device["ble_gap_active_before"] = item.gapBeforeConnect;
+    device["ble_gap_active_after"] = item.gapAfterConnect;
+    device["ble_scan_active_before"] = item.scanBeforeConnect;
     device["bad_crc_count"] = item.badFrames;
     device["rejected_measurements"] = item.rejectedMeasurements;
-    const bool fresh = item.reading.valid && item.lastReadingMs &&
+    const bool fresh = item.bleConnected && item.reading.valid && item.lastReadingMs &&
         (uint32_t)(now - item.lastReadingMs) < FRESH_MS;
     device["available"] = fresh;
     if (!fresh) {
@@ -895,18 +912,11 @@ void fillWriteStatus(JsonDocument &out, const char *mac) {
 }
 
 void begin() {
-  radioMutex = xSemaphoreCreateMutex();
-  if (!radioMutex) {
-    Serial.println("[JK] Failed to allocate BLE radio mutex");
-    return;
-  }
-  for (uint8_t i=0;i<MAX_BMS;++i) {
-    sessions[i].index = i;
-    char name[20] = {};
-    snprintf(name,sizeof(name),"jk-ble-%u",unsigned(i+1));
-    if (xTaskCreate(worker,name,9216,&sessions[i],1,nullptr)!=pdPASS)
-      Serial.printf("[JK] BLE worker start failed: %u\n",unsigned(i+1));
-  }
-  Serial.println("[JK] Multi-BMS persistent BLE reader started");
+  radioMutex=xSemaphoreCreateMutex();
+  if(!radioMutex) { Serial.println("[JK] BLE mutex allocation failed");return; }
+  if(xTaskCreate(manager,"jk-ble-manager",16384,nullptr,1,nullptr)!=pdPASS)
+    Serial.println("[JK] BLE manager task allocation failed");
+  else Serial.println("[JK] Multi-BMS reader: one GAP owner, persistent sessions");
 }
+
 } // namespace jkreader
