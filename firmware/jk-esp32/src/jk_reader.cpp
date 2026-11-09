@@ -72,6 +72,22 @@ struct Session {
 static Session sessions[MAX_BMS];
 static volatile bool maintenanceRequested = false;
 
+// The HA add-on uses ONE scan for all missing BMSs and independent persistent
+// GATT sessions. Mirror that structure on NimBLE: copy each discovered address
+// (including its random/public address type) BEFORE freeing scan results.
+// This cache is used only with radioMutex held by a worker.
+struct SharedDiscoveryEntry {
+  char mac[18] = {};
+  NimBLEAddress address{};
+  bool seen = false;
+};
+static SharedDiscoveryEntry discovery[MAX_BMS];
+static uint8_t discoveryCount = 0;
+static uint32_t discoveryAt = 0;
+static constexpr uint32_t DISCOVERY_TTL_MS = 15000;
+static constexpr uint32_t DISCOVERY_SCAN_MS = 6500;
+
+
 void updateState(int index, const char *mac, const char *message) {
   portENTER_CRITICAL(&stateMux);
   if (index >= 0 && index < configured &&
@@ -200,53 +216,107 @@ void sendReadCommand(NimBLERemoteCharacteristic *characteristic, uint8_t command
   }
 }
 
+// Shared discovery is called ONLY while radioMutex is held. Every configured
+// MAC is located in the same scan, like the working HA add-on. A connected JK
+// is never disconnected just to scan for a different JK.
+bool discoverSharedAddress(const char *wanted, NimBLEAddress &target) {
+  const uint32_t now = millis();
+  bool known = false;
+  for (uint8_t i = 0; i < discoveryCount; ++i)
+    if (!strcmp(discovery[i].mac, wanted)) known = true;
+  if (!discoveryAt || (uint32_t)(now-discoveryAt) >= DISCOVERY_TTL_MS || !known) {
+    char macs[MAX_BMS][18] = {};
+    uint8_t count = 0;
+    portENTER_CRITICAL(&stateMux);
+    count = configured;
+    for (uint8_t i = 0; i < count; ++i)
+      strncpy(macs[i], devices[i].mac, sizeof(macs[i])-1);
+    portEXIT_CRITICAL(&stateMux);
+
+    discoveryCount = count;
+    for (uint8_t i = 0; i < count; ++i) {
+      strncpy(discovery[i].mac, macs[i], sizeof(discovery[i].mac)-1);
+      discovery[i].mac[sizeof(discovery[i].mac)-1] = 0;
+      discovery[i].address = NimBLEAddress{};
+      discovery[i].seen = false;
+    }
+    NimBLEScan *scanner = NimBLEDevice::getScan();
+    scanner->setActiveScan(false);
+    scanner->setInterval(120);
+    scanner->setWindow(48);
+    scanner->setMaxResults(40);
+    NimBLEScanResults results = scanner->getResults(DISCOVERY_SCAN_MS, false);
+    for (int n = 0; n < results.getCount(); ++n) {
+      const NimBLEAdvertisedDevice *advert = results.getDevice(n);
+      if (!advert) continue;
+      String mac = String(advert->getAddress().toString().c_str());
+      mac.toUpperCase();
+      for (uint8_t i = 0; i < count; ++i) {
+        if (mac == macs[i]) {
+          discovery[i].address = advert->getAddress(); // includes address TYPE
+          discovery[i].seen = true;
+        }
+      }
+    }
+    // No client receives a pointer to a scan-owned object; no dangling pointer
+    // when another client scans or the results are cleared.
+    scanner->clearResults();
+    discoveryAt = millis();
+    uint8_t seen = 0;
+    for (uint8_t i = 0; i < count; ++i) if (discovery[i].seen) ++seen;
+    Serial.printf("[JK] Shared BLE discovery: configured=%u, found=%u\n",
+                  unsigned(count), unsigned(seen));
+  }
+  for (uint8_t i = 0; i < discoveryCount; ++i) {
+    if (strcmp(discovery[i].mac, wanted)==0 && discovery[i].seen) {
+      target = discovery[i].address;
+      return true;
+    }
+  }
+  return false;
+}
+
 void pollOne(Session &session, const char *mac) {
   const int index = session.index;
   strncpy(session.mac, mac, sizeof(session.mac) - 1);
   session.mac[sizeof(session.mac)-1] = 0;
   updateState(index, mac, "searching_ble");
   markBleEvent(index, mac, BleEvent::Scan);
-  NimBLEScan *scanner = NimBLEDevice::getScan();
-  // Passive, duty-limited scans are less disruptive to the already established
-  // JK notification stream; discovery still uses each device's MAC.
-  scanner->setActiveScan(false);
-  scanner->setInterval(120);
-  scanner->setWindow(48);
-  scanner->setMaxResults(40);
-  NimBLEScanResults results = scanner->getResults(5000, false);
-  const NimBLEAdvertisedDevice *match = nullptr;
-  for (int i = 0; i < results.getCount(); ++i) {
-    const NimBLEAdvertisedDevice *item = results.getDevice(i);
-    if (!item) continue;
-    String observed = String(item->getAddress().toString().c_str());
-    observed.toUpperCase();
-    if (observed == mac) { match = item; break; }
-  }
-  if (!match) {
-    scanner->clearResults();
+  NimBLEAddress target;
+  if (!discoverSharedAddress(mac, target)) {
     markBleEvent(index, mac, BleEvent::NotSeen);
     updateState(index, mac, "ble_not_seen");
     xSemaphoreGive(radioMutex);
     return;
   }
   updateState(index, mac, "connecting_ble");
-  markBleEvent(index, mac, BleEvent::Connect);
   NimBLEClient *client = NimBLEDevice::createClient();
   if (!client) {
-    scanner->clearResults();
     markBleEvent(index, mac, BleEvent::NoClient);
     updateState(index, mac, "ble_client_unavailable");
     xSemaphoreGive(radioMutex);
     return;
   }
   client->setConnectTimeout(9000);
-  const bool connected = client->connect(match);
-  scanner->clearResults();
+  bool connected = false;
+  int bleError = 0;
+  // On NimBLE 2.4.0, rc=2 is BLE_HS_EALREADY: GAP still considers a previous
+  // connection attempt active. The screenshot confirmed exactly this code.
+  // Retry only this *transient* state, with bounded delays and no global
+  // adapter reset/disconnect (which would interrupt a healthy JK session).
+  for (uint8_t attempt = 0; attempt < 3; ++attempt) {
+    markBleEvent(index, mac, BleEvent::Connect);
+    connected = client->connect(target);
+    if (connected) break;
+    bleError = client->getLastError();
+    if (bleError != BLE_HS_EALREADY || attempt == 2) break;
+    updateState(index, mac, "ble_busy_retry");
+    vTaskDelay(pdMS_TO_TICKS(1200 + attempt*900));
+  }
   if (!connected) {
-    const int bleError = client->getLastError();
     markBleEvent(index, mac, BleEvent::ConnectFailed, bleError);
     Serial.printf("[JK] BLE client connect failed, slot=%d, code=%d\n", index + 1, bleError);
-    updateState(index, mac, "ble_connect_failed");
+    updateState(index, mac, bleError == BLE_HS_EALREADY ? "ble_busy_retry_exhausted" : "ble_connect_failed");
     NimBLEDevice::deleteClient(client);
     xSemaphoreGive(radioMutex);
     return;
