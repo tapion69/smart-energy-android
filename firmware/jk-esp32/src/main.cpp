@@ -14,7 +14,7 @@
 #include <ArduinoJson.h>
 #include <ctype.h>
 
-static const char *VERSION = "0.3.11-dev";
+static const char *VERSION = "0.3.13-dev";
 static const uint32_t WIFI_JOIN_TIMEOUT_MS = 30000; // Return to temporary setup after 30s
 static const uint32_t SETUP_AUTORETRY_MS = 120000; // Retry saved Wi-Fi after brief fallback
 static const int SETUP_BUTTON = 0; // BOOT is physical proof for pairing recovery.
@@ -634,6 +634,21 @@ void onWriteParameter() {
   out["mac"]=mac;out["key"]=key;
   respond(202,out);
 }
+// Local read-only BLE settings fetch, requested explicitly before manual edits.
+void onSettingsRefresh() {
+  if(!requireControl())return;
+  if(!allowedWriteConnection()){error(403,"local_wifi_required");return;}
+  JsonDocument req;
+  if(deserializeJson(req,http.arg("plain"))){error(400,"invalid_json");return;}
+  String mac=req["mac"].as<String>();
+  if(!jkreader::requestSettingsRefresh(mac.c_str())) {
+    error(409,"bms_not_connected_or_not_configured");return;
+  }
+  JsonDocument out;
+  out["accepted"]=true;
+  out["write_performed"]=false;
+  respond(202,out);
+}
 void onParameterWriteStatus() {
   if(!requireControl())return;
   JsonDocument out;
@@ -693,6 +708,7 @@ void setup() {
   http.on("/api/v1/pair/boot/commit", HTTP_POST, onPhysicalCommit);
   http.on("/api/v1/telemetry", HTTP_GET, onTelemetry);
   http.on("/api/v1/details", HTTP_GET, onDetails);
+  http.on("/api/v1/jk/settings-refresh", HTTP_POST, onSettingsRefresh);
   http.on("/api/v1/jk/write-arm", HTTP_POST, onArmParameterWrite);
   http.on("/api/v1/jk/write", HTTP_POST, onWriteParameter);
   http.on("/api/v1/jk/write-status", HTTP_GET, onParameterWriteStatus);
