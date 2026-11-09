@@ -1637,14 +1637,28 @@ class MainActivity : Activity() {
                 }
             }
         }
-        telemetryStatus.text = "$liveCount/${devices.length()} JK en ligne · " +
-            if(global) "Synthèse des batteries" else
-              "BMS ${macs.indexOf(selectedBmsMac)+1} · " +
-              when(currentTab){
-                  0 -> "Batterie"
-                  1 -> "Détails"
-                  else -> "Paramètres"
-              }
+        // Expose BLE setup diagnostics even when the connection never reaches
+        // the first valid measurement. No MACs or access codes in this label.
+        val offlineDiagnostics = (0 until devices.length()).mapNotNull { i ->
+            val item = devices.optJSONObject(i) ?: return@mapNotNull null
+            if (item.optBoolean("available")) return@mapNotNull null
+            val attempts = item.optInt("ble_connect_attempts", 0)
+            val scans = item.optInt("ble_scan_attempts", 0)
+            val reason = readerStatus(item.optString("state"))
+            val err = item.optInt("ble_last_error", 0)
+            "BMS ${i + 1} : $reason · scans $scans · connexions tentées $attempts" +
+                if (err != 0) " · BLE $err" else ""
+        }
+        val sectionTitle = if (global) "Synthèse des batteries" else
+            "BMS ${macs.indexOf(selectedBmsMac) + 1} · " +
+                when (currentTab) {
+                    0 -> "Batterie"
+                    1 -> "Détails"
+                    else -> "Paramètres"
+                }
+        telemetryStatus.text = "$liveCount/${devices.length()} JK en ligne · $sectionTitle" +
+            if (offlineDiagnostics.isEmpty()) "" else
+                "\n" + offlineDiagnostics.joinToString("\n")
     }
 
     override fun onResume() {
