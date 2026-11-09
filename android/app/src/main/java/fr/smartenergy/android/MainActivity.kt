@@ -99,7 +99,9 @@ class MainActivity : Activity() {
     private lateinit var physicalRecoverBtn: Button
     private lateinit var lanDiscoverBtn: Button
     private var discoverListener: NsdManager.DiscoveryListener? = null
-    private val chosen = mutableSetOf<String>()
+    private val chosen = linkedSetOf<String>() // Uncommitted selection, UI thread only.
+    private val registeredBms = linkedSetOf<String>() // Confirmed by ESP32 /api/v1/bms.
+    private var lastScannedBms = emptyList<JkBmsRegistry.ScanItem>()
     private val scanChoices = mutableListOf<CheckBox>()
 
     private lateinit var status: TextView
@@ -545,15 +547,16 @@ class MainActivity : Activity() {
         add(a, action("Connecter l'ESP32") { connectSetupAp() }, 12)
         add(a, label("Avec le mode BOOT 0.3.1, l'application rejoint automatiquement le Wi-Fi temporaire et demande une seconde confirmation physique ; il reste ouvert au maximum 2 minutes.", 12f, color = subdued))
 
-        val b = section(advanced, "3. Détecter les JK BMS")
-        add(b, label("La recherche Bluetooth est exécutée par l'ESP32, pas par le téléphone. Vérifie la MAC avant de sélectionner un appareil.", 13f, color = subdued))
-        scanBtn = action("Rechercher les appareils BLE") { scanBle() }
+        val b = section(advanced, "3. Gérer les JK BMS enregistrés")
+        add(b, label("Tes BMS sauvegardés s'affichent même lorsqu'ils sont déjà connectés et invisibles au scan BLE. Décoche une batterie puis enregistre pour la retirer de l'ESP32 ; tu pourras la recocher plus tard sans modifier son BMS.",13f,color=subdued))
+        add(b, action("Afficher mes BMS enregistrés") { loadSavedBms() }, 8)
+        scanBtn = action("Rechercher de nouveaux appareils Bluetooth") { scanBle() }
         add(b, scanBtn)
         scanPanel = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         add(b, scanPanel)
         saveBtn = action("Sauvegarder les batteries choisies") { saveSelection() }
         add(b, saveBtn)
-        add(b, label("Les BMS enregistrés restent mémorisés après redémarrage. Les sessions Bluetooth déjà connectées continuent leur lecture en permanence.", 12f, color = subdued))
+        add(b, label("Une case décochée ne prend effet qu'après « Sauvegarder ». La suppression retire seulement l'adresse de la liste ESP32 et termine cette connexion BLE ; les paramètres physiques du BMS ne sont jamais effacés. Les anciennes MAC restent connues de cette application pour être réactivées.",12f,color=subdued))
 
         val wifiMaintenance=LinearLayout(this).apply {
             orientation=LinearLayout.VERTICAL
@@ -894,8 +897,8 @@ class MainActivity : Activity() {
                         "SmartJK-Setup-" + id.substringAfter("-").uppercase(Locale.ROOT),
                         code)
                 }
-                chosen.clear()
-                for (i in 0 until addresses.length()) chosen.add(addresses.optString(i))
+                val loaded=JkBmsRegistry.normalized(
+                    (0 until addresses.length()).map { i -> addresses.optString(i) })
                 prefs.edit()
                     .putString("local_ip", ip)
                     .putString("paired_bms_json", addresses.toString())
@@ -903,6 +906,13 @@ class MainActivity : Activity() {
                 lanVerified = true
                 lastLanFirmwareVersion = info.optString("version")
                 runOnUiThread {
+                    registeredBms.clear()
+                    registeredBms.addAll(loaded)
+                    chosen.clear()
+                    chosen.addAll(loaded)
+                    rememberKnownBms(loaded)
+                    lastScannedBms=emptyList()
+                    renderBmsRegistry()
                     setupCode.text.clear()
                     scanBtn.isEnabled = true
                     saveBtn.isEnabled = true
@@ -1360,44 +1370,180 @@ class MainActivity : Activity() {
         }
     }
 
-    private fun scanBle() = async {
-        state("Scan BLE en cours sur l'ESP32 (environ 5 secondes)…")
-        val response = httpCall("GET", "/api/v1/bms/scan")
-        val devices = response.getJSONArray("devices")
-        runOnUiThread {
-            val saved = chosen.toSet()
-            scanChoices.clear()
-            scanPanel.removeAllViews()
-            if (devices.length() == 0) {
-                add(scanPanel, label("Aucun périphérique BLE trouvé.", color = subdued))
+    // Only the directly paired ESP32 may change the persistent JK list.
+    // The dedicated VPN gateway stays strictly read-only.
+    private fun canEditBmsRegistry(): Boolean =
+        !remoteGatewayConnection && !remoteVpnConnection &&
+            (lanVerified || (setupTransport && apNetwork!=null))
+
+    private fun savedMacsFromResponse(response: JSONObject): List<String> {
+        val json=response.optJSONArray("bms") ?: JSONArray()
+        return JkBmsRegistry.normalized(
+            (0 until json.length()).map { i -> json.optString(i) })
+    }
+
+    private fun rememberedBms(): List<String> {
+        return try {
+            val json=JSONArray(prefs.getString("known_jk_macs", "[]") ?: "[]")
+            JkBmsRegistry.normalized(
+                (0 until json.length()).map { i -> json.optString(i) })
+        } catch (_: Exception) { emptyList() }
+    }
+
+    private fun rememberKnownBms(macs: Iterable<String>) {
+        val keep=JkBmsRegistry.remember(rememberedBms(),macs)
+        val json=JSONArray()
+        keep.forEach { json.put(it) }
+        prefs.edit().putString("known_jk_macs",json.toString()).apply()
+    }
+
+    private fun renderBmsRegistry() {
+        // Read-only scan results are merged with the authoritative list, NOT
+        // used to decide which previously paired BMSs still exist.
+        val rows=JkBmsRegistry.merge(registeredBms,rememberedBms(),lastScannedBms)
+        scanChoices.clear()
+        scanPanel.removeAllViews()
+        if(rows.isEmpty()) {
+            add(scanPanel,label("Aucun BMS mémorisé. Lance une recherche Bluetooth pour en ajouter.",color=subdued))
+            return
+        }
+        val pending=chosen.toSet()
+        add(scanPanel,label(
+            "${registeredBms.size} BMS enregistrés dans l'ESP32 · ${pending.size} sélectionnés pour le prochain enregistrement.",
+            13f,color=subdued),8)
+        rows.forEach { row ->
+            val origin=when {
+                row.registeredOnEsp -> "Enregistré dans l'ESP32 (même si non détecté au scan)"
+                row.knownOnPhone -> "Ancien BMS connu · réassociation possible"
+                else -> "Détecté maintenant · non enregistré"
             }
-            for (i in 0 until devices.length()) {
-                val device = devices.getJSONObject(i)
-                val mac = device.optString("mac")
-                val name = device.optString("name").ifBlank { "Périphérique sans nom" }
-                val rssi = device.optInt("rssi")
-                val check = CheckBox(this).apply {
-                    text = "$name\n$mac · $rssi dBm"
-                    setTextColor(normal)
-                    setOnCheckedChangeListener { _, checked ->
-                        if (checked) chosen.add(mac) else chosen.remove(mac)
-                    }
+            val quality=if(row.discoveredNow && row.rssi!=null)
+                " · ${row.rssi} dBm" else ""
+            val check=CheckBox(this).apply {
+                text="${row.name}\n${row.mac}${quality}\n${origin}"
+                setTextColor(normal)
+                isChecked=pending.contains(row.mac)
+                setOnCheckedChangeListener { _,checked ->
+                    if(checked) chosen.add(row.mac) else chosen.remove(row.mac)
                 }
-                if (saved.contains(mac)) check.isChecked = true
-                add(scanPanel, check)
-                scanChoices.add(check)
             }
-            state("${devices.length()} appareils BLE détectés. Choisis uniquement tes JK.")
+            add(scanPanel,check,6)
+            scanChoices.add(check)
         }
     }
 
-    private fun saveSelection() = async {
-        val array = JSONArray()
-        chosen.toList().sorted().forEach { array.put(it) }
-        val json = JSONObject().put("bms", array)
-        val response = httpCall("PUT", "/api/v1/bms", json)
-        state("${response.optInt("saved")} adresses enregistrées dans l'ESP32 (persistantes).")
-        refreshTelemetry()
+    private fun loadSavedBms() {
+        if(!canEditBmsRegistry()) {
+            state("La gestion des BMS est disponible uniquement en Wi-Fi local sur l'ESP32 JK. Le VPN reste en lecture seule.")
+            return
+        }
+        state("Lecture de la liste sauvegardée directement dans l'ESP32…")
+        async {
+            val confirmed=savedMacsFromResponse(httpCall("GET","/api/v1/bms"))
+            runOnUiThread {
+                registeredBms.clear()
+                registeredBms.addAll(confirmed)
+                chosen.clear()
+                chosen.addAll(confirmed)
+                lastScannedBms=emptyList()
+                rememberKnownBms(confirmed)
+                renderBmsRegistry()
+                state("${confirmed.size} BMS enregistrés récupérés. Décoche un JK puis sauvegarde pour le retirer, ou réactive une ancienne MAC.")
+            }
+        }
+    }
+
+    private fun scanBle() {
+        if(!canEditBmsRegistry()) {
+            state("La recherche et la sélection sont réservées au réseau local. Le VPN ne peut pas modifier les BMS.")
+            return
+        }
+        state("Recherche de nouveaux appareils BLE ; les JK déjà connectés restent visibles dans la liste sauvegardée…")
+        async {
+            val confirmed=savedMacsFromResponse(httpCall("GET","/api/v1/bms"))
+            var scanFailure: String?=null
+            val newlySeen=try {
+                val json=httpCall("GET","/api/v1/bms/scan").optJSONArray("devices") ?: JSONArray()
+                (0 until json.length()).mapNotNull { i ->
+                    val item=json.optJSONObject(i) ?: return@mapNotNull null
+                    val mac=JkBmsRegistry.validMac(item.optString("mac"))
+                        ?: return@mapNotNull null
+                    JkBmsRegistry.ScanItem(mac,item.optString("name"),
+                        item.optInt("rssi"))
+                }
+            } catch(ex:Exception) {
+                scanFailure=ex.message ?: ex.javaClass.simpleName
+                emptyList()
+            }
+            runOnUiThread {
+                registeredBms.clear()
+                registeredBms.addAll(confirmed)
+                rememberKnownBms(confirmed)
+                lastScannedBms=newlySeen
+                // Keep pending checkbox edits when scanning more devices.
+                renderBmsRegistry()
+                state(if(scanFailure!=null)
+                    "${confirmed.size} JK sauvegardés affichés malgré l'échec du scan : $scanFailure"
+                else "${confirmed.size} JK sauvegardés · ${newlySeen.size} périphériques vus au scan. Les JK connectés restent sélectionnables.")
+            }
+        }
+    }
+
+    private fun saveSelection() {
+        if(!canEditBmsRegistry()) {
+            state("Suppression et association de BMS interdites à distance : connecte-toi en Wi-Fi local.")
+            return
+        }
+        val wanted=JkBmsRegistry.normalized(chosen)
+        if(wanted.size!=chosen.size || wanted.size>4) {
+            state("Sélection invalide : 0 à 4 adresses MAC uniques autorisées sur cet ESP32.")
+            return
+        }
+        val removing=registeredBms.filter { it !in wanted }
+        fun commit() {
+            saveBtn.isEnabled=false
+            state("Enregistrement de ${wanted.size} BMS dans l'ESP32…")
+            async {
+                try {
+                    val json=JSONArray()
+                    wanted.forEach { json.put(it) }
+                    val response=httpCall("PUT","/api/v1/bms",
+                        JSONObject().put("bms",json))
+                    if(response.optInt("saved",-1)!=wanted.size)
+                        throw IllegalStateException("L'ESP32 n'a pas confirmé le nombre de BMS.")
+                    // Read back the NVS-backed list before claiming success.
+                    val confirmed=savedMacsFromResponse(httpCall("GET","/api/v1/bms"))
+                    if(confirmed.toSet()!=wanted.toSet())
+                        throw IllegalStateException("Liste ESP32 différente après enregistrement. Recharge la liste.")
+                    val stored=JSONArray()
+                    confirmed.forEach { stored.put(it) }
+                    prefs.edit().putString("paired_bms_json",stored.toString()).apply()
+                    runOnUiThread {
+                        rememberKnownBms(registeredBms + confirmed)
+                        registeredBms.clear()
+                        registeredBms.addAll(confirmed)
+                        chosen.clear()
+                        chosen.addAll(confirmed)
+                        // Do not remove absent MACs from phone history.
+                        renderBmsRegistry()
+                        state("${confirmed.size} BMS sauvegardés dans l'ESP32. ${removing.size} retiré(s) de la connexion ; ils restent réactivables ici.")
+                        refreshTelemetry()
+                    }
+                } catch(ex:Exception) {
+                    state("Enregistrement non vérifié : ${ex.message}. Recharge la liste avant de réessayer.")
+                } finally {
+                    runOnUiThread { saveBtn.isEnabled=true }
+                }
+            }
+        }
+        if(removing.isNotEmpty()) {
+            android.app.AlertDialog.Builder(this)
+                .setTitle("Retirer ${removing.size} BMS de l'ESP32 ?")
+                .setMessage("Le ou les BMS décochés seront déconnectés et retirés de la liste sauvegardée dans l'ESP32.\n\nLeurs réglages internes et leurs protections ne seront pas modifiés. Leurs adresses resteront connues du téléphone pour une réassociation ultérieure.")
+                .setNegativeButton("Annuler",null)
+                .setPositiveButton("Retirer et enregistrer") { _,_ -> commit() }
+                .show()
+        } else commit()
     }
 
     private fun sendHomeWifi() {
