@@ -19,7 +19,7 @@ SECTIONS = [
     (0xE000, OTA_BOOT),
     (0x10000, PIO / "firmware.bin"),
 ]
-OUTPUT = PIO / "smart_jk_esp32_v0.3.1_FULL_ERASE_FIRST_0x0000.bin"
+OUTPUT = PIO / "smart_jk_esp32_v0.3.2_FULL_ERASE_FIRST_0x0000.bin"
 
 
 def assemble():
