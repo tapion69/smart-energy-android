@@ -134,20 +134,24 @@ class MainActivity : Activity() {
             if (!lanVerified && !lanConnectionPending && !setupTransport) {
                 val now=android.os.SystemClock.elapsedRealtime()
                 val savedIp=prefs.getString("local_ip","") ?: ""
-                // First retry the already paired LAN identity. Never use
-                // BOOT or rotate credentials when switching transports.
-                if(storedCode().isNotBlank() && allowedLocalIp(savedIp) &&
+                val autoGateway=prefs.getBoolean("remote_gateway_enabled",false) &&
+                    vpnConnected() &&
+                    allowedTailnetIp(prefs.getString("remote_gateway_ip","") ?: "") &&
+                    validGatewayToken(storedGatewayToken())
+                // Never silently replace an explicitly selected VPN with LAN.
+                // An opted-in VPN takes priority over the saved home IP.
+                if (autoGateway) {
+                    if (now-lastRemoteAttempt >= 20000L) {
+                        lastRemoteAttempt=now
+                        connectGatewayRemote()
+                    }
+                } else if (!remoteGatewayConnection &&
+                    storedCode().isNotBlank() && allowedLocalIp(savedIp) &&
                     now-lastLocalAttempt >= 20000L) {
                     lastLocalAttempt=now
                     localHost=savedIp
                     lanIp.setText(savedIp)
                     connectHomeLan(false)
-                } else if(vpnConnected() && now-lastRemoteAttempt>=20000L) {
-                    if(prefs.getBoolean("remote_gateway_enabled",false) &&
-                        allowedTailnetIp(prefs.getString("remote_gateway_ip","") ?: "") &&
-                        storedGatewayToken().isNotBlank()) {
-                        lastRemoteAttempt=now;connectGatewayRemote()
-                    }
                 }
             }
             if (lanVerified || (setupTransport && apNetwork != null)) {
@@ -175,15 +179,18 @@ class MainActivity : Activity() {
         drawUi()
         selectedDeviceId = prefs.getString("device_id", "") ?: ""
         val savedIp = prefs.getString("local_ip", "") ?: ""
-        if (storedCode().isNotBlank() && allowedLocalIp(savedIp)) {
+        // Respect "VPN automatic when Tailscale is active" before trying the
+        // last LAN IP, which may be unreachable outside the user's home.
+        if (prefs.getBoolean("remote_gateway_enabled",false) && vpnConnected() &&
+            allowedTailnetIp(prefs.getString("remote_gateway_ip","") ?: "") &&
+            validGatewayToken(storedGatewayToken())) {
+            lastRemoteAttempt=android.os.SystemClock.elapsedRealtime()
+            connectGatewayRemote()
+        } else if (storedCode().isNotBlank() && allowedLocalIp(savedIp)) {
             localHost = savedIp
             lanIp.setText(savedIp)
             lastLocalAttempt=android.os.SystemClock.elapsedRealtime()
             connectHomeLan(false)
-        } else if (prefs.getBoolean("remote_gateway_enabled",false) && vpnConnected() &&
-            allowedTailnetIp(prefs.getString("remote_gateway_ip","") ?: "") &&
-            storedGatewayToken().isNotBlank()) {
-            connectGatewayRemote()
         } else if(storedCode().isNotBlank()) discoverHomeLan()
     }
 
@@ -284,7 +291,9 @@ class MainActivity : Activity() {
     }
 
     private fun validGatewayToken(token: String): Boolean =
-        Regex("^[A-Za-z0-9_-]{20,128}$").matches(token)
+        // Gateway firmware accepts any strong ASCII header token without spaces
+        // (length 20..128). Avoid rejecting otherwise valid local secrets.
+        token.length in 20..128 && token.all { it.code in 33..126 }
 
     private fun supportsLanWifiUpdate(version: String): Boolean {
         val versionParts = version.substringBefore("-").split(".")
@@ -432,11 +441,11 @@ class MainActivity : Activity() {
         gatewayIpEdit = input("IP Tailscale de l'ESP32 VPN (ex. 100.64.0.1)")
         gatewayIpEdit.setText(prefs.getString("remote_gateway_ip", "") ?: "")
         add(remote, gatewayIpEdit)
-        gatewayTokenEdit = input("Code secret de la passerelle VPN (pas celui du JK)", true)
+        gatewayTokenEdit = input("Token VPN du fichier de configuration (20 caractères minimum)", true)
         gatewayTokenEdit.hint = if (storedGatewayToken().isNotBlank())
-            "Code personnel déjà mémorisé — laisser vide" else "Ton X-Gateway-Token personnel"
+            "Token VPN déjà mémorisé — laisser vide" else "Valeur CONFIG_SE_GATEWAY_TOKEN (sans guillemets)"
         add(remote, gatewayTokenEdit)
-        add(remote, label("Le code reste chiffré avec Android Keystore. N'indique jamais une adresse Internet publique. Notre firmware autorise uniquement les lectures JK.", 12f, color = subdued))
+        add(remote, label("Saisis CONFIG_SE_GATEWAY_TOKEN, pas ton code JK et pas la clé tskey-auth Tailscale. Le code JK choisi dans l'application doit correspondre à CONFIG_SE_JK_READ_CODE compilé dans l'ESP32 VPN. Aucun port à ouvrir.", 12f, color = subdued))
         add(remote, action("Enregistrer et tester mon ESP32 VPN") {
             connectGatewayRemote()
         }, 10)
@@ -665,7 +674,25 @@ class MainActivity : Activity() {
             val body = (if (code in 200..299) conn.inputStream else conn.errorStream)
                 ?.bufferedReader()?.use { it.readText() } ?: ""
             val json = JSONObject(body)
-            if (code !in 200..299) throw IllegalStateException(json.optString("error", "HTTP $code"))
+            if (code !in 200..299) {
+                val upstream = json.optString("error", "HTTP $code")
+                val explanation = if (remoteGatewayConnection && !setupTransport)
+                    when (upstream) {
+                        "invalid_gateway_token" ->
+                            "Token VPN refusé (401) : vérifie CONFIG_SE_GATEWAY_TOKEN du fichier de l'ESP32 VPN, pas ton code JK."
+                        "vpn_only" ->
+                            "ESP32 VPN joignable mais accès refusé (403) : la requête n'est pas reconnue comme provenant du tunnel Tailscale."
+                        "source_not_configured" ->
+                            "Token VPN accepté, mais la cible JK n'est pas configurée dans l'ESP32 VPN."
+                        "upstream_unreachable", "upstream_init_failed" ->
+                            "Token VPN accepté, mais l'ESP32 VPN ne peut pas joindre l'ESP32 JK sur son ancienne IP locale. Vérifie CONFIG_SE_JK_IP."
+                        "upstream_http_failure" ->
+                            "Token VPN accepté, mais le JK a refusé la lecture. Son code a peut-être changé : CONFIG_SE_JK_READ_CODE dans l'ESP32 VPN doit correspondre à ton code JK actuel."
+                        else -> "Erreur passerelle VPN HTTP $code : $upstream"
+                    }
+                else upstream
+                throw IllegalStateException(explanation)
+            }
             json
         } catch (ex: Exception) {
             throw networkError(ex)
@@ -837,7 +864,7 @@ class MainActivity : Activity() {
         val typedSecret = gatewayTokenEdit.text.toString().trim()
         val secret = if (typedSecret.isNotBlank()) typedSecret else storedGatewayToken()
         if (!validGatewayToken(secret)) {
-            state("Code VPN absent : saisis le code de 20 à 128 caractères configuré dans ton ESP32 VPN.")
+            state("Token VPN absent ou invalide : utilise CONFIG_SE_GATEWAY_TOKEN (20 à 128 caractères) du fichier ESP32 VPN. Le code personnel JK et la clé Tailscale ne fonctionnent pas ici.")
             return
         }
         val expectedDeviceId = prefs.getString("device_id", "") ?: ""
@@ -859,7 +886,8 @@ class MainActivity : Activity() {
         remoteGatewayConnection = true
         gatewayHost = host
         gatewaySecret = secret
-        state("Vérification de l'ESP32 VPN et des batteries associées…")
+        lastRemoteAttempt=android.os.SystemClock.elapsedRealtime()
+        state("Vérification Tailscale → ESP32 VPN → ESP32 JK…")
         async {
             try {
                 // Only the public, read-only health request is made before auth.
