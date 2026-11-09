@@ -46,6 +46,9 @@ struct Device {
   uint32_t serviceFailures = 0;
   uint32_t subscribeFailures = 0;
   int lastBleError = 0;
+  uint32_t gapBusyCount = 0;
+  uint32_t gapCancelCount = 0;
+  uint32_t gapStillBusyCount = 0;
   uint32_t connections = 0;
   uint32_t disconnections = 0;
   // One-shot, non-optimistic parameter write. 0=idle, 1=queued, 2=sent,
@@ -101,7 +104,7 @@ void updateState(int index, const char *mac, const char *message) {
 
 enum class BleEvent : uint8_t {
   Scan, NotSeen, Connect, NoClient, ConnectFailed, ServiceFailed,
-  SubscribeFailed, Connected
+  SubscribeFailed, Connected, GapBusy, GapCancelled, GapStillBusy
 };
 void markBleEvent(int index, const char *mac, BleEvent event, int error = 0) {
   portENTER_CRITICAL(&stateMux);
@@ -117,6 +120,9 @@ void markBleEvent(int index, const char *mac, BleEvent event, int error = 0) {
       case BleEvent::ServiceFailed: ++item.serviceFailures; item.lastBleError = error; break;
       case BleEvent::SubscribeFailed: ++item.subscribeFailures; item.lastBleError = error; break;
       case BleEvent::Connected: item.lastBleError = 0; break;
+      case BleEvent::GapBusy: ++item.gapBusyCount; break;
+      case BleEvent::GapCancelled: ++item.gapCancelCount; break;
+      case BleEvent::GapStillBusy: ++item.gapStillBusyCount; break;
     }
   }
   portEXIT_CRITICAL(&stateMux);
@@ -216,6 +222,36 @@ void sendReadCommand(NimBLERemoteCharacteristic *characteristic, uint8_t command
   }
 }
 
+// The HA add-on serializes scans and maintains all existing GATT connections.
+ // On the ESP32 NimBLE controller, only ONE GAP initiation can be in flight.
+ // EALREADY=2 means another initiation is pending, not that a BMS is defective.
+ // This function is called only while the radio mutex is held. Never reset the
+ // controller or terminate an already connected peer to recover a pending init.
+bool awaitIdleInitiator(uint32_t timeoutMs) {
+  const uint32_t start=millis();
+  while (ble_gap_conn_active() &&
+         uint32_t(millis()-start)<timeoutMs) {
+    vTaskDelay(pdMS_TO_TICKS(50));
+  }
+  return ble_gap_conn_active()==0;
+}
+bool recoverGapBeforeConnect(int index,const char* mac) {
+  if(!ble_gap_conn_active()) return true;
+  markBleEvent(index,mac,BleEvent::GapBusy);
+  if(awaitIdleInitiator(1800)) return true;
+  // The scanner is not running and all *other initiations* are serialized by
+  // radioMutex. ble_gap_conn_cancel() touches only a pending GAP initiation.
+  const int rc=ble_gap_conn_cancel();
+  if(rc==0 || rc==BLE_HS_EALREADY) markBleEvent(index,mac,BleEvent::GapCancelled);
+  const bool ready=awaitIdleInitiator(2200);
+  if(!ready) {
+    markBleEvent(index,mac,BleEvent::GapStillBusy);
+    updateState(index,mac,"ble_gap_busy_retry");
+    Serial.printf("[JK] GAP initiation still busy on slot %d, cancel=%d\n",index+1,rc);
+  } else vTaskDelay(pdMS_TO_TICKS(180));
+  return ready;
+}
+
 // Shared discovery is called ONLY while radioMutex is held. Every configured
 // MAC is located in the same scan, like the working HA add-on. A connected JK
 // is never disconnected just to scan for a different JK.
@@ -280,12 +316,22 @@ void pollOne(Session &session, const char *mac) {
   const int index = session.index;
   strncpy(session.mac, mac, sizeof(session.mac) - 1);
   session.mac[sizeof(session.mac)-1] = 0;
+  if(!recoverGapBeforeConnect(index,mac)) {
+    xSemaphoreGive(radioMutex);
+    return;
+  }
   updateState(index, mac, "searching_ble");
   markBleEvent(index, mac, BleEvent::Scan);
   NimBLEAddress target;
   if (!discoverSharedAddress(mac, target)) {
     markBleEvent(index, mac, BleEvent::NotSeen);
     updateState(index, mac, "ble_not_seen");
+    xSemaphoreGive(radioMutex);
+    return;
+  }
+  // Discover once for every missing JK; before initiating a new connection
+  // explicitly wait for (or recover) any prior unfinished GAP initiation.
+  if(!recoverGapBeforeConnect(index,mac)) {
     xSemaphoreGive(radioMutex);
     return;
   }
@@ -297,7 +343,8 @@ void pollOne(Session &session, const char *mac) {
     xSemaphoreGive(radioMutex);
     return;
   }
-  client->setConnectTimeout(9000);
+  // Same deliberate 15-second timeout used by our reliable Bleak/BlueZ add-on.
+  client->setConnectTimeout(15000);
   bool connected = false;
   int bleError = 0;
   // On NimBLE 2.4.0, rc=2 is BLE_HS_EALREADY: GAP still considers a previous
@@ -311,13 +358,20 @@ void pollOne(Session &session, const char *mac) {
     bleError = client->getLastError();
     if (bleError != BLE_HS_EALREADY || attempt == 2) break;
     updateState(index, mac, "ble_busy_retry");
-    vTaskDelay(pdMS_TO_TICKS(1200 + attempt*900));
+    // Backoff alone is insufficient if the initiator remains active in host.
+    // Recover only that pending procedure and preserve connected clients.
+    if (!recoverGapBeforeConnect(index,mac)) break;
+    vTaskDelay(pdMS_TO_TICKS(350 + attempt*350));
   }
   if (!connected) {
     markBleEvent(index, mac, BleEvent::ConnectFailed, bleError);
     Serial.printf("[JK] BLE client connect failed, slot=%d, code=%d\n", index + 1, bleError);
     updateState(index, mac, bleError == BLE_HS_EALREADY ? "ble_busy_retry_exhausted" : "ble_connect_failed");
     NimBLEDevice::deleteClient(client);
+    // Do not let another JK worker retry while the host still owns a pending
+    // initiation from this failed attempt.
+    if(bleError==BLE_HS_EALREADY || ble_gap_conn_active())
+      recoverGapBeforeConnect(index,mac);
     xSemaphoreGive(radioMutex);
     return;
   }
@@ -480,7 +534,7 @@ void worker(void *arg) {
     if (index < configured) strncpy(mac, devices[index].mac, sizeof(mac)-1);
     portEXIT_CRITICAL(&stateMux);
     if (!mac[0]) { vTaskDelay(pdMS_TO_TICKS(1200)); continue; }
-    if (radioMutex && xSemaphoreTake(radioMutex, pdMS_TO_TICKS(6500)) == pdTRUE) {
+    if (radioMutex && xSemaphoreTake(radioMutex, pdMS_TO_TICKS(24000)) == pdTRUE) {
       if (!maintenanceRequested && !setupMode) {
         uint32_t before = 0;
         portENTER_CRITICAL(&stateMux);
@@ -592,6 +646,9 @@ void fillTelemetry(JsonDocument &out) {
     device["ble_service_failures"] = item.serviceFailures;
     device["ble_subscribe_failures"] = item.subscribeFailures;
     device["ble_last_error"] = item.lastBleError;
+    device["ble_gap_busy_count"] = item.gapBusyCount;
+    device["ble_gap_cancel_count"] = item.gapCancelCount;
+    device["ble_gap_still_busy_count"] = item.gapStillBusyCount;
     device["bad_crc_count"] = item.badFrames;
     device["rejected_measurements"] = item.rejectedMeasurements;
     const bool fresh = item.reading.valid && item.lastReadingMs &&
