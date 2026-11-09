@@ -201,9 +201,11 @@ class Flasher(tk.Tk):
         self._entry(frame, variable, row, password=password)
 
     def _build_vpn(self, root: ttk.Frame) -> None:
-        self._label(root, "Firmware VPN générique (.bin) :", 0)
+        self._label(root, "Firmware VPN précompilé :", 0)
         self._entry(root, self.vpn_image, 0)
-        self._picker(root, 0, self.vpn_image, "Choisir le firmware VPN précompilé")
+        self._picker(root, 0, self.vpn_image, "Choisir un .bin (option expert)")
+        ttk.Label(root,text="Intégré à l'EXE recommandé ; champ facultatif.",
+                  foreground="#347d5a").grid(row=0,column=3,padx=5)
         ttk.Radiobutton(root,
             text="Nouvelle passerelle uniquement — image FACTORY à 0x0",
             variable=self.vpn_mode,value="factory").grid(
@@ -280,6 +282,22 @@ class Flasher(tk.Tk):
                       "--flash_size", "4MB", offset, str(file)])
         self._log("Flash JK terminé. Redémarre le lecteur, puis vérifie la version dans l'APK.")
 
+    @staticmethod
+    def _bundled_vpn_image(mode: str) -> Path:
+        base = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent))
+        names = {
+            "factory": "smart-energy-vpn-USB-FACTORY-ESP32-0x0.bin",
+            "update": "smart-energy-vpn-USB-APP-ESP32-0x10000.bin",
+        }
+        if mode not in names:
+            raise ValueError("Mode VPN invalide.")
+        file = base / "embedded_firmware" / names[mode]
+        if not file.is_file():
+            raise ValueError("Ce flasheur ne contient pas les images VPN. "
+                             "Télécharge le kit Windows avec firmware intégré "
+                             "ou sélectionne explicitement le .bin officiel.")
+        return file
+
     def _vpn_values(self) -> dict[str, str]:
         values = {
             key: field.get().strip() if key not in (
@@ -300,8 +318,11 @@ class Flasher(tk.Tk):
             from vpn_usb import check_precompiled_image
             port = self._assert_ready()
             values = self._vpn_values()
-            file = Path(self.vpn_image.get())
             mode = self.vpn_mode.get()
+            if self.vpn_image.get().strip():
+                file = Path(self.vpn_image.get().strip())
+            else:
+                file = self._bundled_vpn_image(mode)
             check_precompiled_image(file, mode)
             if not messagebox.askyesno(
                 "Confirmer le flash ESP32 VPN",
