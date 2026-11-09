@@ -16,4 +16,16 @@ inline bool eligible(bool wifiReady,bool maintenance,bool configured,
   return wifiReady && !maintenance && configured && !alreadyConnected &&
          due(now,nextAttemptAt);
 }
+// NimBLE can report a connected GATT client after the last usable JK telemetry.
+// A fresh 0x02 frame MUST arrive after this connection and keep arriving.
+// Only recover after a full stall window; never reset healthy sibling links.
+// The signed difference safely handles millis() wraparound for recent timestamps.
+inline bool hasStalledTelemetry(uint32_t now,uint32_t connectedAt,
+                               uint32_t lastReadingAt,
+                               uint32_t stallMs=60000u) {
+  if (!connectedAt || uint32_t(now-connectedAt)<stallMs) return false;
+  const bool readAfterConnect=lastReadingAt &&
+      int32_t(lastReadingAt-connectedAt)>=0;
+  return !readAfterConnect || uint32_t(now-lastReadingAt)>=stallMs;
+}
 } // namespace blemanager
