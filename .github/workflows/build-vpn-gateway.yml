@@ -48,19 +48,23 @@ jobs:
       - name: Produce public precompiled USB provisioning images (classic ESP32)
         run: |
           python -m pip install "esptool==4.9.0"
+          # ESP-IDF Docker builds as root; output into a runner-owned dist dir.
+          mkdir -p firmware/vpn-gateway/dist
+          cp firmware/vpn-gateway/build/smart_energy_vpn_gateway.bin \
+            firmware/vpn-gateway/dist/smart-energy-vpn-USB-APP-ESP32-0x10000.bin
           python -m esptool --chip esp32 merge_bin \
             --flash_mode dio --flash_freq 40m --flash_size 4MB \
-            -o firmware/vpn-gateway/build/smart-energy-vpn-USB-FACTORY-ESP32-0x0.bin \
+            -o firmware/vpn-gateway/dist/smart-energy-vpn-USB-FACTORY-ESP32-0x0.bin \
             0x1000 firmware/vpn-gateway/build/bootloader/bootloader.bin \
             0x8000 firmware/vpn-gateway/build/partition_table/partition-table.bin \
             0x10000 firmware/vpn-gateway/build/smart_energy_vpn_gateway.bin
-          test -s firmware/vpn-gateway/build/smart-energy-vpn-USB-FACTORY-ESP32-0x0.bin
+          test -s firmware/vpn-gateway/dist/smart-energy-vpn-USB-FACTORY-ESP32-0x0.bin
       - name: Upload public generic firmware images (no user credentials)
         uses: actions/upload-artifact@v4
         with:
           name: SmartEnergy-VPN-ESP32-USB-PRECOMPILED
           path: |
-            firmware/vpn-gateway/build/smart-energy-vpn-USB-FACTORY-ESP32-0x0.bin
-            firmware/vpn-gateway/build/smart_energy_vpn_gateway.bin
+            firmware/vpn-gateway/dist/smart-energy-vpn-USB-FACTORY-ESP32-0x0.bin
+            firmware/vpn-gateway/dist/smart-energy-vpn-USB-APP-ESP32-0x10000.bin
           if-no-files-found: error
           retention-days: 30
