@@ -63,6 +63,9 @@ struct Device {
   float writeTarget = 0;
   uint32_t writeAt = 0;
   uint32_t writeSentAt = 0;
+  // A parameter write must only be confirmed from a fresh settings response
+  // explicitly queried AFTER the command was sent.
+  uint32_t writeVerifyRequestedAt = 0;
   bool writeMismatchSeen = false;
 };
 static Device devices[MAX_BMS];
@@ -191,6 +194,8 @@ void onValidatedFrame(const uint8_t *frame, const smartjk::Reading *basic, void 
       item.settings = settings;
       item.lastSettingsMs = now;
       if (item.writePhase == 2 && item.writeSentAt &&
+          item.writeVerifyRequestedAt &&
+          (int32_t)(now - item.writeVerifyRequestedAt) >= 0 &&
           (uint32_t)(now - item.writeSentAt) < 16000 &&
           item.writeIndex >= 0 && item.writeIndex < int(jkextra::PARAM_COUNT)) {
         const size_t k = size_t(item.writeIndex);
@@ -497,12 +502,22 @@ void serviceSession(Session &session) {
     }
     portEXIT_CRITICAL(&stateMux);
     if(sent) {
-      vTaskDelay(pdMS_TO_TICKS(350));
-      if(session.client && session.client->isConnected())
+      // Do not treat an old/spontaneous settings frame as write confirmation.
+      // Allow the BMS time to commit, then deliberately read register 0x96.
+      vTaskDelay(pdMS_TO_TICKS(850));
+      if(session.client && session.client->isConnected()) {
+        portENTER_CRITICAL(&stateMux);
+        if(index<configured && strcmp(devices[index].mac,session.mac)==0 &&
+           devices[index].writePhase==2)
+          devices[index].writeVerifyRequestedAt=millis();
+        portEXIT_CRITICAL(&stateMux);
         sendReadCommand(characteristic,0x96,withResponse);
+      }
     }
   }
-  if(uint32_t(now-session.lastSettingsRequestAt)>=300000) {
+  // Write guards require settings younger than 60 s. The old 5-minute
+  // polling interval could show "editable" options that were always rejected.
+  if(uint32_t(now-session.lastSettingsRequestAt)>=45000) {
     sendReadCommand(characteristic,0x96,withResponse);
     session.lastSettingsRequestAt=now;
   }
@@ -745,6 +760,24 @@ void fillTelemetry(JsonDocument &out) {
     }
   }
 }
+// Pure fail-closed readiness evaluation, identical for the UI and request.
+// Never relax BMS identity/protection checks to make an edit appear to work.
+static const char *writeBlockReason(const Device &d, uint32_t now) {
+  if(!d.bleConnected || !d.reading.valid || !d.lastReadingMs ||
+     uint32_t(now-d.lastReadingMs)>=20000) return "bms_not_live";
+  if(d.reading.errorMask!=0) return "bms_alarm_active";
+  if(!d.info.confirmed || !jkextra::usableIdentity(d.info))
+    return "unverified_bms_identity";
+  if(!d.settings.confirmed || !d.lastSettingsMs ||
+     uint32_t(now-d.lastSettingsMs)>=60000)
+    return "stale_or_missing_settings";
+  if(d.writePhase==1 || d.writePhase==2)
+    return "write_already_pending";
+  if(d.writeAt && uint32_t(now-d.writeAt)<15000)
+    return "write_rate_limit_15s";
+  return "";
+}
+
 void fillDetails(JsonDocument &out) {
   uint8_t count = 0;
   portENTER_CRITICAL(&stateMux);
@@ -760,6 +793,14 @@ void fillDetails(JsonDocument &out) {
     portEXIT_CRITICAL(&stateMux);
     JsonObject d = list.add<JsonObject>();
     d["mac"] = String(item.mac); // Owned by the JSON document
+    JsonObject capability=d["write_pilot"].to<JsonObject>();
+    const char *blocked=writeBlockReason(item,now);
+    capability["ready"]=blocked[0]==0;
+    capability["reason"]=String(blocked);
+    capability["settings_age_seconds"]=item.lastSettingsMs ?
+      uint32_t(now-item.lastSettingsMs)/1000 : -1;
+    capability["identity_verified"]=item.info.confirmed &&
+       jkextra::usableIdentity(item.info);
     JsonObject settings = d["settings"].to<JsonObject>();
     const bool available = item.settings.confirmed && item.lastSettingsMs &&
       (uint32_t)(now - item.lastSettingsMs) < 1800000;
@@ -848,19 +889,10 @@ bool requestWrite(const char *mac, const char *key, float value,
   for(uint8_t i=0;i<configured;++i){
     Device &d=devices[i];
     if(strcmp(d.mac,mac))continue;
-    reason="write_refused";
-    if(!d.bleConnected || !d.reading.valid || !d.lastReadingMs ||
-       (uint32_t)(now-d.lastReadingMs)>=20000){
-      reason="bms_not_live";break;
-    }
-    if(d.reading.errorMask!=0){reason="bms_alarm_active";break;}
-    if(!d.info.confirmed || !jkextra::usableIdentity(d.info)){
-      reason="unverified_bms_identity";break;
-    }
-    if(!d.settings.confirmed || !d.lastSettingsMs ||
-       (uint32_t)(now-d.lastSettingsMs)>=60000 ||
-       !d.settings.available[size_t(idx)]){
-      reason="stale_or_missing_settings";break;
+    reason=writeBlockReason(d,now);
+    if(reason[0]) break;
+    if(!d.settings.available[size_t(idx)]){
+      reason="parameter_not_readable";break;
     }
     if(fabsf(d.settings.value[size_t(idx)]-expectedOld)>0.0011f){
       reason="stale_expected_value";break;
@@ -875,6 +907,7 @@ bool requestWrite(const char *mac, const char *key, float value,
     d.writeTarget=value;
     d.writeAt=now;
     d.writeSentAt=0;
+    d.writeVerifyRequestedAt=0;
     d.writeMismatchSeen=false;
     d.writePhase=1;
     accepted=true;reason="";
