@@ -1392,7 +1392,7 @@ class MainActivity : Activity() {
         "connecting_ble" -> "Connexion Bluetooth en cours"
         "ble_connect_failed" -> "Échec de la connexion Bluetooth"
         "ble_busy_retry" -> "Connexion NimBLE occupée : attente et récupération"
-        "ble_busy_retry_exhausted" -> "NimBLE occupé après plusieurs tentatives"
+        "ble_busy_retry_exhausted" -> "Initiateur NimBLE déjà occupé (BLE 2)"
         "ble_gap_busy_retry" -> "Tentative NimBLE bloquée : récupération du contrôleur"
         "ble_client_unavailable" -> "Bluetooth indisponible sur l'ESP32"
         "ffe1_unavailable" -> "Service Bluetooth FFE1 non trouvé"
@@ -1680,12 +1680,19 @@ class MainActivity : Activity() {
             val busy = item.optInt("ble_gap_busy_count", 0)
             val cancelled = item.optInt("ble_gap_cancel_count", 0)
             val stuck = item.optInt("ble_gap_still_busy_count", 0)
+            val before = item.optBoolean("ble_gap_active_before", false)
+            val after = item.optBoolean("ble_gap_active_after", false)
+            val duration = item.optInt("ble_connect_duration_ms", 0)
+            val scanWasActive = item.optBoolean("ble_scan_active_before", false)
             "BMS ${i + 1} : $reason · scans $scans · connexions tentées $attempts" +
                 (if (err == 2) " · BLE 2 (connexion NimBLE déjà en cours)"
                  else if (err != 0) " · BLE $err" else "") +
                 (if(busy>0) " · attentes $busy" else "") +
                 (if(cancelled>0) " · libérations $cancelled" else "") +
-                (if(stuck>0) " · blocages $stuck" else "")
+                (if(stuck>0) " · blocages $stuck" else "") +
+                (if(attempts>0) " · essai ${duration} ms" else "") +
+                (if(before || after) " · GAP ${if(before)1 else 0}/${if(after)1 else 0}" else "") +
+                (if(scanWasActive) " · scan encore actif" else "")
         }
         val sectionTitle = if (global) "Synthèse des batteries" else
             "BMS ${macs.indexOf(selectedBmsMac) + 1} · " +
