@@ -1391,6 +1391,7 @@ class MainActivity : Activity() {
         "ble_not_seen" -> "JK hors de portée ou déjà connecté à un autre appareil"
         "connecting_ble" -> "Connexion Bluetooth en cours"
         "ble_connect_failed" -> "Échec de la connexion Bluetooth"
+        "ble_gap_busy_retry" -> "NimBLE occupé par une connexion précédente : récupération en cours"
         "ble_client_unavailable" -> "Bluetooth indisponible sur l'ESP32"
         "ffe1_unavailable" -> "Service Bluetooth FFE1 non trouvé"
         "ble_subscribe_failed" -> "Notifications Bluetooth indisponibles"
@@ -1674,8 +1675,15 @@ class MainActivity : Activity() {
             val scans = item.optInt("ble_scan_attempts", 0)
             val reason = readerStatus(item.optString("state"))
             val err = item.optInt("ble_last_error", 0)
+            val busy = item.optInt("ble_gap_busy_count", 0)
+            val cancelled = item.optInt("ble_gap_cancel_count", 0)
+            val stuck = item.optInt("ble_gap_still_busy_count", 0)
             "BMS ${i + 1} : $reason · scans $scans · connexions tentées $attempts" +
-                if (err != 0) " · BLE $err" else ""
+                (if(err == 2) " · BLE 2 (une connexion NimBLE déjà en cours)"
+                 else if(err != 0) " · BLE $err" else "") +
+                (if(busy > 0) " · attente contrôleur $busy" else "") +
+                (if(cancelled > 0) " · récupérations $cancelled" else "") +
+                (if(stuck > 0) " · blocages persistants $stuck" else "")
         }
         val sectionTitle = if (global) "Synthèse des batteries" else
             "BMS ${macs.indexOf(selectedBmsMac) + 1} · " +
