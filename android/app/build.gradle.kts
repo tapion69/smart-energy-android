@@ -20,8 +20,8 @@ android {
         applicationId = "fr.smartenergy.android"
         minSdk = 29
         targetSdk = 35
-        versionCode = 21
-        versionName = "0.3.6-dev"
+        versionCode = 22
+        versionName = "0.3.7-dev"
     }
     signingConfigs {
         if (hasStableSigning) {
@@ -37,7 +37,7 @@ android {
         debug {
             // Separate experimental install; never require uninstalling the
             // stable Smart Energy APK or erasing its Keystore pairing.
-            applicationIdSuffix = ".vpntrial36"
+            applicationIdSuffix = ".vpntrial37"
         }
         release {
             isMinifyEnabled = false
