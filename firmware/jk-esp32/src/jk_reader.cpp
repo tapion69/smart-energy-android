@@ -290,7 +290,9 @@ void pollOne(Session &session, const char *mac) {
     xSemaphoreGive(radioMutex);
     return;
   }
-  client->setConnectTimeout(9000);
+  // The working JK add-on allows ~15 s for each BLE connect; do the same
+  // under Wi-Fi coexistence instead of marking the JK offline after 9 s.
+  client->setConnectTimeout(15000);
   const bool connected = client->connect(match);
   scanner->clearResults();
   if (!connected) {
@@ -466,7 +468,7 @@ void worker(void *arg) {
     if (index < configured) strncpy(mac, devices[index].mac, sizeof(mac)-1);
     portEXIT_CRITICAL(&stateMux);
     if (!mac[0]) { vTaskDelay(pdMS_TO_TICKS(1200)); continue; }
-    if (radioMutex && xSemaphoreTake(radioMutex, pdMS_TO_TICKS(6500)) == pdTRUE) {
+    if (radioMutex && xSemaphoreTake(radioMutex, pdMS_TO_TICKS(24000)) == pdTRUE) {
       if (!maintenanceRequested && !setupMode) {
         uint32_t before = 0;
         portENTER_CRITICAL(&stateMux);
