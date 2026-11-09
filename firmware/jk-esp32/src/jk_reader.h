@@ -13,5 +13,6 @@ namespace jkreader {
   bool requestWrite(const char *mac, const char *key, float value,
                     bool boolType, float expectedOld, String &error);
   bool isConfigured(const char *mac);
+  bool requestSettingsRefresh(const char *mac);
   void fillWriteStatus(JsonDocument &out, const char *mac);
 }
