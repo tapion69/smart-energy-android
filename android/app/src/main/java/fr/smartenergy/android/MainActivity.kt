@@ -838,7 +838,8 @@ class MainActivity : Activity() {
                     }
                     state((if (remote) "Accès distant VPN confirmé. " else
                         if (recovering) "Code mémorisé. " else "Connecté automatiquement. ") +
-                        id + " · " + chosen.size + " JK mémorisé(s).")
+                        id + " · firmware " + info.optString("version") +
+                        " · " + chosen.size + " JK mémorisé(s).")
                     refreshTelemetry()
                 }
             } finally {
