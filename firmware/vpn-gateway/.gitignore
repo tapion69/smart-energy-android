@@ -7,3 +7,8 @@ managed_components/
 components/
 __pycache__/
 upstream-tailtiny/
+
+# Local flasher recovery copies — may contain Wi-Fi and VPN secrets
+sdkconfig.credentials.backup
+sdkconfig.smartenergy.backup
+sdkconfig.old.smartenergy.backup
