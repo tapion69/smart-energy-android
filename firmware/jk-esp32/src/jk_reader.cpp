@@ -37,6 +37,15 @@ struct Device {
   uint32_t seenType3Frames = 0;
   char lastIdentityFailure[36] = {};
   bool bleConnected = false;
+  // Per-BMS diagnostics; no keys, payloads, or secrets are ever retained.
+  uint32_t scanAttempts = 0;
+  uint32_t scanMisses = 0;
+  uint32_t connectAttempts = 0;
+  uint32_t connectFailures = 0;
+  uint32_t clientFailures = 0;
+  uint32_t serviceFailures = 0;
+  uint32_t subscribeFailures = 0;
+  int lastBleError = 0;
   uint32_t connections = 0;
   uint32_t disconnections = 0;
   // One-shot, non-optimistic parameter write. 0=idle, 1=queued, 2=sent,
@@ -70,6 +79,29 @@ void updateState(int index, const char *mac, const char *message) {
     strncpy(devices[index].state, message, sizeof(devices[index].state) - 1);
     devices[index].state[sizeof(devices[index].state) - 1] = '\0';
     devices[index].lastAttemptMs = millis();
+  }
+  portEXIT_CRITICAL(&stateMux);
+}
+
+enum class BleEvent : uint8_t {
+  Scan, NotSeen, Connect, NoClient, ConnectFailed, ServiceFailed,
+  SubscribeFailed, Connected
+};
+void markBleEvent(int index, const char *mac, BleEvent event, int error = 0) {
+  portENTER_CRITICAL(&stateMux);
+  if (index >= 0 && index < configured &&
+      strcmp(devices[index].mac, mac) == 0) {
+    Device &item = devices[index];
+    switch (event) {
+      case BleEvent::Scan: ++item.scanAttempts; break;
+      case BleEvent::NotSeen: ++item.scanMisses; break;
+      case BleEvent::Connect: ++item.connectAttempts; break;
+      case BleEvent::NoClient: ++item.clientFailures; break;
+      case BleEvent::ConnectFailed: ++item.connectFailures; item.lastBleError = error; break;
+      case BleEvent::ServiceFailed: ++item.serviceFailures; item.lastBleError = error; break;
+      case BleEvent::SubscribeFailed: ++item.subscribeFailures; item.lastBleError = error; break;
+      case BleEvent::Connected: item.lastBleError = 0; break;
+    }
   }
   portEXIT_CRITICAL(&stateMux);
 }
@@ -173,10 +205,15 @@ void pollOne(Session &session, const char *mac) {
   strncpy(session.mac, mac, sizeof(session.mac) - 1);
   session.mac[sizeof(session.mac)-1] = 0;
   updateState(index, mac, "searching_ble");
+  markBleEvent(index, mac, BleEvent::Scan);
   NimBLEScan *scanner = NimBLEDevice::getScan();
-  scanner->setActiveScan(true);
+  // Passive, duty-limited scans are less disruptive to the already established
+  // JK notification stream; discovery still uses each device's MAC.
+  scanner->setActiveScan(false);
+  scanner->setInterval(120);
+  scanner->setWindow(48);
   scanner->setMaxResults(40);
-  NimBLEScanResults results = scanner->getResults(4000, false);
+  NimBLEScanResults results = scanner->getResults(5000, false);
   const NimBLEAdvertisedDevice *match = nullptr;
   for (int i = 0; i < results.getCount(); ++i) {
     const NimBLEAdvertisedDevice *item = results.getDevice(i);
@@ -187,14 +224,17 @@ void pollOne(Session &session, const char *mac) {
   }
   if (!match) {
     scanner->clearResults();
+    markBleEvent(index, mac, BleEvent::NotSeen);
     updateState(index, mac, "ble_not_seen");
     xSemaphoreGive(radioMutex);
     return;
   }
   updateState(index, mac, "connecting_ble");
+  markBleEvent(index, mac, BleEvent::Connect);
   NimBLEClient *client = NimBLEDevice::createClient();
   if (!client) {
     scanner->clearResults();
+    markBleEvent(index, mac, BleEvent::NoClient);
     updateState(index, mac, "ble_client_unavailable");
     xSemaphoreGive(radioMutex);
     return;
@@ -203,6 +243,9 @@ void pollOne(Session &session, const char *mac) {
   const bool connected = client->connect(match);
   scanner->clearResults();
   if (!connected) {
+    const int bleError = client->getLastError();
+    markBleEvent(index, mac, BleEvent::ConnectFailed, bleError);
+    Serial.printf("[JK] BLE client connect failed, slot=%d, code=%d\n", index + 1, bleError);
     updateState(index, mac, "ble_connect_failed");
     NimBLEDevice::deleteClient(client);
     xSemaphoreGive(radioMutex);
@@ -214,6 +257,7 @@ void pollOne(Session &session, const char *mac) {
       service ? service->getCharacteristic(NimBLEUUID("0000ffe1-0000-1000-8000-00805f9b34fb")) : nullptr;
   if (!characteristic || !characteristic->canNotify() ||
       !(characteristic->canWriteNoResponse() || characteristic->canWrite())) {
+    markBleEvent(index, mac, BleEvent::ServiceFailed, client->getLastError());
     updateState(index, mac, "ffe1_unavailable");
     client->disconnect();
     NimBLEDevice::deleteClient(client);
@@ -229,6 +273,7 @@ void pollOne(Session &session, const char *mac) {
     session.subscribed = false;
     session.notify = nullptr;
     session.client = nullptr;
+    markBleEvent(index, mac, BleEvent::SubscribeFailed, client->getLastError());
     updateState(index, mac, "ble_subscribe_failed");
     client->disconnect();
     NimBLEDevice::deleteClient(client);
@@ -242,8 +287,10 @@ void pollOne(Session &session, const char *mac) {
     devices[index].connections++;
   }
   portEXIT_CRITICAL(&stateMux);
-  xSemaphoreGive(radioMutex);
-  Serial.printf("[JK] BLE connected to %s (persistent session)\n", mac);
+  // Keep the radio handshake serialized until the initial subscription and
+  // requests are complete; another worker must not start a scan here.
+  markBleEvent(index, mac, BleEvent::Connected);
+  Serial.printf("[JK] BLE connected to slot %d (persistent session)\n", index + 1);
 
   // Query metadata/settings ONCE to start unsolicited JK02 telemetry stream.
   // All commands are READ-ONLY; never send SOC / MOS / setting writes.
@@ -251,6 +298,7 @@ void pollOne(Session &session, const char *mac) {
   sendReadCommand(characteristic, 0x97, withResponse);
   vTaskDelay(pdMS_TO_TICKS(650));
   if (client->isConnected()) sendReadCommand(characteristic, 0x96, withResponse);
+  xSemaphoreGive(radioMutex);
   uint32_t lastRefreshAt = millis();
   uint32_t lastSettingsRequestAt = millis();
   uint32_t lastInfoRequestAt = millis();
@@ -466,6 +514,14 @@ void fillTelemetry(JsonDocument &out) {
     device["ble_connected"] = item.bleConnected;
     device["connections"] = item.connections;
     device["disconnections"] = item.disconnections;
+    device["ble_scan_attempts"] = item.scanAttempts;
+    device["ble_scan_misses"] = item.scanMisses;
+    device["ble_connect_attempts"] = item.connectAttempts;
+    device["ble_connect_failures"] = item.connectFailures;
+    device["ble_client_failures"] = item.clientFailures;
+    device["ble_service_failures"] = item.serviceFailures;
+    device["ble_subscribe_failures"] = item.subscribeFailures;
+    device["ble_last_error"] = item.lastBleError;
     device["bad_crc_count"] = item.badFrames;
     device["rejected_measurements"] = item.rejectedMeasurements;
     const bool fresh = item.reading.valid && item.lastReadingMs &&
