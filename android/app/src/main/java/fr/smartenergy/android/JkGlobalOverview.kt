@@ -82,7 +82,8 @@ class JkGlobalOverview(private val ctx: Context) : LinearLayout(ctx) {
     }
 
     init { orientation = VERTICAL }
-    fun bind(devices: JSONArray, selectBms: (String)->Unit) {
+    fun bind(devices: JSONArray, selectBms: (String)->Unit,
+             bmsName:(String,Int)->String = {_,index -> "BMS ${index+1}"}) {
         removeAllViews()
         val entries=(0 until devices.length()).mapNotNull { devices.optJSONObject(it) }
         val live=entries.filter { it.optBoolean("available") && it.optJSONObject("values") != null }
@@ -140,7 +141,7 @@ class JkGlobalOverview(private val ctx: Context) : LinearLayout(ctx) {
             for(bms in alarmed){
                 val index=entries.indexOf(bms)+1
                 val mac=bms.optString("mac")
-                val jump=text("⚠ JK $index : alarme active · voir la batterie",13f,red,true)
+                val jump=text("⚠ ${bmsName(mac,index-1)} : alarme active · voir la batterie",13f,red,true)
                 jump.setPadding(0,dp(6),0,dp(6))
                 jump.setOnClickListener{selectBms(mac)}
                 board.addView(jump)
@@ -151,7 +152,7 @@ class JkGlobalOverview(private val ctx: Context) : LinearLayout(ctx) {
             val mac=bms.optString("mac")
             val v=bms.optJSONObject("values")
             val card=panel()
-            card.addView(text("BMS ${index+1} · "+ if(bms.optBoolean("available"))"En ligne" else "Hors ligne",
+            card.addView(text(bmsName(mac,index)+" · "+ if(bms.optBoolean("available"))"En ligne" else "Hors ligne",
                 15f,if(bms.optBoolean("available"))mint else muted,true))
             val summary=if(bms.optBoolean("available") && v!=null)
                 "${v.optInt("soc_pct")}%  ·  ${String.format(Locale.FRANCE,"%.2f",v.optDouble("voltage_v"))} V" +
