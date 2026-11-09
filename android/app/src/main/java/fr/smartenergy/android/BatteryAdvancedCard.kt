@@ -146,6 +146,8 @@ class BatteryAdvancedCard(context: Context) : LinearLayout(context) {
     }
 
     fun settings(index:Int, device:JSONObject?, telemetry:JSONObject? = null,
+                 allowEdits:Boolean=false,
+                 onModeToggle:(()->Unit)?=null,
                  onEdit: ((JSONObject)->Unit)? = null) {
         val liveValues = telemetry?.optJSONObject("values")
         val statusSignature = listOf(
@@ -154,12 +156,20 @@ class BatteryAdvancedCard(context: Context) : LinearLayout(context) {
             liveValues?.optString("frame_layout"),
             liveValues?.optInt("cell_count")
         ).joinToString()
-        val signature = "s" + index + (device?.toString() ?: "") + statusSignature
+        val signature = "s" + index + allowEdits + (device?.toString() ?: "") + statusSignature
         if (lastSignature == signature) return
         lastSignature = signature
         removeAllViews()
         val header = panel("JK " + (index + 1) + " · Paramètres",
-            "Réglages JK02 locaux expérimentaux ; double confirmation pour les protections")
+            "Lecture seule par défaut. Chaque changement demande une validation indépendante.")
+        if(onModeToggle!=null) {
+            val control=txt(if(allowEdits) "🔒 Terminer les modifications"
+                else "✎ Activer les modifications",15f,true,if(allowEdits) orange else mint)
+            control.setPadding(dp(6),dp(12),dp(6),dp(12))
+            control.setOnClickListener { onModeToggle() }
+            header.addView(control)
+            if(allowEdits) row(header,"Mode modification","ACTIF — confirmation obligatoire à chaque réglage",orange)
+        }
         if (device == null) {
             row(header, "État", "Paramètres JK non reçus")
         }
@@ -201,13 +211,9 @@ class BatteryAdvancedCard(context: Context) : LinearLayout(context) {
                             if(unit=="°C") 1 else 0,unit)
                     }
                     row(panel,title,result)
-                    if (p.optBoolean("editable") && onEdit != null &&
+                    if (allowEdits && p.optBoolean("editable") && onEdit != null &&
                         pilot?.optBoolean("ready") == true) {
-                        val important=p.optInt("risk_level",2)>=2
-                        val link=txt(
-                            if(important) "Modifier (protection critique)  ›"
-                            else "Modifier ce réglage  ›",
-                            12f,true,if(important)orange else mint)
+                        val link=txt("Modifier  ›",12f,true,mint)
                         link.setPadding(dp(6),dp(5),dp(6),dp(10))
                         link.setOnClickListener { onEdit(p) }
                         panel.addView(link)
