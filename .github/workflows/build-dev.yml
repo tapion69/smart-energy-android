@@ -2,7 +2,7 @@ name: Build development prototypes
 
 on:
   push:
-    branches: [main]
+    branches: [main, dev]
     paths:
       - 'android/**'
       - 'firmware/jk-esp32/**'
@@ -22,9 +22,9 @@ jobs:
         with:
           distribution: temurin
           java-version: '17'
-      - name: Build Android debug APK
+      - name: Build Android debug APK and unit tests
         working-directory: android
-        run: ./gradlew --no-daemon assembleDebug
+        run: ./gradlew --no-daemon testDebugUnitTest assembleDebug
       - name: Load permanent APK signing key (GitHub secrets)
         id: signing
         shell: bash
