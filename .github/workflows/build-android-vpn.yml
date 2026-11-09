@@ -1,7 +1,7 @@
 name: Smart Energy Android VPN Gateway (experimental)
 on:
   push:
-    branches: [experiment/esp32-vpn-gateway, experiment/smart-energy-v0.3.0-multibms, experiment/smart-energy-v0.3.2-multibms-diagnostic, experiment/smart-energy-v0.3.3-ble-shared-discovery]
+    branches: [experiment/esp32-vpn-gateway, experiment/smart-energy-v0.3.0-multibms, experiment/smart-energy-v0.3.2-multibms-diagnostic, experiment/smart-energy-v0.3.4-ble-shared-discovery, experiment/smart-energy-v0.3.4-shared-gap-recovery]
     paths:
       - 'android/**'
       - 'firmware/jk-esp32/**'
@@ -29,12 +29,12 @@ jobs:
       - name: Upload test APK
         uses: actions/upload-artifact@v4
         with:
-          name: smart-energy-android-v0.3.2-multibms-diagnostic-debug-test
+          name: smart-energy-android-v0.3.4-shared-gap-recovery-debug-test
           path: android/app/build/outputs/apk/debug/app-debug.apk
           retention-days: 14
 
   jk-esp32:
-    name: Test and build JK ESP32 0.3.3 (multi-BMS diagnostics, recovery; optional flash)
+    name: Test and build JK ESP32 0.3.4 (multi-BMS diagnostics, recovery; optional flash)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -64,7 +64,7 @@ jobs:
       - name: Upload JK app-only firmware (no NVS erase)
         uses: actions/upload-artifact@v4
         with:
-          name: smart-jk-esp32-v0.3.3-dev-APP-ONLY-offset-0x10000
+          name: smart-jk-esp32-v0.3.4-dev-APP-ONLY-offset-0x10000
           path: firmware/jk-esp32/.pio/build/esp32dev/firmware.bin
           retention-days: 14
       - name: Create full 0x0000 image for deliberate clean reinstall
@@ -73,7 +73,7 @@ jobs:
         run: |
           python - <<'PY'
           from pathlib import Path
-          f=Path("firmware/jk-esp32/.pio/build/esp32dev/smart_jk_esp32_v0.3.3_FULL_ERASE_FIRST_0x0000.bin")
+          f=Path("firmware/jk-esp32/.pio/build/esp32dev/smart_jk_esp32_v0.3.4_FULL_ERASE_FIRST_0x0000.bin")
           b=f.read_bytes()
           assert b[0x1000] == 0xe9 and b[0x10000] == 0xe9, "Missing bootloader/app"
           assert 0x10000 < len(b) < 0x400000, "Invalid ESP32 image size"
@@ -82,6 +82,6 @@ jobs:
       - name: Upload full factory reinstallation image (ESP1 only)
         uses: actions/upload-artifact@v4
         with:
-          name: smart-jk-esp32-v0.3.3-COMPLETE-ERASE-FIRST-address-0x0000
-          path: firmware/jk-esp32/.pio/build/esp32dev/smart_jk_esp32_v0.3.3_FULL_ERASE_FIRST_0x0000.bin
+          name: smart-jk-esp32-v0.3.4-COMPLETE-ERASE-FIRST-address-0x0000
+          path: firmware/jk-esp32/.pio/build/esp32dev/smart_jk_esp32_v0.3.4_FULL_ERASE_FIRST_0x0000.bin
           retention-days: 14
