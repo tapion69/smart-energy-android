@@ -74,8 +74,8 @@ class BatteryAdvancedCard(context: Context) : LinearLayout(context) {
         if(!o.has(k)||o.isNull(k))return "—"
         return if(o.optBoolean(k))"Oui" else "Non"
     }
-    fun measurements(index:Int, device:JSONObject) {
-        val signature="m"+index+device.toString()
+    fun measurements(index:Int, device:JSONObject, showDebug:Boolean=false) {
+        val signature="m"+index+showDebug+device.toString()
         if(lastSignature==signature)return
         lastSignature=signature
         removeAllViews()
@@ -83,7 +83,7 @@ class BatteryAdvancedCard(context: Context) : LinearLayout(context) {
         val header=panel("JK "+(index+1)+" · États et alarmes")
         row(header,"Bluetooth",if(device.optBoolean("ble_connected"))"Connecté" else "Déconnecté")
         if(!device.optBoolean("available")||values==null) {
-            row(header,"Diagnostic",device.optString("state","Données indisponibles"))
+            if(showDebug) row(header,"Diagnostic",device.optString("state","Données indisponibles"))
             return
         }
         row(header,"Charge MOS",flag(values,"charging_mos"))
@@ -137,12 +137,14 @@ class BatteryAdvancedCard(context: Context) : LinearLayout(context) {
                 num(cell,"voltage_v",3,"V")+" · "+num(cell,"resistance_ohm",3,"Ω"),
                 if(cell.optBoolean("wire_warning"))orange else ink)
         }
-        val diag=panel("Diagnostic Bluetooth")
-        row(diag,"Connexions",device.optInt("connections").toString())
-        row(diag,"Déconnexions",device.optInt("disconnections").toString())
-        row(diag,"CRC rejetés",device.optInt("bad_crc_count").toString())
-        row(diag,"Mesures rejetées",device.optInt("rejected_measurements").toString())
-        row(diag,"Âge mesure",device.optInt("age_seconds").toString()+" s")
+        if(showDebug) {
+            val diag=panel("Diagnostic Bluetooth")
+            row(diag,"Connexions",device.optInt("connections").toString())
+            row(diag,"Déconnexions",device.optInt("disconnections").toString())
+            row(diag,"CRC rejetés",device.optInt("bad_crc_count").toString())
+            row(diag,"Mesures rejetées",device.optInt("rejected_measurements").toString())
+            row(diag,"Âge mesure",device.optInt("age_seconds").toString()+" s")
+        }
     }
 
     fun settings(index:Int, device:JSONObject?, telemetry:JSONObject? = null,
