@@ -101,3 +101,14 @@ La réponse doit être celle du JK BMS. Le navigateur ne permet pas d'ajouter ce
 ## Suite prévue
 
 Valider le second ESP32 en 4G/5G, puis ajouter le mode de connexion VPN dans l'APK avec un token sécurisé. Ensuite, ajouter l'adaptateur de lecture pour l'ESP Voltronic sur le même réseau VPN, sans modifier les règles de protection du JK ou de l'onduleur.
+
+
+## Version expérimentale 0.2.0-dev-multi3 — trois lecteurs JK
+
+Branche unique de développement `dev`. Les anciennes routes `/api/v1/jk/telemetry` et `/api/v1/jk/details` continuent de viser le **lecteur 1**. Les nouveaux chemins autorisés en GET uniquement sont `/api/v1/jk/1/telemetry`, `/api/v1/jk/1/details`, `/api/v1/jk/2/telemetry`, `/api/v1/jk/2/details`, `/api/v1/jk/3/telemetry`, `/api/v1/jk/3/details`.
+
+Renseigner les six champs locaux `CONFIG_SE_JK_IP`, `CONFIG_SE_JK_READ_CODE`, `CONFIG_SE_JK2_IP`, `CONFIG_SE_JK2_READ_CODE`, `CONFIG_SE_JK3_IP`, `CONFIG_SE_JK3_READ_CODE` (laisser les couples 2 et 3 vides si non utilisés), dans `sdkconfig.credentials`, qui n'est pas commité. Chaque lecteur reçoit son code personnel sur le Wi-Fi domestique uniquement. Jamais de POST relayé, ni d'IP arbitraire fournie par le client. Le token VPN est commun et reste indépendant des codes JK.
+
+La compilation automatique GitHub utilise des champs vides : **ce firmware ne peut pas remplacer un ESP32 VPN déjà opérationnel tel quel**. Le construire localement avec les données de son installation depuis le flasheur Windows et ESP-IDF 5.3.2. Ne pas reflasher le VPN en fonctionnement tant que le nouveau matériel n'a pas été testé.
+
+[Guide architecture des trois lecteurs](../../docs/ARCHITECTURE-DEV-3-ESP32.md).
