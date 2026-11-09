@@ -89,14 +89,29 @@ static void provisioning_loop(void) {
     serial_prepare();
     ESP_LOGW(TAG,"No network service started: USB provisioning only");
     puts("SEVPN_READY_V1");
+    fflush(stdout);
     size_t used=0;
+    uint32_t last_ready=esp_log_timestamp();
     while(true) {
         uint8_t byte=0;
         int n=uart_read_bytes(UART_NUM_0,&byte,1,pdMS_TO_TICKS(200));
-        if(n<=0)continue;
+        if(n<=0) {
+            if((uint32_t)(esp_log_timestamp()-last_ready)>2000) {
+                puts("SEVPN_READY_V1");
+                fflush(stdout);
+                last_ready=esp_log_timestamp();
+            }
+            continue;
+        }
         if(byte=='\r')continue;
         if(byte=='\n') {
             line_buffer[used]=0;
+            if(strcmp(line_buffer,"SEVPN_PING")==0) {
+                puts("SEVPN_READY_V1");
+                fflush(stdout);
+                used=0;
+                continue;
+            }
             const char prefix[]="SEVPN_CONFIG ";
             if(used>sizeof(prefix)-1 &&
                memcmp(line_buffer,prefix,sizeof(prefix)-1)==0 &&
