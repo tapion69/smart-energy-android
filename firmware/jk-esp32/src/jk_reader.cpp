@@ -31,6 +31,7 @@ struct Device {
   jkextra::Settings settings{};
   jkextra::Info info{};
   uint32_t lastSettingsMs = 0;
+  bool settingsRefreshPending = false;
   uint32_t lastInfoMs = 0;
   uint32_t lastReadingMs = 0;
   uint32_t lastAttemptMs = 0;
@@ -545,12 +546,15 @@ void serviceSession(Session &session) {
     session.lastSignalPollAt=now;
   }
   uint32_t lastReading=0;
+  bool refreshSettings=false;
   int pending=-1;
   float target=0;
   portENTER_CRITICAL(&stateMux);
   if(index<configured && strcmp(devices[index].mac,session.mac)==0) {
     Device &d=devices[index];
     lastReading=d.lastReadingMs;
+    refreshSettings=d.settingsRefreshPending;
+    d.settingsRefreshPending=false;
     if(d.writePhase==1) {
       pending=d.writeIndex;target=d.writeTarget;
     } else if(d.writePhase==2 && d.writeSentAt &&
@@ -585,9 +589,9 @@ void serviceSession(Session &session) {
       }
     }
   }
-  // Write guards require settings younger than 60 s. The old 5-minute
-  // polling interval could show "editable" options that were always rejected.
-  if(uint32_t(now-session.lastSettingsRequestAt)>=45000) {
+  // Static BMS settings: initial read, then every 30 minutes or an
+  // explicit local read when the user unlocks parameter editing.
+  if(refreshSettings || uint32_t(now-session.lastSettingsRequestAt)>=1800000u) {
     sendReadCommand(characteristic,0x96,withResponse);
     session.lastSettingsRequestAt=now;
   }
@@ -595,12 +599,12 @@ void serviceSession(Session &session) {
     sendReadCommand(characteristic,0x97,withResponse);
     session.lastInfoRequestAt=now;
   }
-  if((!lastReading || uint32_t(now-lastReading)>=8000) &&
+  // No repeated 0x96 queries merely because the notification stream pauses.
+  // The independent 60s watchdog closes and rebuilds a stalled GATT session.
+  if((!lastReading || uint32_t(now-lastReading)>30000) &&
      uint32_t(now-session.lastRefreshAt)>=8000) {
-    sendReadCommand(characteristic,0x96,withResponse);
     session.lastRefreshAt=now;
-    if(!lastReading || uint32_t(now-lastReading)>30000)
-      updateState(index,session.mac,"waiting_frames");
+    updateState(index,session.mac,"waiting_frames");
   }
 }
 
@@ -921,7 +925,7 @@ void fillDetails(JsonDocument &out) {
        jkextra::usableIdentity(item.info);
     JsonObject settings = d["settings"].to<JsonObject>();
     const bool available = item.settings.confirmed && item.lastSettingsMs &&
-      (uint32_t)(now - item.lastSettingsMs) < 1800000;
+      (uint32_t)(now - item.lastSettingsMs) < 3600000;
     settings["available"] = available;
     if (available) {
       settings["age_seconds"] = (now - item.lastSettingsMs) / 1000;
@@ -983,6 +987,23 @@ void fillDetails(JsonDocument &out) {
            "no_fresh_crc_checked_device_info_frame");
     }
   }
+}
+
+// Requested from a local authenticated UI action; never touches BMS protections.
+bool requestSettingsRefresh(const char *mac) {
+  if(!mac || !mac[0])return false;
+  bool accepted=false;
+  portENTER_CRITICAL(&stateMux);
+  for(uint8_t i=0;i<configured;++i) {
+    Device &d=devices[i];
+    if(strcmp(d.mac,mac)==0 && d.bleConnected) {
+      d.settingsRefreshPending=true;
+      accepted=true;
+      break;
+    }
+  }
+  portEXIT_CRITICAL(&stateMux);
+  return accepted;
 }
 
 bool isConfigured(const char *mac) {
