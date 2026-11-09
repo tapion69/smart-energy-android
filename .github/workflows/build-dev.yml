@@ -90,6 +90,12 @@ jobs:
           /tmp/smart-jk-protocol-test
           g++ -std=c++11 -Wall -Wextra -Werror firmware/jk-esp32/tests/test_extended.cpp -o /tmp/smart-jk-extended-test
           /tmp/smart-jk-extended-test
+      - name: Verify BLE and settings schedule architecture
+        run: |
+          python firmware/jk-esp32/tests/test_ble_manager_architecture.py
+          python firmware/jk-esp32/tests/test_settings_cadence.py
+          g++ -std=c++11 -Wall -Wextra -Werror firmware/jk-esp32/tests/test_ble_manager_policy.cpp -o /tmp/test_ble_manager
+          /tmp/test_ble_manager
       - name: Compile firmware
         run: pio run -d firmware/jk-esp32
       - name: Create complete USB flash image (ESP32 classic only)
