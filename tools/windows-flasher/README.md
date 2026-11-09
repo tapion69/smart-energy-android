@@ -1,37 +1,51 @@
-# Smart Energy Flasheur Windows — pilote expérimental
+# Smart Energy Flasher Windows — version précompilée (dev)
 
-**Objectif** : avoir un programme Windows \`SmartEnergyFlasher.exe\` pour les deux types d'ESP32 classiques, sans Home Assistant. Interface graphique, port COM, choix du mode et bouton Flash.
+Le programme \`SmartEnergyFlasher.exe\` contient les outils nécessaires à l'écriture USB d'un ESP32 classique. **Aucun Git, ESP-IDF ou Python à installer sur le PC utilisateur.** Un pilote USB-série (CP210x, CH340 ou FTDI selon la carte) reste éventuellement nécessaire.
 
-- **ESP32 JK — mise à jour** : sélectionner le binaire APP-ONLY de Smart Energy, flash **uniquement à \`0x10000\`**, sans \`erase_flash\`. Le Wi-Fi, le code JK et la liste BMS restent normalement dans la NVS. Ne pas mélanger les modèles de cartes.
-- **ESP32 JK — première installation** : image FULL combinée avec les partitions à \`0x0000\`, uniquement sur une carte neuve. Ce mode demande une confirmation supplémentaire et peut rendre inaccessible une ancienne NVS. Toujours conserver les sauvegardes.
-- **ESP32 VPN — construction propre à chaque utilisateur** : renseigner Wi-Fi, clé Tailscale, token du relais, puis jusqu'à **3 lecteurs JK** (IP + code de lecture distinct). Le programme crée le fichier local \`sdkconfig.credentials\` ignoré par Git, récupère TailTiny au commit épinglé, régénère \`sdkconfig\`, compile via ESP-IDF et flashe UNIQUEMENT la carte VPN sur son port COM. Aucun secret ne fait partie de l'EXE.
+## Fichiers nécessaires
 
-## Prérequis Windows
+- Un \`SmartEnergyFlasher.exe\` compilé par [GitHub Actions](https://github.com/tapion69/smart-energy-android/actions/workflows/build-windows-flasher.yml).
+- Le \`.bin\` **précompilé correspondant à la carte** et au mode de flash. Pour le VPN, [voir le workflow firmware VPN](https://github.com/tapion69/smart-energy-android/actions/workflows/build-vpn-gateway.yml). Les artefacts du workflow ne contiennent **aucun mot de passe, clé Tailscale ou code BMS**.
+- Un ESP32 **classique** de test et un câble USB transmettant les données. **Ne pas utiliser ces binaires sur ESP32-S3.** Les images S3 doivent être compilées et testées séparément.
 
-- Pour le JK : pilote USB série FTDI/CH340/CP210x adapté et câble de données USB. Le programme comprend esptool (aucun Python requis pour l'utilisateur).
-- Pour le VPN : en plus, **Git for Windows et ESP-IDF 5.3.2 déjà installé**, avec le chemin vers \`export.bat\`. La compilation personnalisée s'effectue localement pour ne jamais transmettre les secrets au serveur de compilation. Connexion Internet pour récupérer TailTiny une première fois.
-- Répertoire \`firmware/vpn-gateway\` provenant de la branche \`dev\` du dépôt. L'EXE ne télécharge pas ce dépôt automatiquement.
+## ESP32 JK
 
-## Sécurité
+- **Mise à jour** d'un appareil existant : sélectionner l'image JK APP-ONLY, flash \`0x10000\`, pas de \`erase_flash\` ni de reconfiguration.
+- **Première installation** : sélectionner l'image JK FACTORY à \`0x0000\`, uniquement sur un nouvel ESP32 ; ce mode peut remplacer le partitionnement et rendre la NVS inaccessible sur un ancien ESP32.
 
-- L'outil n'appelle jamais \`erase_flash\`.
-- Les codes de BMS et jetons sont saisis comme champs masqués. Le journal masque leurs valeurs, mais ne doit pas être partagé aveuglément.
-- Le fichier local \`sdkconfig.credentials\` et ses éventuelles sauvegardes **contiennent les secrets** : protéger ce PC et ne jamais les ajouter à GitHub, ni à une capture publique.
-- Le prototype VPN compile les secrets dans le firmware. La sécurité physique et la gestion des clés restent expérimentales ; ne pas distribuer ce firmware comme produit commercial.
-- Le flasheur ne vérifie pas encore les signatures cryptographiques des binaires choisis : n'utiliser que les artefacts de build provenant du dépôt du projet.
-- Le déploiement d'un ESP32 VPN existant n'est **pas** nécessaire pour tester les corrections Android locales. Garder le firmware VPN actuellement opérationnel tant que le multi-lecteur n'a pas été validé.
+## ESP32 VPN — première installation avec firmware universel
 
-## Construction du .exe
+1. Télécharger le \`.bin\` \`smart-energy-vpn-USB-FACTORY-ESP32-0x0.bin\` (pour une nouvelle carte classique uniquement).
+2. Ouvrir le \`.exe\`, sélectionner l'onglet **ESP32 VPN**, le port COM USB et le firmware précompilé.
+3. Renseigner les champs Wi-Fi (2,4 GHz), mot de passe, **clé d'association Tailscale personnelle**, token de passerelle et jusqu'à trois couples IP/code de lecteurs JK (JK1 requis dans ce prototype).
+4. Cliquer **Flasher et configurer l'ESP32 VPN**. Le programme écrit l'image, attend la réponse \`SEVPN_READY_V1\`, puis transmet les informations **uniquement par liaison USB physique**. L'ESP32 répond \`SEVPN_OK_REBOOT\` après écriture NVS, et redémarre.
+5. Depuis Android sur le même tailnet, vérifier \`/api/v1/health\` puis \`/api/v1/jk/telemetry\`.
 
-GitHub Actions sur \`dev\` : [workflow Smart Energy Windows Flasher](https://github.com/tapion69/smart-energy-android/actions/workflows/build-windows-flasher.yml). L'artefact contient un \`.exe\` unique.
+## Modification ultérieure sans reflasher
 
-Test matériel requis : un ESP32 JK de réserve et un second ESP32 VPN **non critique** avant diffusion à d'autres utilisateurs. La compilation n'est pas une certification du flash matériel.
+- Brancher le câble USB, redémarrer la passerelle (NE PAS maintenir BOOT pendant la mise sous tension : cela entre dans le bootloader ROM).
+- Pendant les 9 premières secondes **après démarrage**, maintenir BOOT environ 3 secondes.
+- Dans l'EXE, cliquer **Configurer via USB sans reflasher**. Le programme envoie à nouveau les champs, conserve les autres partitions et les autres appareils JK.
+- La commande de reconfiguration n'est disponible qu'après autorisation physique BOOT ; aucune route HTTP ou Tailscale ne permet de modifier les identifiants.
 
+## Mise à jour d'une passerelle VPN existante
 
-## Mise à jour — flasheur sans Git
+Choisir **APP-ONLY à 0x10000**. Le firmware universel conserve la partition NVS et les identités Tailscale si le partitionnement est compatible. Une passerelle utilisant l'ancienne méthode avec des secrets compilés devra être configurée une fois via USB après cette mise à jour, faute de config NVS universelle.
 
-Le flasheur Windows télécharge désormais uniquement le composant TailTiny du commit épinglé par HTTPS. **Il ne demande plus Git for Windows**. Le système VPN actuel exige cependant toujours ESP-IDF 5.3.2 pour une compilation locale incluant les identifiants privés : l'EXE n'est donc **pas encore 100 % autonome pour le VPN**. Il est autonome pour flasher un lecteur JK avec son firmware déjà compilé.
+**Important :** ne pas convertir une passerelle actuellement opérationnelle sans carte de réserve et sans validation matérielle du firmware universel. L'image FACTORY \`0x0\` n'est jamais une mise à jour ; elle pourrait écraser la NVS.
 
-Un kit VPN réellement monobinaire devra utiliser un firmware universel précompilé et une configuration physique par USB conservée en NVS, avec contrôles d'accès et tests matériels, plutôt que de distribuer un SDK de plusieurs gigaoctets.
+## Sécurité et statut
 
-Le firmware ESP32-S3 nécessite une compilation et une sélection de carte spécifiques : **le flasheur JK actuel est réservé à l'ESP32 classique**.
+- **Prototype de développement non validé sur carte réelle** : la compilation et les tests ne garantissent ni Tailscale, ni la séquence USB, ni les reprises de courant.
+- Aucun secret n'est intégré dans le firmware générique ou l'EXE. La transmission USB doit se faire sur un ordinateur de confiance. Les logs n'impriment pas les champs ni leur contenu.
+- La configuration est pour le moment enregistrée dans la **NVS non chiffrée** de la carte. Un attaquant disposant physiquement du module peut potentiellement extraire ces secrets : **flash encryption/secure boot** et stratégie de révocation sont à prévoir avant diffusion grand public.
+- La passerelle refuse toutes les commandes d'écriture relayées ; seules des routes GET explicitement autorisées vers trois IP LAN privées sont prévues.
+- Le programme ne lance **jamais \`erase_flash\`**. Un flash FACTORY peut néanmoins écraser des partitions puisqu'il réécrit la zone de démarrage : **nouveaux appareils uniquement**.
+- Le modèle ESP32-S3 N16R8 doit avoir sa propre image et un mécanisme USB compatible testé ; **ne jamais lui flasher l'ESP32 classique**.
+
+## Code / tests
+
+- \`tools/windows-flasher/smart_energy_flasher.py\` — interface graphique
+- \`tools/windows-flasher/vpn_usb.py\` — transport série, vérification des images, protocole USB
+- \`firmware/vpn-gateway/main/vpn_provision.c\` — validation et stockage NVS, activation BOOT
+- GitHub Actions compile l'EXE et les images génériques dans des workflows séparés. Plus tard, les deux fichiers pourront être distribués ensemble dans un paquet de release signé.
