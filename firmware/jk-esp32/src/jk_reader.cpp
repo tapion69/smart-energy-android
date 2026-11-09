@@ -8,6 +8,12 @@
 #include "jk_extended.h"
 #include "jk_write.h"
 #include <NimBLEDevice.h>
+// Inspect only the *initiating* GAP procedure. This does not interrupt any
+// established JK-BMS connection (NimBLE error 2 = BLE_HS_EALREADY).
+extern "C" {
+#include "host/ble_gap.h"
+#include "host/ble_hs.h"
+}
 #include <WiFi.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/semphr.h>
@@ -46,6 +52,9 @@ struct Device {
   uint32_t serviceFailures = 0;
   uint32_t subscribeFailures = 0;
   int lastBleError = 0;
+  uint32_t gapInitiatorBusy = 0;
+  uint32_t gapInitiatorCancelled = 0;
+  uint32_t gapInitiatorStillBusy = 0;
   uint32_t connections = 0;
   uint32_t disconnections = 0;
   // One-shot, non-optimistic parameter write. 0=idle, 1=queued, 2=sent,
@@ -85,7 +94,7 @@ void updateState(int index, const char *mac, const char *message) {
 
 enum class BleEvent : uint8_t {
   Scan, NotSeen, Connect, NoClient, ConnectFailed, ServiceFailed,
-  SubscribeFailed, Connected
+  SubscribeFailed, Connected, GapBusy, GapCancelled, GapStillBusy
 };
 void markBleEvent(int index, const char *mac, BleEvent event, int error = 0) {
   portENTER_CRITICAL(&stateMux);
@@ -101,6 +110,9 @@ void markBleEvent(int index, const char *mac, BleEvent event, int error = 0) {
       case BleEvent::ServiceFailed: ++item.serviceFailures; item.lastBleError = error; break;
       case BleEvent::SubscribeFailed: ++item.subscribeFailures; item.lastBleError = error; break;
       case BleEvent::Connected: item.lastBleError = 0; break;
+      case BleEvent::GapBusy: ++item.gapInitiatorBusy; break;
+      case BleEvent::GapCancelled: ++item.gapInitiatorCancelled; break;
+      case BleEvent::GapStillBusy: ++item.gapInitiatorStillBusy; break;
     }
   }
   portEXIT_CRITICAL(&stateMux);
@@ -200,10 +212,43 @@ void sendReadCommand(NimBLERemoteCharacteristic *characteristic, uint8_t command
   }
 }
 
+// The BlueZ add-on serializes *discovery*, not persistent GATT sessions.
+// NimBLE's ESP32 controller additionally allows only one pending GAP
+// initiation at a time. A cancelled/timed-out attempt can remain in progress
+// briefly after connect() returns. Under radioMutex it is safe to let that
+// stale procedure finish, or cancel the *pending initiation only* when stuck.
+// Never reset NimBLE, disconnect another client, or rotate BMS connections.
+bool waitForGapIdle(uint32_t waitMs) {
+  const uint32_t start = millis();
+  while (ble_gap_conn_active() && (uint32_t)(millis()-start)<waitMs)
+    vTaskDelay(pdMS_TO_TICKS(50));
+  return ble_gap_conn_active()==0;
+}
+bool ensureGapIdle(int index, const char *mac) {
+  if (!ble_gap_conn_active()) return true;
+  markBleEvent(index,mac,BleEvent::GapBusy);
+  if (waitForGapIdle(1800)) return true;
+  // At this point no worker is starting a new connection (radioMutex held).
+  // This API cancels an in-flight central *initiation* only, not a link.
+  const int rc=ble_gap_conn_cancel();
+  if (rc==0 || rc==BLE_HS_EALREADY)
+    markBleEvent(index,mac,BleEvent::GapCancelled);
+  const bool idle=waitForGapIdle(2000);
+  if(!idle){
+    markBleEvent(index,mac,BleEvent::GapStillBusy);
+    updateState(index,mac,"ble_gap_busy_retry");
+    Serial.printf("[JK] GAP initiator still busy; slot %d, cancel rc=%d\\n",index+1,rc);
+  }
+  // Allow NimBLE host's connect-failed callback to release the old client.
+  if(idle) vTaskDelay(pdMS_TO_TICKS(180));
+  return idle;
+}
+
 void pollOne(Session &session, const char *mac) {
   const int index = session.index;
   strncpy(session.mac, mac, sizeof(session.mac) - 1);
   session.mac[sizeof(session.mac)-1] = 0;
+  if (!ensureGapIdle(index,mac)) { xSemaphoreGive(radioMutex); return; }
   updateState(index, mac, "searching_ble");
   markBleEvent(index, mac, BleEvent::Scan);
   NimBLEScan *scanner = NimBLEDevice::getScan();
@@ -229,6 +274,12 @@ void pollOne(Session &session, const char *mac) {
     xSemaphoreGive(radioMutex);
     return;
   }
+  // A previous connect may still be completing after scan(); do not race it.
+  if(!ensureGapIdle(index,mac)) {
+    scanner->clearResults();
+    xSemaphoreGive(radioMutex);
+    return;
+  }
   updateState(index, mac, "connecting_ble");
   markBleEvent(index, mac, BleEvent::Connect);
   NimBLEClient *client = NimBLEDevice::createClient();
@@ -248,6 +299,11 @@ void pollOne(Session &session, const char *mac) {
     Serial.printf("[JK] BLE client connect failed, slot=%d, code=%d\n", index + 1, bleError);
     updateState(index, mac, "ble_connect_failed");
     NimBLEDevice::deleteClient(client);
+    // Retry only after the previous initiating procedure is idle. In
+    // particular BLE_HS_EALREADY (2) is NOT a BMS fault.
+    if (bleError == BLE_HS_EALREADY || ble_gap_conn_active()) {
+      ensureGapIdle(index,mac);
+    }
     xSemaphoreGive(radioMutex);
     return;
   }
@@ -522,6 +578,9 @@ void fillTelemetry(JsonDocument &out) {
     device["ble_service_failures"] = item.serviceFailures;
     device["ble_subscribe_failures"] = item.subscribeFailures;
     device["ble_last_error"] = item.lastBleError;
+    device["ble_gap_busy_count"] = item.gapInitiatorBusy;
+    device["ble_gap_cancel_count"] = item.gapInitiatorCancelled;
+    device["ble_gap_still_busy_count"] = item.gapInitiatorStillBusy;
     device["bad_crc_count"] = item.badFrames;
     device["rejected_measurements"] = item.rejectedMeasurements;
     const bool fresh = item.reading.valid && item.lastReadingMs &&
