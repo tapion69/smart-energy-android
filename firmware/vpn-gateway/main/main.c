@@ -6,7 +6,7 @@
  * -> fixed RFC1918 LAN IP -> JK or (later) Voltronic ESP.
  *
  * Do NOT expose TCP port 18767 on the internet. No subnet routing/NAT.
- * Distinct per-installation secrets are in sdkconfig.credentials (gitignored).
+ * Universal firmware: personal secrets are provisioned by physical USB into NVS.
  */
 #include <stdio.h>
 #include <string.h>
@@ -32,13 +32,15 @@
 #include "freertos/event_groups.h"
 #include "tailtiny.h"
 #include "gateway_policy.h"
+#include "vpn_provision.h"
 
-#define GATEWAY_VERSION "0.2.0-dev-multi3"
+#define GATEWAY_VERSION "0.3.0-dev-usb-provision"
 #define GATEWAY_PORT 18767
 #define MAX_JSON_BYTES 32768
 
 static const char *TAG = "SE-VPN";
 static tailtiny_t *vpn;
+static const se_vpn_config_t *personal = NULL;
 static httpd_handle_t http_server = NULL;
 static EventGroupHandle_t wifi_events;
 static const int WIFI_READY = BIT0;
@@ -77,9 +79,9 @@ static void start_wifi(void) {
             .threshold.authmode = WIFI_AUTH_WPA2_PSK,
         },
     };
-    strncpy((char *)wifi.sta.ssid, CONFIG_ML_WIFI_SSID,
+    strncpy((char *)wifi.sta.ssid, personal->wifi_ssid,
             sizeof(wifi.sta.ssid) - 1);
-    strncpy((char *)wifi.sta.password, CONFIG_ML_WIFI_PASSWORD,
+    strncpy((char *)wifi.sta.password, personal->wifi_password,
             sizeof(wifi.sta.password) - 1);
     ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA));
     ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_STA, &wifi));
@@ -160,7 +162,7 @@ static bool request_is_private_vpn(httpd_req_t *req) {
 }
 
 static bool authorized(httpd_req_t *req) {
-    const char *expected = CONFIG_SE_GATEWAY_TOKEN;
+    const char *expected = personal ? personal->gateway_token : "";
     if (strlen(expected) < 20 ||
         strstr(expected, "REPLACE") || strstr(expected, "TOKEN")) return false;
     char supplied[129] = {0};
@@ -207,10 +209,9 @@ static bool get_target(se_route_t route, lan_target_t *out) {
                             route == SE_ROUTE_JK2_DETAILS;
         const bool third = route == SE_ROUTE_JK3_TELEMETRY ||
                            route == SE_ROUTE_JK3_DETAILS;
-        out->host = third ? CONFIG_SE_JK3_IP :
-                    second ? CONFIG_SE_JK2_IP : CONFIG_SE_JK_IP;
-        out->access_code = third ? CONFIG_SE_JK3_READ_CODE :
-                          second ? CONFIG_SE_JK2_READ_CODE : CONFIG_SE_JK_READ_CODE;
+        const int slot = third ? 2 : second ? 1 : 0;
+        out->host = personal ? personal->jk_ip[slot] : "";
+        out->access_code = personal ? personal->jk_code[slot] : "";
         const bool details = route == SE_ROUTE_JK_DETAILS ||
                              route == SE_ROUTE_JK2_DETAILS ||
                              route == SE_ROUTE_JK3_DETAILS;
@@ -220,12 +221,9 @@ static bool get_target(se_route_t route, lan_target_t *out) {
                strlen(out->access_code) >= 8;
     }
     if (route == SE_ROUTE_VOLT_STATUS) {
-        out->host = CONFIG_SE_VOLT_IP;
-        out->path = CONFIG_SE_VOLT_READ_PATH;
-        out->access_code = CONFIG_SE_VOLT_READ_CODE;
-        // Voltronic is disabled until a real read-only JSON endpoint is known.
-        return se_is_private_ipv4(out->host) &&
-               se_is_fixed_read_path(out->path);
+        // Fail-closed until the Voltronic protocol and target are verified.
+        // The generic USB schema must NOT accept a user-supplied arbitrary URL.
+        return false;
     }
     return false;
 }
@@ -355,11 +353,12 @@ void app_main(void) {
     }
     ESP_ERROR_CHECK(err);
 
-    if (!CONFIG_ML_WIFI_SSID[0] ||
-        strncmp(CONFIG_ML_TAILSCALE_AUTH_KEY, "tskey-auth-", 11) != 0 ||
-        strstr(CONFIG_ML_TAILSCALE_AUTH_KEY, "REPLACE") != NULL) {
-        ESP_LOGE(TAG, "Not provisioned. Fill local sdkconfig.credentials and rebuild.");
-        ESP_LOGE(TAG, "No public HTTP server or BLE service will be started.");
+    // First boot enters physical UART0 setup (no Wi-Fi / HTTP / Tailscale).
+    // Existing devices can re-enter it by holding BOOT for 3 s just after
+    // reset. There are no per-installation secrets inside this binary.
+    personal=se_vpn_provision_or_load();
+    if(!personal) {
+        ESP_LOGE(TAG,"USB provisioning incomplete; no network service started");
         return;
     }
     ESP_LOGI(TAG, "Smart Energy VPN Gateway %s (experimental)", GATEWAY_VERSION);
@@ -378,7 +377,7 @@ void app_main(void) {
              mac[3], mac[4], mac[5]);
 
     tailtiny_config_t cfg = {
-        .auth_key = CONFIG_ML_TAILSCALE_AUTH_KEY,
+        .auth_key = personal->tailscale_key,
         .device_name = gateway_name,
         .enable_derp = true,
         .enable_stun = true,
