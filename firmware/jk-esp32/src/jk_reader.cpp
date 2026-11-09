@@ -7,6 +7,7 @@
 #include "jk_protocol.h"
 #include "jk_extended.h"
 #include "jk_write.h"
+#include "ble_manager_policy.h"
 #include <NimBLEDevice.h>
 #include <WiFi.h>
 #include <freertos/FreeRTOS.h>
@@ -548,17 +549,17 @@ void manager(void*) {
       if(!setupMode && !maintenanceRequested) {
         for(uint8_t i=0;i<MAX_BMS;++i) {
           Session &session=sessions[i];
-          if(!session.mac[0] || session.client ||
-             (int32_t)(millis()-session.nextRetryAt)<0)continue;
+          if(!blemanager::eligible(true,maintenanceRequested,
+              session.mac[0]!=0,session.client!=nullptr,millis(),
+              session.nextRetryAt))continue;
           // One new link at a time. Other subscribed JKs keep streaming.
           const bool ok=openSession(session,session.mac);
           if(ok) {
             session.failures=0;session.nextRetryAt=0;
           } else {
             if(session.failures<5)++session.failures;
-            const uint32_t wait=session.failures==1?4000:
-              session.failures==2?9000:session.failures==3?16000:30000;
-            session.nextRetryAt=millis()+wait+uint32_t(i)*300;
+            session.nextRetryAt=millis()+
+              blemanager::retryDelayMs(session.failures)+uint32_t(i)*300;
           }
           break;
         }
