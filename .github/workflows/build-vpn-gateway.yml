@@ -68,3 +68,35 @@ jobs:
             firmware/vpn-gateway/dist/smart-energy-vpn-USB-APP-ESP32-0x10000.bin
           if-no-files-found: error
           retention-days: 30
+
+  windows-bundle:
+    name: Build one-click Windows kit with VPN firmware embedded
+    needs: esp32
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: SmartEnergy-VPN-ESP32-USB-PRECOMPILED
+          path: firmware/vpn-gateway/dist
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install pinned packaging tools
+        shell: pwsh
+        run: python -m pip install "pyinstaller==6.16.0" "esptool==4.9.0" "pyserial==3.5"
+      - name: Test USB and flash safeguards
+        shell: pwsh
+        working-directory: tools/windows-flasher
+        run: python -m unittest discover -p "test_*.py" -v
+      - name: Package one EXE with generic ESP32 VPN factory and app firmware
+        shell: pwsh
+        run: |
+          python -m PyInstaller --clean --noconfirm --onefile --windowed --name SmartEnergyVPNFlasher --collect-all esptool --hidden-import serial.tools.list_ports --add-data "firmware/vpn-gateway/dist/smart-energy-vpn-USB-FACTORY-ESP32-0x0.bin;embedded_firmware" --add-data "firmware/vpn-gateway/dist/smart-energy-vpn-USB-APP-ESP32-0x10000.bin;embedded_firmware" tools/windows-flasher/smart_energy_flasher.py
+          if ((Get-Item "dist/SmartEnergyVPNFlasher.exe").Length -lt 2000000) { throw "EXE too small" }
+      - name: Upload one-click Windows VPN setup executable
+        uses: actions/upload-artifact@v4
+        with:
+          name: SmartEnergyVPNFlasher-Windows-ESP32-Firmware-Included
+          path: dist/SmartEnergyVPNFlasher.exe
+          retention-days: 30
