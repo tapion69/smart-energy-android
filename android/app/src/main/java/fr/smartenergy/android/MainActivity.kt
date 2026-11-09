@@ -159,6 +159,16 @@ class MainActivity : Activity() {
                     }
                 }
             }
+            // Tailscale just became active while we were using LAN: pause
+            // local polling until the user configures or selects the VPN.
+            if(lanVerified && !remoteGatewayConnection && !remoteVpnConnection &&
+               !setupTransport &&
+               selectedRoute()==JkTransportPolicy.Route.CONFIGURE_VPN &&
+               vpnConnected()) {
+                lanVerified=false
+                telemetryStatus.text="VPN actif : configure « Accès extérieur — ESP32 VPN »." +
+                    " Le réseau local ne sera plus sollicité automatiquement."
+            }
             if (lanVerified && !remoteGatewayConnection && !remoteVpnConnection &&
                 !setupTransport && selectedRoute()==JkTransportPolicy.Route.GATEWAY_VPN &&
                 !lanConnectionPending) {
@@ -446,6 +456,10 @@ class MainActivity : Activity() {
         telemetryPanel = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         add(root, telemetryPanel, 8)
         add(root, action("⟳ Actualiser les mesures") { refreshTelemetry() }, 8)
+        add(root, action("Se connecter via ESP32 VPN / Tailscale") {
+            prefs.edit().putString("connection_preference","gateway").apply()
+            connectGatewayRemote()
+        }, 8)
         add(root, label("Mesures expérimentales. Les modifications manuelles locales restent limitées et ne remplacent jamais les protections du BMS.", 12f, color = subdued), 8)
         val advanced = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
