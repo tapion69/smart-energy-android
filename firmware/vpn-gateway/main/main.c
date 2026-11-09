@@ -33,7 +33,7 @@
 #include "tailtiny.h"
 #include "gateway_policy.h"
 
-#define GATEWAY_VERSION "0.1.2-v4mapped"
+#define GATEWAY_VERSION "0.2.0-dev-multi3"
 #define GATEWAY_PORT 18767
 #define MAX_JSON_BYTES 32768
 
@@ -189,7 +189,7 @@ static esp_err_t health_handler(httpd_req_t *req) {
         "\"version\":\"" GATEWAY_VERSION "\","
         "\"vpn_connected\":true,"
         "\"vpn_only\":true,"
-        "\"read_only\":true}");
+        "\"read_only\":true,\"jk_reader_slots\":3}");
 }
 
 typedef struct {
@@ -200,13 +200,22 @@ typedef struct {
 
 static bool get_target(se_route_t route, lan_target_t *out) {
     memset(out, 0, sizeof(*out));
-    if (route == SE_ROUTE_JK_TELEMETRY ||
-        route == SE_ROUTE_JK_DETAILS) {
-        out->host = CONFIG_SE_JK_IP;
-        out->path = route == SE_ROUTE_JK_TELEMETRY ?
-                        "/api/v1/telemetry" : "/api/v1/details";
-        out->access_code = CONFIG_SE_JK_READ_CODE;
-        // JK read code is required for its current HTTP API.
+    if (route == SE_ROUTE_JK_TELEMETRY || route == SE_ROUTE_JK_DETAILS ||
+        route == SE_ROUTE_JK2_TELEMETRY || route == SE_ROUTE_JK2_DETAILS ||
+        route == SE_ROUTE_JK3_TELEMETRY || route == SE_ROUTE_JK3_DETAILS) {
+        const bool second = route == SE_ROUTE_JK2_TELEMETRY ||
+                            route == SE_ROUTE_JK2_DETAILS;
+        const bool third = route == SE_ROUTE_JK3_TELEMETRY ||
+                           route == SE_ROUTE_JK3_DETAILS;
+        out->host = third ? CONFIG_SE_JK3_IP :
+                    second ? CONFIG_SE_JK2_IP : CONFIG_SE_JK_IP;
+        out->access_code = third ? CONFIG_SE_JK3_READ_CODE :
+                          second ? CONFIG_SE_JK2_READ_CODE : CONFIG_SE_JK_READ_CODE;
+        const bool details = route == SE_ROUTE_JK_DETAILS ||
+                             route == SE_ROUTE_JK2_DETAILS ||
+                             route == SE_ROUTE_JK3_DETAILS;
+        out->path = details ? "/api/v1/details" : "/api/v1/telemetry";
+        // No dynamic host, URL or credentials ever accepted from VPN callers.
         return se_is_private_ipv4(out->host) &&
                strlen(out->access_code) >= 8;
     }
@@ -312,7 +321,7 @@ static esp_err_t relay_read(httpd_req_t *req) {
 static void start_private_http(void) {
     httpd_config_t cfg = HTTPD_DEFAULT_CONFIG();
     cfg.server_port = GATEWAY_PORT;
-    cfg.max_uri_handlers = 4;
+    cfg.max_uri_handlers = 10;
     cfg.stack_size = 8192;
     cfg.max_open_sockets = 4;
     cfg.lru_purge_enable = true;
@@ -325,6 +334,12 @@ static void start_private_http(void) {
         {.uri="/api/v1/health", .method=HTTP_GET, .handler=health_handler},
         {.uri="/api/v1/jk/telemetry", .method=HTTP_GET, .handler=relay_read},
         {.uri="/api/v1/jk/details", .method=HTTP_GET, .handler=relay_read},
+        {.uri="/api/v1/jk/1/telemetry", .method=HTTP_GET, .handler=relay_read},
+        {.uri="/api/v1/jk/1/details", .method=HTTP_GET, .handler=relay_read},
+        {.uri="/api/v1/jk/2/telemetry", .method=HTTP_GET, .handler=relay_read},
+        {.uri="/api/v1/jk/2/details", .method=HTTP_GET, .handler=relay_read},
+        {.uri="/api/v1/jk/3/telemetry", .method=HTTP_GET, .handler=relay_read},
+        {.uri="/api/v1/jk/3/details", .method=HTTP_GET, .handler=relay_read},
         {.uri="/api/v1/voltronic/status", .method=HTTP_GET, .handler=relay_read},
     };
     for (size_t i=0; i<sizeof(uris)/sizeof(uris[0]); ++i)
