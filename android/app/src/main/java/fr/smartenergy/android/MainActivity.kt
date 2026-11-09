@@ -135,25 +135,37 @@ class MainActivity : Activity() {
         override fun run() {
             if (!lanVerified && !lanConnectionPending && !setupTransport) {
                 val now=android.os.SystemClock.elapsedRealtime()
-                val savedIp=prefs.getString("local_ip","") ?: ""
-                val autoGateway=prefs.getBoolean("remote_gateway_enabled",false) &&
-                    vpnConnected() &&
-                    allowedTailnetIp(prefs.getString("remote_gateway_ip","") ?: "") &&
-                    validGatewayToken(storedGatewayToken())
-                // Never silently replace an explicitly selected VPN with LAN.
-                // An opted-in VPN takes priority over the saved home IP.
-                if (autoGateway) {
-                    if (now-lastRemoteAttempt >= 20000L) {
-                        lastRemoteAttempt=now
-                        connectGatewayRemote()
+                val route=selectedRoute()
+                when(route) {
+                    JkTransportPolicy.Route.GATEWAY_VPN -> {
+                        if(now-lastRemoteAttempt>=30000L) {
+                            lastRemoteAttempt=now
+                            connectGatewayRemote()
+                        }
                     }
-                } else if (!remoteGatewayConnection &&
-                    storedCode().isNotBlank() && allowedLocalIp(savedIp) &&
-                    now-lastLocalAttempt >= 20000L) {
-                    lastLocalAttempt=now
-                    localHost=savedIp
-                    lanIp.setText(savedIp)
-                    connectHomeLan(false)
+                    JkTransportPolicy.Route.LOCAL_WIFI -> {
+                        val savedIp=prefs.getString("local_ip","") ?: ""
+                        if(!remoteGatewayConnection && now-lastLocalAttempt>=20000L) {
+                            lastLocalAttempt=now
+                            localHost=savedIp
+                            lanIp.setText(savedIp)
+                            connectHomeLan(false)
+                        }
+                    }
+                    JkTransportPolicy.Route.CONFIGURE_VPN,
+                    JkTransportPolicy.Route.NO_CONNECTION -> {
+                        // Never try the stale 192.168.x.x IP when a VPN is on
+                        // or the user has selected ESP32 VPN explicitly.
+                    }
+                }
+            }
+            if (lanVerified && !remoteGatewayConnection && !remoteVpnConnection &&
+                !setupTransport && selectedRoute()==JkTransportPolicy.Route.GATEWAY_VPN &&
+                !lanConnectionPending) {
+                val now=android.os.SystemClock.elapsedRealtime()
+                if(now-lastRemoteAttempt>=30000L) {
+                    lastRemoteAttempt=now
+                    connectGatewayRemote()
                 }
             }
             if (lanVerified || (setupTransport && apNetwork != null)) {
@@ -181,19 +193,24 @@ class MainActivity : Activity() {
         drawUi()
         selectedDeviceId = prefs.getString("device_id", "") ?: ""
         val savedIp = prefs.getString("local_ip", "") ?: ""
-        // Respect "VPN automatic when Tailscale is active" before trying the
-        // last LAN IP, which may be unreachable outside the user's home.
-        if (prefs.getBoolean("remote_gateway_enabled",false) && vpnConnected() &&
-            allowedTailnetIp(prefs.getString("remote_gateway_ip","") ?: "") &&
-            validGatewayToken(storedGatewayToken())) {
-            lastRemoteAttempt=android.os.SystemClock.elapsedRealtime()
-            connectGatewayRemote()
-        } else if (storedCode().isNotBlank() && allowedLocalIp(savedIp)) {
-            localHost = savedIp
-            lanIp.setText(savedIp)
-            lastLocalAttempt=android.os.SystemClock.elapsedRealtime()
-            connectHomeLan(false)
-        } else if(storedCode().isNotBlank()) discoverHomeLan()
+        // Do not treat a missing VPN token/detection as permission to retry
+        // the old local IP. This was the cause of false "local blocked by VPN".
+        when(selectedRoute()) {
+            JkTransportPolicy.Route.GATEWAY_VPN -> {
+                lastRemoteAttempt=android.os.SystemClock.elapsedRealtime()
+                connectGatewayRemote()
+            }
+            JkTransportPolicy.Route.LOCAL_WIFI -> {
+                localHost=savedIp
+                lanIp.setText(savedIp)
+                lastLocalAttempt=android.os.SystemClock.elapsedRealtime()
+                connectHomeLan(false)
+            }
+            JkTransportPolicy.Route.CONFIGURE_VPN ->
+                state("VPN actif ou sélectionné : ouvre « Configuration et association » → « Accès extérieur — ESP32 VPN ». L'application ne basculera plus seule sur le Wi-Fi local.")
+            JkTransportPolicy.Route.NO_CONNECTION ->
+                if(storedCode().isNotBlank()) discoverHomeLan()
+        }
     }
 
     private fun encryptionKey(): SecretKey {
@@ -254,9 +271,29 @@ class MainActivity : Activity() {
     }
 
     private fun vpnConnected(): Boolean {
-        val active = connectivity.activeNetwork ?: return false
-        return connectivity.getNetworkCapabilities(active)
-            ?.hasTransport(NetworkCapabilities.TRANSPORT_VPN) == true
+        // Tailscale can be a separate VPN network while Android reports
+        // Wi-Fi or cellular as activeNetwork. Check all visible VPN transports.
+        return try {
+            connectivity.allNetworks.any { network ->
+                connectivity.getNetworkCapabilities(network)
+                    ?.hasTransport(NetworkCapabilities.TRANSPORT_VPN)==true
+            }
+        } catch (_: Exception) {
+            val active=connectivity.activeNetwork ?: return false
+            connectivity.getNetworkCapabilities(active)
+                ?.hasTransport(NetworkCapabilities.TRANSPORT_VPN)==true
+        }
+    }
+
+    private fun selectedRoute(): JkTransportPolicy.Route {
+        val vpn=vpnConnected()
+        val preference=prefs.getString("connection_preference","auto") ?: "auto"
+        val localReady=storedCode().isNotBlank() &&
+            allowedLocalIp(prefs.getString("local_ip","") ?: "")
+        val gatewayReady=allowedTailnetIp(prefs.getString("remote_gateway_ip","") ?: "") &&
+            validGatewayToken(storedGatewayToken())
+        return JkTransportPolicy.select(vpn,preference,
+            prefs.getBoolean("remote_gateway_enabled",false),gatewayReady,localReady)
     }
 
     // Every installation brings its OWN Tailscale gateway; no maintainer server,
@@ -424,7 +461,10 @@ class MainActivity : Activity() {
         lanIp = input("Adresse IP locale de l'ESP32 (ex. 192.168.1.50)")
         lanIp.setText(prefs.getString("local_ip", "") ?: "")
         add(lan, lanIp)
-        lanConnectBtn = action("Se connecter à ma passerelle") { connectHomeLan() }
+        lanConnectBtn = action("Se connecter à ma passerelle") {
+            prefs.edit().putString("connection_preference","local").apply()
+            connectHomeLan()
+        }
         add(lan, lanConnectBtn)
         physicalRecoverBtn = action("Associer avec BOOT (première fois / code oublié)") { beginBootPairing() }
         add(lan, physicalRecoverBtn)
@@ -451,6 +491,7 @@ class MainActivity : Activity() {
         add(remote, gatewayTokenEdit)
         add(remote, label("Saisis CONFIG_SE_GATEWAY_TOKEN, pas ton code JK et pas la clé tskey-auth Tailscale. Le code JK choisi dans l'application doit correspondre à CONFIG_SE_JK_READ_CODE compilé dans l'ESP32 VPN. Aucun port à ouvrir.", 12f, color = subdued))
         add(remote, action("Enregistrer et tester mon ESP32 VPN") {
+            prefs.edit().putString("connection_preference","gateway").apply()
             connectGatewayRemote()
         }, 10)
         remoteCheck = CheckBox(this).apply {
@@ -467,6 +508,7 @@ class MainActivity : Activity() {
         add(remote, remoteCheck)
         add(remote, label("Pour la première association du JK et les changements de réglage, utilise toujours le Wi-Fi local. Le VPN reste en lecture seule.", 12f, color = subdued))
         add(remote, action("Revenir à ma connexion Wi-Fi locale") {
+            prefs.edit().putString("connection_preference","local").apply()
             connectHomeLan(false)
         })
         add(remote, label("Option existante : si tu utilises un routeur VPN de sous-réseau plutôt qu'un deuxième ESP32, l'ancien mode reste disponible ci-dessous.", 12f, color = subdued))
@@ -733,9 +775,7 @@ class MainActivity : Activity() {
                     "Android refuse le réseau local (EPERM). Autorise le réseau local dans le VPN ou désactive le VPN pour cet essai à domicile.", ex
             )
         }
-        val vpnActive = connectivity.activeNetwork?.let {
-            connectivity.getNetworkCapabilities(it)?.hasTransport(NetworkCapabilities.TRANSPORT_VPN)
-        } == true
+        val vpnActive = vpnConnected()
         if (vpnActive && (ex is java.net.SocketException ||
                            ex is java.net.UnknownHostException ||
                            ex is java.net.SocketTimeoutException)) {
@@ -745,7 +785,7 @@ class MainActivity : Activity() {
                 else if (remoteVpnConnection)
                     "VPN actif mais réseau de la maison inaccessible. Vérifie la route du réseau privé."
                 else
-                    "Connexion locale bloquée par le VPN. Autorise le réseau local dans ses paramètres ou désactive-le pour ce test.", ex
+                    "Tentative Wi-Fi locale refusée sous VPN. Pour l'accès extérieur, sélectionne « Accès extérieur — ESP32 VPN » ; aucune reconnexion locale automatique ne sera lancée.", ex
             )
         }
         return ex
