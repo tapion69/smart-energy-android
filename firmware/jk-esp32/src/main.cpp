@@ -14,7 +14,7 @@
 #include <ArduinoJson.h>
 #include <ctype.h>
 
-static const char *VERSION = "0.3.6-dev";
+static const char *VERSION = "0.3.7-dev";
 static const uint32_t WIFI_JOIN_TIMEOUT_MS = 30000; // Return to temporary setup after 30s
 static const uint32_t SETUP_AUTORETRY_MS = 120000; // Retry saved Wi-Fi after brief fallback
 static const int SETUP_BUTTON = 0; // BOOT is physical proof for pairing recovery.
@@ -222,7 +222,7 @@ void onInfo() {
   doc["telemetry_experimental"] = true;
   doc["ble_simultaneous_target"] = 4;
   doc["ota"] = false;
-  doc["parameter_writes"] = "experimental_low_risk_local_only";
+  doc["parameter_writes"] = "experimental_all_jk02_protection_confirmation_local_only";
   doc["physical_recovery"] = true; // does NOT reveal the old password.
   doc["boot_pairing"] = true;
   doc["physical_pairing_mode"] = physicalPairing &&
@@ -599,6 +599,10 @@ void onWriteParameter() {
   const int idx=jkwrite::find(key.c_str());
   if(idx<0||!jkwrite::editable(size_t(idx))){
     error(403,"parameter_not_allowlisted");return;
+  }
+  if(jkwrite::riskLevel(size_t(idx))>=2 &&
+     req["risk_confirmation"].as<String>()!="I_ACCEPT_PROTECTION_RISK") {
+    error(403,"critical_protection_confirmation_required");return;
   }
   JsonVariant value=req["value"];
   JsonVariant prior=req["expected_old"];
