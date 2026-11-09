@@ -26,3 +26,12 @@
 GitHub Actions sur \`dev\` : [workflow Smart Energy Windows Flasher](https://github.com/tapion69/smart-energy-android/actions/workflows/build-windows-flasher.yml). L'artefact contient un \`.exe\` unique.
 
 Test matériel requis : un ESP32 JK de réserve et un second ESP32 VPN **non critique** avant diffusion à d'autres utilisateurs. La compilation n'est pas une certification du flash matériel.
+
+
+## Mise à jour — flasheur sans Git
+
+Le flasheur Windows télécharge désormais uniquement le composant TailTiny du commit épinglé par HTTPS. **Il ne demande plus Git for Windows**. Le système VPN actuel exige cependant toujours ESP-IDF 5.3.2 pour une compilation locale incluant les identifiants privés : l'EXE n'est donc **pas encore 100 % autonome pour le VPN**. Il est autonome pour flasher un lecteur JK avec son firmware déjà compilé.
+
+Un kit VPN réellement monobinaire devra utiliser un firmware universel précompilé et une configuration physique par USB conservée en NVS, avec contrôles d'accès et tests matériels, plutôt que de distribuer un SDK de plusieurs gigaoctets.
+
+Le firmware ESP32-S3 nécessite une compilation et une sélection de carte spécifiques : **le flasheur JK actuel est réservé à l'ESP32 classique**.
