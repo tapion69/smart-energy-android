@@ -42,3 +42,10 @@ Code audité :
 Références techniques :
 - https://docs.espressif.com/projects/esp-idf/en/stable/esp32/api-guides/coexist.html
 - https://apache.googlesource.com/mynewt-site/+/e30806a8a4bee8723e41f6857dbfc39a22d2c88c/docs/network/ble/ble_hs/ble_hs_return_codes.md
+
+## Résultat de compilation
+
+- **GitHub Actions : succès** — tests C++ et contrôle architectural + compilation ESP32, exécution n° `42689925656`.
+- L'artefact `smart-jk-esp32-v0.3.11-dev-APP-ONLY-offset-0x10000` a été publié. Son expiration GitHub est prévue au 23 novembre 2026.
+- Aucune validation sur BMS réel n'a encore été réalisée. L'APK 0.3.10 reste compatible et inchangée.
+- Consulter : https://github.com/tapion69/smart-energy-android/actions/runs/42689925656
