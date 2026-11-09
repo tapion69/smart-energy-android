@@ -58,3 +58,8 @@ Les projets Home Assistant existants ainsi que WaterVan ne sont pas modifiés pa
 - **Flasheur Windows `.exe`** : source dans `tools/windows-flasher`, construit via GitHub Actions. JK APP-ONLY `0x10000` et construction/flash VPN avec paramètres propres à l'utilisateur. Usage expérimental ; voir les prérequis dans le README du flasheur.
 
 [Plan de reprise, limites et étapes](docs/ARCHITECTURE-DEV-3-ESP32.md) · [Flasheur Windows](tools/windows-flasher/README.md)
+
+
+### État de la branche dev — 0.3.13
+
+La vue globale Android regroupe maintenant les batteries des trois lecteurs JK ; Debug est désactivé par défaut. Le firmware JK 0.3.13 interroge ses paramètres toutes les 30 min, à la demande avant édition et immédiatement après écriture pour confirmer. Le flasheur Windows ne nécessite plus Git pour récupérer TailTiny ; **ESP-IDF reste exigé pour compiler le VPN avec les identifiants personnels**. S3 N16R8 : compatibilité matérielle plausible pour de nouveaux développements, aucune image S3 validée à ce stade.
