@@ -9,6 +9,22 @@ menu "Smart Energy VPN Gateway — test only"
         default ""
         help
             X-Setup-Code for the JK ESP32 on the trusted LAN only.
+    config SE_JK2_IP
+        string "JK ESP32 reader 2 private LAN IPv4"
+        default ""
+        help
+            Empty disables second JK reader VPN forwarding.
+    config SE_JK2_READ_CODE
+        string "JK ESP32 reader 2 access code (NEVER commit)"
+        default ""
+    config SE_JK3_IP
+        string "JK ESP32 reader 3 private LAN IPv4"
+        default ""
+        help
+            Empty disables third JK reader VPN forwarding.
+    config SE_JK3_READ_CODE
+        string "JK ESP32 reader 3 access code (NEVER commit)"
+        default ""
     config SE_VOLT_IP
         string "Voltronic ESP LAN IPv4 (optional, experimental)"
         default ""
