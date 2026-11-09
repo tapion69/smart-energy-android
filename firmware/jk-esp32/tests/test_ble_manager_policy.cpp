@@ -18,5 +18,13 @@ int main() {
   assert(!eligible(true,false,false,false,100,100));
   assert(!eligible(true,false,true,true,100,100)); // don't rotate live BMS
   assert(!eligible(true,false,true,false,99,100));
+  assert(!hasStalledTelemetry(59000u,1000u,0u));
+  assert(hasStalledTelemetry(61000u,1000u,0u));
+  assert(!hasStalledTelemetry(62000u,1000u,61000u));
+  assert(hasStalledTelemetry(122000u,1000u,61000u));
+  assert(hasStalledTelemetry(61000u,1000u,999u)); // sample before current link
+  assert(!hasStalledTelemetry(0x20u,0xFFFFFFF0u,0u));
+  assert(hasStalledTelemetry(0x00010010u,0xFFFFFFF0u,0u));
+  assert(!hasStalledTelemetry(0x00010010u,0xFFFFFFF0u,0x0000FF00u));
   return 0;
 }
