@@ -551,7 +551,7 @@ void manager(void*) {
           if(!session.mac[0] || session.client ||
              (int32_t)(millis()-session.nextRetryAt)<0)continue;
           // One new link at a time. Other subscribed JKs keep streaming.
-          const bool ok=openSession(session);
+          const bool ok=openSession(session,session.mac);
           if(ok) {
             session.failures=0;session.nextRetryAt=0;
           } else {
