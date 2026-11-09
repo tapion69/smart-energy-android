@@ -144,6 +144,8 @@ class MainActivity : Activity() {
     private var nextFleetSlot=1
     private lateinit var fleetPanel:LinearLayout
     private lateinit var fleetOverview:JkGlobalOverview
+    private var fleetConfiguredCount=0
+    private var fleetAvailableCount=0
     private val fleetOwnerByMac=mutableMapOf<String,Int>()
     private val fleetNumberByMac=mutableMapOf<String,Int>()
     private var lastLocalSettingsRefreshAt=0L
@@ -2149,6 +2151,8 @@ class MainActivity : Activity() {
                 fleetNumberByMac[mac]=index+1
             }
         }
+        fleetConfiguredCount=all.length()
+        fleetAvailableCount=(0 until all.length()).count { all.optJSONObject(it)?.optBoolean("available")==true }
         fleetOverview.bind(all,
             { mac ->
                 val slot=fleetOwnerByMac[mac] ?: activeReaderSlot
@@ -2360,7 +2364,7 @@ class MainActivity : Activity() {
                 }
         val diagnostics=offlineDiagnostics + linkDiagnostics +
             listOf(wifiNote,heapNote).filter { it.isNotBlank() }
-        telemetryStatus.text = "$liveCount/${devices.length()} JK en ligne · $sectionTitle" +
+        telemetryStatus.text = "$fleetAvailableCount/$fleetConfiguredCount BMS en ligne (tous lecteurs) · ESP $activeReaderSlot : $liveCount/${devices.length()} · $sectionTitle" +
             if (!debugEnabled || diagnostics.isEmpty()) "" else "\n" + diagnostics.joinToString("\n")
     }
 
