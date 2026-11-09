@@ -1771,6 +1771,35 @@ class MainActivity : Activity() {
                 (if(before || after) " · GAP ${if(before)1 else 0}/${if(after)1 else 0}" else "") +
                 (if(scanWasActive) " · scan encore actif" else "")
         }
+        // Diagnose disconnections even after the JK successfully reconnects.
+        // Counts are since the ESP32 last booted, never a lifetime statistic.
+        val linkDiagnostics = (0 until devices.length()).mapNotNull { i ->
+            val item=devices.optJSONObject(i) ?: return@mapNotNull null
+            val drops=item.optInt("disconnections",0)
+            if(drops==0) return@mapNotNull null
+            val radio=item.optInt("ble_radio_disconnections",0)
+            val local=item.optInt("ble_intentional_disconnections",0)
+            val reason=item.optInt("ble_last_disconnect_reason",-1)
+            val reasonLabel=when(reason) {
+                8 -> "supervision BLE expirée"
+                19 -> "connexion terminée côté BMS"
+                22 -> "connexion terminée localement"
+                -1 -> "motif radio non capturé"
+                else -> "code GAP $reason"
+            }
+            val rssi=item.optInt("ble_rssi_dbm",0)
+            val timeout=item.optInt("ble_timeout_ms",0)
+            val since=item.optInt("ble_connected_seconds",-1)
+            "BMS ${i+1} : $drops coupures (radio $radio, gestionnaire $local)" +
+                " · $reasonLabel" +
+                (if(rssi!=0) " · RSSI $rssi dBm" else "") +
+                (if(timeout>0) " · timeout $timeout ms" else "") +
+                (if(since>=0) " · connecté depuis ${since}s" else "")
+        }
+        val wifiDrops=response.optInt("wifi_disconnect_count",0)
+        val minHeap=response.optInt("min_free_heap_bytes",0)
+        val wifiNote=if(wifiDrops>0) "Wi-Fi ESP32 : $wifiDrops coupure(s) depuis démarrage" else ""
+        val heapNote=if(minHeap>0) "Mémoire libre minimale : ${minHeap/1024} Ko" else ""
         val sectionTitle = if (global) "Synthèse des batteries" else
             "BMS ${macs.indexOf(selectedBmsMac) + 1} · " +
                 when (currentTab) {
@@ -1778,9 +1807,10 @@ class MainActivity : Activity() {
                     1 -> "Détails"
                     else -> "Paramètres"
                 }
+        val diagnostics=offlineDiagnostics + linkDiagnostics +
+            listOf(wifiNote,heapNote).filter { it.isNotBlank() }
         telemetryStatus.text = "$liveCount/${devices.length()} JK en ligne · $sectionTitle" +
-            if (offlineDiagnostics.isEmpty()) "" else
-                "\n" + offlineDiagnostics.joinToString("\n")
+            if (diagnostics.isEmpty()) "" else "\n" + diagnostics.joinToString("\n")
     }
 
     override fun onResume() {
