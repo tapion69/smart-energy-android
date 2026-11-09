@@ -8,6 +8,7 @@
 #include "jk_extended.h"
 #include "jk_write.h"
 #include "ble_manager_policy.h"
+#include "ble_link_policy.h"
 #include <NimBLEDevice.h>
 #include <WiFi.h>
 #include <freertos/FreeRTOS.h>
@@ -56,6 +57,15 @@ struct Device {
   bool scanBeforeConnect = false;
   uint32_t connections = 0;
   uint32_t disconnections = 0;
+  uint32_t radioDisconnections = 0;
+  uint32_t intentionalDisconnections = 0;
+  int lastDisconnectReason = -1; // NimBLE GAP reason, captured by callback.
+  uint32_t lastDisconnectAt = 0;
+  uint32_t connectedAt = 0;
+  int lastRssiDbm = 0;
+  uint32_t lastRssiAt = 0;
+  uint16_t connectionIntervalUnits = 0; // 1.25 ms
+  uint16_t supervisionTimeoutUnits = 0; // 10 ms
   // One-shot, non-optimistic parameter write. 0=idle, 1=queued, 2=sent,
   // 3=confirmed, 4=mismatch, 5=send_failed, 6=timeout, 7=link_lost.
   uint8_t writePhase = 0;
@@ -84,6 +94,7 @@ struct Session {
   uint32_t lastSettingsRequestAt = 0;
   uint32_t lastInfoRequestAt = 0;
   uint8_t failures = 0;
+  uint32_t lastSignalPollAt = 0;
 };
 static Session sessions[MAX_BMS];
 static volatile bool maintenanceRequested = false;
@@ -140,6 +151,27 @@ void markBleEvent(int index, const char *mac, BleEvent event, int error = 0) {
   }
   portEXIT_CRITICAL(&stateMux);
 }
+
+// Receive the real GAP disconnection reason from NimBLE's host, without
+// performing any BLE/HTTP work or reconnecting inside the callback.
+class BmsClientCallbacks : public NimBLEClientCallbacks {
+ public:
+  void onDisconnect(NimBLEClient *client, int reason) override {
+    if(!client) return;
+    portENTER_CRITICAL(&stateMux);
+    for(Session &session : sessions) {
+      if(session.client!=client || session.index>=configured) continue;
+      Device &d=devices[session.index];
+      if(strcmp(d.mac,session.mac)==0) {
+        d.lastDisconnectReason=reason;
+        d.lastDisconnectAt=millis();
+      }
+      break;
+    }
+    portEXIT_CRITICAL(&stateMux);
+  }
+};
+static BmsClientCallbacks bmsClientCallbacks;
 
 // Callback gets ONLY a frame with a verified 300-byte header and checksum.
 // Never preserve raw frames, as type 3 includes JK device passcodes.
@@ -330,16 +362,25 @@ bool discoverSharedAddress(const char *wanted, NimBLEAddress &target) {
 void closeSession(Session &session,const char* nextState) {
   NimBLEClient *client=session.client;
   if(!client) return;
-  session.subscribed=false; // Prevent the async callback using freed notify.
+  const bool wasConnected=client->isConnected();
+  // Stop notifications before freeing the characteristic. A deliberate
+  // closing request is distinct from a radio / remote disconnection.
+  session.subscribed=false;
   session.notify=nullptr;
   session.client=nullptr;
-  if(client->isConnected()) client->disconnect();
+  if(wasConnected) client->disconnect();
   NimBLEDevice::deleteClient(client);
   const int index=session.index;
   portENTER_CRITICAL(&stateMux);
   if(index<configured && strcmp(devices[index].mac,session.mac)==0) {
     Device &d=devices[index];
-    if(d.bleConnected) ++d.disconnections;
+    if(d.bleConnected) {
+      ++d.disconnections;
+      if(wasConnected) ++d.intentionalDisconnections;
+      else ++d.radioDisconnections;
+      d.connectedAt=0;
+      d.lastDisconnectAt=millis();
+    }
     d.bleConnected=false;
     if(d.writePhase==1 || d.writePhase==2) d.writePhase=7;
   }
@@ -379,10 +420,14 @@ bool openSession(Session &session, const char *mac) {
   }
   // Same deliberate 15-second timeout used by our reliable Bleak/BlueZ add-on.
   client->setConnectTimeout(15000);
+  client->setClientCallbacks(&bmsClientCallbacks,false);
   // Single manager owns ALL BLE initiations; leave per-BMS retries to its
   // bounded scheduler. Avoid racing internal retries with new GAP attempts.
   client->setConnectRetries(0);
-  client->setConnectionParams(32,48,0,600,48,32);
+  // Moderate 60-80 ms event interval and 12 s supervision budget: with
+  // three JKs plus Wi-Fi, a 6 s budget can be too tight under RF contention.
+  // The JK may negotiate different values, exposed in diagnostics below.
+  client->setConnectionParams(48,64,0,1200,48,32);
   markBleEvent(index,mac,BleEvent::Connect);
   const uint32_t t0=millis();
   const bool gapBefore=ble_gap_conn_active()!=0;
@@ -442,12 +487,21 @@ bool openSession(Session &session, const char *mac) {
     return false;
   }
 
+  const int rssi=client->getRssi();
+  const NimBLEConnInfo connInfo=client->getConnInfo();
+  const uint32_t connectedAt=millis();
   portENTER_CRITICAL(&stateMux);
   if (index < configured && strcmp(devices[index].mac, mac) == 0) {
-    devices[index].bleConnected = true;
-    devices[index].connections++;
+    Device &d=devices[index];
+    d.bleConnected=true;
+    ++d.connections;
+    d.connectedAt=connectedAt;
+    d.connectionIntervalUnits=connInfo.getConnInterval();
+    d.supervisionTimeoutUnits=connInfo.getConnTimeout();
+    if(rssi!=0) {d.lastRssiDbm=rssi;d.lastRssiAt=connectedAt;}
   }
   portEXIT_CRITICAL(&stateMux);
+  session.lastSignalPollAt=connectedAt;
   // Keep the radio handshake serialized until the initial subscription and
   // requests are complete; another worker must not start a scan here.
   markBleEvent(index, mac, BleEvent::Connected);
@@ -474,6 +528,20 @@ void serviceSession(Session &session) {
   const uint32_t now=millis();
   NimBLERemoteCharacteristic *characteristic=session.notify;
   const bool withResponse=!characteristic->canWriteNoResponse();
+  // Local GAP RSSI is fast and does not request a GATT read from the BMS.
+  // Sample sparsely to avoid adding traffic to 3 always-on sessions.
+  if(uint32_t(now-session.lastSignalPollAt)>=60000) {
+    const int rssi=session.client->getRssi();
+    if(rssi!=0) {
+      portENTER_CRITICAL(&stateMux);
+      if(index<configured && strcmp(devices[index].mac,session.mac)==0) {
+        devices[index].lastRssiDbm=rssi;
+        devices[index].lastRssiAt=millis();
+      }
+      portEXIT_CRITICAL(&stateMux);
+    }
+    session.lastSignalPollAt=now;
+  }
   uint32_t lastReading=0;
   int pending=-1;
   float target=0;
@@ -538,7 +606,11 @@ void manager(void*) {
   for(uint8_t i=0;i<MAX_BMS;++i)sessions[i].index=i;
   Serial.println("[JK] Single-owner BLE manager active, independent links");
   while(true) {
-    const bool working=!setupMode && WiFi.status()==WL_CONNECTED;
+    // A brief Wi-Fi dropout must not tear down three healthy BLE links.
+    // Pause only NEW BLE connection attempts until the Wi-Fi STA recovers.
+    const bool keepLinks=blelink::keepExistingLink(setupMode);
+    const bool mayConnect=blelink::mayStartNewConnection(
+        setupMode,WiFi.status()==WL_CONNECTED);
     for(uint8_t i=0;i<MAX_BMS;++i) {
       Session &session=sessions[i];
       char selected[18]={};
@@ -552,14 +624,14 @@ void manager(void*) {
         session.failures=0;
         session.nextRetryAt=millis()+uint32_t(i)*300;
       }
-      if(!working) closeSession(session,"ble_waiting_wifi");
+      if(!keepLinks) closeSession(session,"ble_waiting_setup");
       else if(session.client && !session.client->isConnected()) {
         closeSession(session,"ble_disconnected");
         if(session.failures<5)++session.failures;
         session.nextRetryAt=millis()+4000;
       } else if(session.client) serviceSession(session);
     }
-    if(working && !maintenanceRequested && radioMutex &&
+    if(mayConnect && !maintenanceRequested && radioMutex &&
        xSemaphoreTake(radioMutex,pdMS_TO_TICKS(100))==pdTRUE) {
       if(!setupMode && !maintenanceRequested) {
         for(uint8_t i=0;i<MAX_BMS;++i) {
@@ -650,6 +722,8 @@ void fillTelemetry(JsonDocument &out) {
   out["decoder"] = "experimental_validate_with_manufacturer";
   out["temperature_safety_verified"] = false;
   out["configured_count"] = count;
+  out["wifi_connected"] = WiFi.status()==WL_CONNECTED;
+  out["uptime_seconds"] = millis()/1000;
   out["cache_only"] = true;
   out["recommended_poll_ms"] = 2500;
   const uint32_t now = millis();
@@ -667,6 +741,19 @@ void fillTelemetry(JsonDocument &out) {
     device["ble_connected"] = item.bleConnected;
     device["connections"] = item.connections;
     device["disconnections"] = item.disconnections;
+    device["ble_radio_disconnections"] = item.radioDisconnections;
+    device["ble_intentional_disconnections"] = item.intentionalDisconnections;
+    device["ble_last_disconnect_reason"] = item.lastDisconnectReason;
+    if(item.lastDisconnectAt)
+      device["ble_last_disconnect_age_seconds"] = (now-item.lastDisconnectAt)/1000;
+    if(item.connectedAt)
+      device["ble_connected_seconds"] = (now-item.connectedAt)/1000;
+    if(item.lastRssiAt)
+      device["ble_rssi_dbm"] = item.lastRssiDbm;
+    if(item.connectionIntervalUnits)
+      device["ble_interval_ms"] = item.connectionIntervalUnits*1.25f;
+    if(item.supervisionTimeoutUnits)
+      device["ble_timeout_ms"] = item.supervisionTimeoutUnits*10u;
     device["ble_scan_attempts"] = item.scanAttempts;
     device["ble_scan_misses"] = item.scanMisses;
     device["ble_connect_attempts"] = item.connectAttempts;
