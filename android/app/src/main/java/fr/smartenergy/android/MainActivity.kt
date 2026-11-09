@@ -201,6 +201,9 @@ class MainActivity : Activity() {
                 if(currentTab==2 &&
                    android.os.SystemClock.elapsedRealtime()-lastDetailsFetchedAt>1800000L)
                     refreshDetails()
+                if(parameterEditingEnabled && currentTab==2 &&
+                   android.os.SystemClock.elapsedRealtime()-lastLocalSettingsRefreshAt>55000L)
+                    requestFreshSettingsForEditing()
             }
             pollOtherFleetReader()
             uiHandler.postDelayed(this, 2500)
@@ -1720,7 +1723,9 @@ class MainActivity : Activity() {
     private fun switchDashboardTab(tab: Int) {
         if(tab!=currentTab) parameterEditingEnabled=false
         if (tab == currentTab) {
-            if (tab == 2) refreshDetails()
+            if(tab==2 && (lastDetails==null ||
+               android.os.SystemClock.elapsedRealtime()-lastDetailsFetchedAt>1800000L))
+                refreshDetails()
             return
         }
         currentTab = tab
@@ -1729,7 +1734,9 @@ class MainActivity : Activity() {
         highlightActiveTab()
         mountedTab = -1
         lastTelemetry?.let { showTelemetry(it) }
-        if (tab == 2) refreshDetails()
+        if (tab == 2 && (lastDetails==null ||
+            android.os.SystemClock.elapsedRealtime()-lastDetailsFetchedAt>1800000L))
+            refreshDetails()
     }
 
     private fun refreshDetails() {
@@ -2014,6 +2021,33 @@ class MainActivity : Activity() {
             }.show()
     }
 
+
+    // A read-only BMS settings query is queued only when a user explicitly
+    // enables the edit interface. The strict 60-second write freshness guard
+    // remains enforced by ESP32; it is never weakened to allow stale writes.
+    private fun requestFreshSettingsForEditing() {
+        if(!parameterEditingEnabled || !lanVerified || remoteGatewayConnection ||
+           remoteVpnConnection || setupTransport || selectedBmsMac.isBlank())return
+        val mac=selectedBmsMac
+        lastLocalSettingsRefreshAt=android.os.SystemClock.elapsedRealtime()
+        io.execute {
+            try {
+                httpCall("POST","/api/v1/jk/settings-refresh",
+                    JSONObject().put("mac",mac))
+                Thread.sleep(1400)
+                runOnUiThread {
+                    if(parameterEditingEnabled && selectedBmsMac==mac) {
+                        lastDetailsFetchedAt=0L
+                        refreshDetails()
+                    }
+                }
+            } catch(ex:Exception) {
+                writeFeedback("Actualisation du BMS indisponible : "+
+                    (ex.message ?: "vérifie le firmware JK 0.3.13"))
+            }
+        }
+    }
+
     private fun toggleParameterEditMode() {
         if(parameterEditingEnabled) {
             parameterEditingEnabled=false
@@ -2025,6 +2059,10 @@ class MainActivity : Activity() {
             writeFeedback("Les modifications exigent une connexion locale directe au lecteur JK.")
             return
         }
+        if(selectedBmsMac.isBlank()) {
+            writeFeedback("Sélectionne un BMS avant d'activer les modifications.")
+            return
+        }
         AlertDialog.Builder(this)
             .setTitle("Attention : modifications des paramètres")
             .setMessage("Tu entres dans les modifications de paramètres du BMS. Des valeurs incorrectes peuvent endommager la batterie ou neutraliser des protections. Chaque changement demandera une confirmation individuelle ; les protections critiques exigent une confirmation supplémentaire. Aucune modification automatique.")
@@ -2033,6 +2071,7 @@ class MainActivity : Activity() {
                 parameterEditingEnabled=true
                 mountedTab=-1
                 lastTelemetry?.let { showTelemetry(it) }
+                requestFreshSettingsForEditing()
             }.show()
     }
 
