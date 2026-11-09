@@ -743,14 +743,8 @@ class MainActivity : Activity() {
                 if (!allowedTailnetIp(host) || !vpnConnected()) {
                     throw IllegalStateException("ESP32 VPN inaccessible : vérifie Tailscale et l'adresse 100.x.x.x.")
                 }
-                val route = when (path) {
-                    "/api/v1/health" -> "/api/v1/health"
-                    "/api/v1/telemetry" -> if(activeReaderSlot==1) "/api/v1/jk/telemetry"
-                        else "/api/v1/jk/${activeReaderSlot}/telemetry"
-                    "/api/v1/details" -> if(activeReaderSlot==1) "/api/v1/jk/details"
-                        else "/api/v1/jk/${activeReaderSlot}/details"
-                    else -> throw IllegalStateException("Route non autorisée sur la passerelle VPN.")
-                }
+                val route=JkTransportPolicy.vpnReadPath(activeReaderSlot,path)
+                    ?: throw IllegalStateException("Route non autorisée sur la passerelle VPN.")
                 URL("http://" + host + ":18767" + route).openConnection() as HttpURLConnection
             } else {
                 val host = localHost
