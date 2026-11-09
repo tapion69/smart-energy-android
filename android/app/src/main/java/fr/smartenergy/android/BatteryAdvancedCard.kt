@@ -163,6 +163,18 @@ class BatteryAdvancedCard(context: Context) : LinearLayout(context) {
         if (device == null) {
             row(header, "État", "Paramètres JK non reçus")
         }
+        val pilot=device?.optJSONObject("write_pilot")
+        if(pilot != null) {
+            if (pilot.optBoolean("ready")) {
+                row(header,"Modifications locales","Autorisées après confirmation manuelle")
+            } else {
+                row(header,"Modifications locales","Bloquées")
+                val reason=pilot.optString("reason","")
+                row(header,"Motif",JkWriteHelp.reason(reason))
+                if(reason=="stale_or_missing_settings")
+                    row(header,"Actualisation","Le BMS relit ses réglages toutes les 45 s")
+            }
+        }
         val s=device?.optJSONObject("settings")
         if(s==null||!s.optBoolean("available")){
             row(header,"État","Trame paramètres JK non reçue ou périmée")
@@ -189,7 +201,8 @@ class BatteryAdvancedCard(context: Context) : LinearLayout(context) {
                             if(unit=="°C") 1 else 0,unit)
                     }
                     row(panel,title,result)
-                    if (p.optBoolean("editable") && onEdit != null) {
+                    if (p.optBoolean("editable") && onEdit != null &&
+                        pilot?.optBoolean("ready") == true) {
                         val link=txt("Modifier ce réglage  ›",12f,true,mint)
                         link.setPadding(dp(6),dp(5),dp(6),dp(10))
                         link.setOnClickListener { onEdit(p) }
