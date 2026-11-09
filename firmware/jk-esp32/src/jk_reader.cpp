@@ -60,6 +60,7 @@ struct Device {
   uint32_t disconnections = 0;
   uint32_t radioDisconnections = 0;
   uint32_t intentionalDisconnections = 0;
+  uint32_t telemetryStallRecoveries = 0;
   int lastDisconnectReason = -1; // NimBLE GAP reason, captured by callback.
   uint32_t lastDisconnectAt = 0;
   uint32_t connectedAt = 0;
@@ -630,7 +631,29 @@ void manager(void*) {
         closeSession(session,"ble_disconnected");
         if(session.failures<5)++session.failures;
         session.nextRetryAt=millis()+4000;
-      } else if(session.client) serviceSession(session);
+      } else if(session.client) {
+        // A connected GATT client can stop receiving valid JK02 frames.
+        // Repeated read-only 0x96 requests alone cannot repair this state.
+        uint32_t connectedAt=0, lastReadingAt=0;
+        portENTER_CRITICAL(&stateMux);
+        if(i<configured && strcmp(devices[i].mac,session.mac)==0) {
+          connectedAt=devices[i].connectedAt;
+          lastReadingAt=devices[i].lastReadingMs;
+        }
+        portEXIT_CRITICAL(&stateMux);
+        if(blemanager::hasStalledTelemetry(millis(),connectedAt,lastReadingAt)) {
+          portENTER_CRITICAL(&stateMux);
+          if(i<configured && strcmp(devices[i].mac,session.mac)==0)
+            ++devices[i].telemetryStallRecoveries;
+          portEXIT_CRITICAL(&stateMux);
+          Serial.printf("[JK] Telemetry stalled on slot %u, reconnecting this link\n",
+                        unsigned(i+1));
+          closeSession(session,"telemetry_stall_recovery");
+          // Rebuild this peer alone, with backoff: protect other live JKs.
+          session.failures=3;
+          session.nextRetryAt=millis()+blemanager::retryDelayMs(session.failures)+uint32_t(i)*300;
+        } else serviceSession(session);
+      }
     }
     if(mayConnect && !maintenanceRequested && radioMutex &&
        xSemaphoreTake(radioMutex,pdMS_TO_TICKS(100))==pdTRUE) {
@@ -748,6 +771,9 @@ void fillTelemetry(JsonDocument &out) {
     device["disconnections"] = item.disconnections;
     device["ble_radio_disconnections"] = item.radioDisconnections;
     device["ble_intentional_disconnections"] = item.intentionalDisconnections;
+    device["ble_telemetry_stall_recoveries"] = item.telemetryStallRecoveries;
+    if(item.lastReadingMs)
+      device["ble_last_valid_frame_age_seconds"] = (now-item.lastReadingMs)/1000;
     device["ble_last_disconnect_reason"] = item.lastDisconnectReason;
     if(item.lastDisconnectAt)
       device["ble_last_disconnect_age_seconds"] = (now-item.lastDisconnectAt)/1000;
