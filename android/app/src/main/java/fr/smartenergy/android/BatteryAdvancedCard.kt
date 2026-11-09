@@ -159,7 +159,7 @@ class BatteryAdvancedCard(context: Context) : LinearLayout(context) {
         lastSignature = signature
         removeAllViews()
         val header = panel("JK " + (index + 1) + " · Paramètres",
-            "Modifications manuelles limitées aux réglages validés ; protections verrouillées")
+            "Réglages JK02 locaux expérimentaux ; double confirmation pour les protections")
         if (device == null) {
             row(header, "État", "Paramètres JK non reçus")
         }
@@ -203,7 +203,11 @@ class BatteryAdvancedCard(context: Context) : LinearLayout(context) {
                     row(panel,title,result)
                     if (p.optBoolean("editable") && onEdit != null &&
                         pilot?.optBoolean("ready") == true) {
-                        val link=txt("Modifier ce réglage  ›",12f,true,mint)
+                        val important=p.optInt("risk_level",2)>=2
+                        val link=txt(
+                            if(important) "Modifier (protection critique)  ›"
+                            else "Modifier ce réglage  ›",
+                            12f,true,if(important)orange else mint)
                         link.setPadding(dp(6),dp(5),dp(6),dp(10))
                         link.setOnClickListener { onEdit(p) }
                         panel.addView(link)
