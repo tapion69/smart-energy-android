@@ -105,8 +105,8 @@ class Flasher(tk.Tk):
         self.port = tk.StringVar()
         self.jk_image = tk.StringVar()
         self.jk_mode = tk.StringVar(value="update")
-        self.vpn_project = tk.StringVar()
-        self.idf_export = tk.StringVar()
+        self.vpn_image = tk.StringVar()
+        self.vpn_mode = tk.StringVar(value="factory")
         self.fields: dict[str, tk.StringVar] = {}
         self._build()
         self.after(100, self._drain)
@@ -201,12 +201,17 @@ class Flasher(tk.Tk):
         self._entry(frame, variable, row, password=password)
 
     def _build_vpn(self, root: ttk.Frame) -> None:
-        self._label(root, "Dossier firmware/vpn-gateway :", 0)
-        self._entry(root, self.vpn_project, 0)
-        self._picker(root, 0, self.vpn_project, "Sélectionner firmware/vpn-gateway", True)
-        self._label(root, "ESP-IDF 5.3.2 export.bat :", 1)
-        self._entry(root, self.idf_export, 1)
-        self._picker(root, 1, self.idf_export, "Choisir export.bat")
+        self._label(root, "Firmware VPN générique (.bin) :", 0)
+        self._entry(root, self.vpn_image, 0)
+        self._picker(root, 0, self.vpn_image, "Choisir le firmware VPN précompilé")
+        ttk.Radiobutton(root,
+            text="Nouvelle passerelle uniquement — image FACTORY à 0x0",
+            variable=self.vpn_mode,value="factory").grid(
+                row=1,column=0,columnspan=3,sticky="w",padx=8)
+        ttk.Radiobutton(root,
+            text="Mise à jour passerelle déjà configurée — APP-ONLY à 0x10000",
+            variable=self.vpn_mode,value="update").grid(
+                row=1,column=2,sticky="w",padx=8)
         rows = [
             ("Wi-Fi 2,4 GHz SSID :", "wifi_ssid", False),
             ("Mot de passe Wi-Fi :", "wifi_password", True),
@@ -222,13 +227,15 @@ class Flasher(tk.Tk):
         for row, (label, key, password) in enumerate(rows, start=2):
             self._field(root, label, key, row, password)
         ttk.Label(
-            root, text="Configuration locale privée. ESP-IDF 5.3.2 requis. Git inutile.\n"
-                       "Le flasheur compile chez toi, puis flashe UNIQUEMENT l'ESP32 VPN.\n"
-                       "Jamais de secret dans le dépôt ou les fichiers de diagnostic.",
+            root, text="Aucun ESP-IDF, Git ou Python à installer : firmware VPN précompilé.\n"
+                       "Secrets transmis uniquement par USB et enregistrés localement.\n"
+                       "Nouvel ESP32 : FACTORY. Ancien ESP32 : APP-ONLY uniquement.",
             wraplength=720
         ).grid(row=12, column=0, columnspan=3, sticky="w", pady=8)
-        ttk.Button(root, text="Préparer, compiler et flasher le VPN",
-                   command=self._flash_vpn).grid(row=13, column=0, columnspan=3, pady=10)
+        ttk.Button(root, text="Flasher et configurer l'ESP32 VPN",
+                   command=self._flash_vpn).grid(row=13,column=0,columnspan=3,pady=10)
+        ttk.Button(root, text="Configurer via USB sans reflasher",
+                   command=self._configure_only).grid(row=14,column=0,columnspan=3,pady=8)
 
     def _assert_ready(self) -> str:
         if self.busy:
@@ -273,111 +280,66 @@ class Flasher(tk.Tk):
                       "--flash_size", "4MB", offset, str(file)])
         self._log("Flash JK terminé. Redémarre le lecteur, puis vérifie la version dans l'APK.")
 
+    def _vpn_values(self) -> dict[str, str]:
+        values = {
+            key: field.get().strip() if key not in (
+                "wifi_password", "jk1_code", "jk2_code", "jk3_code",
+                "gateway_token", "tailscale_key"
+            ) else field.get()
+            for key, field in self.fields.items()
+        }
+        validate_vpn_config(values)
+        self.secret_values = [
+            v for k, v in values.items() if k.endswith("_code")
+            or k in ("wifi_password", "tailscale_key", "gateway_token")
+        ]
+        return values
+
     def _flash_vpn(self) -> None:
         try:
+            from vpn_usb import check_precompiled_image
             port = self._assert_ready()
-            values = {key: field.get().strip() if key not in
-                      ("wifi_password", "jk1_code", "jk2_code", "jk3_code",
-                       "gateway_token", "tailscale_key")
-                      else field.get() for key, field in self.fields.items()}
-            validate_vpn_config(values)
-            project = Path(self.vpn_project.get()).resolve()
-            if not (project / "CMakeLists.txt").is_file() or not (
-                project / "main" / "gateway_policy.h"
-            ).is_file():
-                raise ValueError("Choisis le dossier firmware/vpn-gateway du dépôt Smart Energy.")
-            export = Path(self.idf_export.get()).resolve()
-            if not export.is_file() or export.name.lower() != "export.bat":
-                raise ValueError("Choisis le fichier export.bat d'ESP-IDF 5.3.2.")
+            values = self._vpn_values()
+            file = Path(self.vpn_image.get())
+            mode = self.vpn_mode.get()
+            check_precompiled_image(file, mode)
             if not messagebox.askyesno(
-                "Confirmer ESP32 VPN", "Cette opération est réservée à l'ESP32 VPN dédié.\n"
-                "Elle recompilera le firmware avec TES secrets locaux, "
-                "puis flashera le port sélectionné.\n"
-                "Vérifie que ce port n'est PAS celui du lecteur JK."
+                "Confirmer le flash ESP32 VPN",
+                "Vérifie qu'il s'agit de la carte ESP32 VPN, pas d'un lecteur JK.\n"
+                + ("FACTORY remplace le partitionnement et risque de rendre les "
+                   "anciennes données inaccessibles.\n" if mode == "factory" else
+                   "APP-ONLY conserve le partitionnement/NVS existants.\n")
+                + "Après flash, le programme enverra les champs du formulaire "
+                  "par le câble USB uniquement. Continuer ?"
             ):
                 return
-            self.secret_values = [v for k, v in values.items() if
-                                  k.endswith("_code") or k in (
-                                      "wifi_password", "tailscale_key", "gateway_token")]
-            self._run_async(lambda: self._do_vpn(port, project, export, values))
+            self._run_async(lambda: self._do_vpn(port, file, mode, values))
         except Exception as exc:
             messagebox.showerror("Flash VPN", str(exc))
 
-    def _exec(self, cmd: list[str], cwd: Path) -> None:
-        process = subprocess.Popen(
-            cmd, cwd=str(cwd), stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-            text=True, encoding="utf-8", errors="replace"
-        )
-        assert process.stdout is not None
-        for line in process.stdout:
-            self._log(line.rstrip())
-        result = process.wait()
-        if result:
-            raise RuntimeError(f"Processus échoué avec le code {result}: {cmd[0]}")
-
-    def _do_vpn(self, port: str, project: Path, export: Path,
+    def _do_vpn(self, port: str, image: Path, mode: str,
                 values: dict[str, str]) -> None:
-        # Git is not required: fetch exactly the audited TailTiny commit
-        # over HTTPS and extract ONLY its known component tree.
-        target = project / "components" / "tailtiny"
-        if not target.is_dir():
-            source_url = ("https://github.com/Asimmimx/tailtiny/archive/"
-                          + TAILTINY_COMMIT + ".zip")
-            self._log("Récupération du composant TailTiny épinglé (sans Git)…")
-            with urllib.request.urlopen(source_url, timeout=50) as response:
-                content = response.read(25_000_001)
-            if len(content) > 25_000_000:
-                raise RuntimeError("Archive TailTiny anormalement volumineuse.")
-            with zipfile.ZipFile(io.BytesIO(content)) as archive:
-                prefix = "tailtiny-" + TAILTINY_COMMIT + "/components/tailtiny/"
-                members = [m for m in archive.infolist() if m.filename.startswith(prefix)]
-                if not members:
-                    raise RuntimeError("Composant TailTiny manquant dans le commit vérifié.")
-                target.mkdir(parents=True, exist_ok=True)
-                for member in members:
-                    relative = member.filename[len(prefix):]
-                    if not relative or member.is_dir():
-                        continue
-                    parts = Path(relative).parts
-                    if any(p in (".", "..") for p in parts) or Path(relative).is_absolute():
-                        raise RuntimeError("Archive externe : chemin dangereux.")
-                    if member.file_size > 4_000_000:
-                        raise RuntimeError("Fichier TailTiny anormalement volumineux.")
-                    dest = target.joinpath(*parts)
-                    dest.parent.mkdir(parents=True, exist_ok=True)
-                    with archive.open(member) as src, dest.open("wb") as dst:
-                        shutil.copyfileobj(src, dst)
-            if not (target / "CMakeLists.txt").is_file():
-                raise RuntimeError("Composant TailTiny incomplet. Flash annulé.")
-        credentials = project / "sdkconfig.credentials"
-        # The user's secrets never appear in a command-line argument.
-        if credentials.exists():
-            shutil.copy2(credentials, credentials.with_suffix(".credentials.backup"))
-        credentials.write_text(sdkconfig_contents(values), encoding="utf-8")
+        from vpn_usb import flash_precompiled, provision_over_serial
+        flash_precompiled(port, image, mode, self._log)
+        provision_over_serial(port, values, self._log)
+
+    def _configure_only(self) -> None:
         try:
-            os.chmod(credentials, 0o600)
-        except OSError:
-            pass
-        # Force Kconfig regeneration so an old sdkconfig does not override
-        # newly supplied JK 2/3 codes, while preserving local recovery copies.
-        for basename in ("sdkconfig", "sdkconfig.old"):
-            existing = project / basename
-            if existing.is_file():
-                shutil.copy2(existing, project / (basename + ".smartenergy.backup"))
-                existing.unlink()
-        self._log("Configuration privée locale créée ; compilation ESP-IDF démarrée…")
-        with tempfile.TemporaryDirectory(prefix="smartenergy-") as tmp:
-            batch = Path(tmp) / "build_flash.cmd"
-            batch.write_text(
-                '@echo off\n'
-                + f'call "{export}" || exit /b 1\n'
-                + 'idf.py set-target esp32 || exit /b 1\n'
-                + 'idf.py build || exit /b 1\n'
-                + f'idf.py -p {port} flash || exit /b 1\n',
-                encoding="utf-8"
-            )
-            self._exec(["cmd.exe", "/d", "/c", str(batch)], project)
-        self._log("Passerelle VPN flashée. Vérifie Tailscale et /api/v1/health.")
+            port = self._assert_ready()
+            values = self._vpn_values()
+            if not messagebox.askyesno(
+                "Configuration physique",
+                "Pour une passerelle déjà configurée : redémarre-la, "
+                "puis maintiens BOOT pendant 3 secondes dans les 9 secondes "
+                "suivant son démarrage (pas pendant la mise sous tension).\n\n"
+                "Cette action ne flashe aucun firmware et n'efface pas les BMS. "
+                "Continuer ?"
+            ):
+                return
+            from vpn_usb import provision_over_serial
+            self._run_async(lambda: provision_over_serial(port, values, self._log))
+        except Exception as exc:
+            messagebox.showerror("Configuration VPN", str(exc))
 
     def _run_async(self, callback: Callable[[], None]) -> None:
         self.busy = True
