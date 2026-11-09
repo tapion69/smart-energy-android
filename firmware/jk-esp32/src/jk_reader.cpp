@@ -814,6 +814,9 @@ void fillDetails(JsonDocument &out) {
         JsonObject value = items.add<JsonObject>();
         value["key"] = def.key;
         value["editable"] = jkwrite::editable(p);
+        value["risk_level"] = jkwrite::riskLevel(p);
+        value["risk_label"] = jkwrite::riskLevel(p)>=2 ? "protection_critique" :
+          jkwrite::riskLevel(p)==1 ? "operationnel" : "courant";
         value["label"] = def.label;
         value["group"] = def.group;
         if (def.unit[0]) value["unit"] = def.unit;
@@ -896,6 +899,12 @@ bool requestWrite(const char *mac, const char *key, float value,
     }
     if(fabsf(d.settings.value[size_t(idx)]-expectedOld)>0.0011f){
       reason="stale_expected_value";break;
+    }
+    if(fabsf(d.settings.value[size_t(idx)]-value)<0.0011f){
+      reason="already_at_target";break;
+    }
+    if(!jkwrite::consistentCandidate(size_t(idx),value,d.settings)){
+      reason="safety_relationship_failed";break;
     }
     if(d.writePhase==1||d.writePhase==2){
       reason="write_already_pending";break;
