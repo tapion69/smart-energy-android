@@ -163,3 +163,15 @@ Voir `docs/ACCES-DISTANT-VPN.md`.
 Un code **8 caractères** fonctionne aussi pour les quelques paramètres pilotes éditables en local. Un code long et difficile à deviner est recommandé. Les seuils de protection restent verrouillés. L'ESP32 Tailscale ne change pas et reste en lecture seule ; pour qu'il continue à lire le JK, le code JK devra être remis à la même valeur que celle programmée dans le VPN et l'adresse IP JK devra être retrouvée.
 
 **Sécurité :** l'AP temporaire est ouvert pendant la procédure et les données d'association de ce prototype transitent encore sans chiffrement applicatif ; deux validations physiques n'empêchent pas une attaque radio avancée. Ne pas présenter cette procédure comme un appairage durci de production avant protocole chiffré et vérification d'identité du lecteur.
+
+
+## Version expérimentale 0.3.12-dev (branche permanente `dev`)
+
+- Onglet **Configuration et association** séparé du tableau de bord.
+- Jusqu'à **3 profils de lecteurs ESP32 JK** dans l'application, chacun associé à son IP locale, son code chiffré Android Keystore et sa liste de BMS. Deux JK maximum par ESP32 (limite d'interface afin de privilégier la stabilité).
+- Chaque BMS peut être renommé depuis la liste enregistrée ; les noms apparaissent dans les onglets et la vue du lecteur.
+- **Paramètres en lecture seule par défaut**. Un bouton général active le mode modification après avertissement ; chaque valeur modifiée nécessite toujours sa confirmation, et les protections critiques leur double confirmation.
+- Pour les ESP32 JK 2 et 3 via Tailscale, la passerelle VPN doit utiliser le nouveau firmware 0.2.0-dev-multi3 et avoir été compilée localement avec les IP/codes de ces lecteurs. Le lecteur 1 conserve les routes historiques.
+- **Limite importante :** les cartes affichent actuellement un seul lecteur ESP32 à la fois, sélectionné dans Configuration. Une synthèse transversale des six batteries est un chantier suivant, pas une fonction disponible dans cette APK.
+- Le paquet debug `.vpntrial312` s'installe séparément de `.vpntrial310`. Une nouvelle association locale est nécessaire : ne pas désinstaller l'ancienne APK fonctionnelle. Aucun flash JK obligatoire si le firmware est déjà 0.3.11-dev.
+- [Architecture et protocole de validation](../docs/ARCHITECTURE-DEV-3-ESP32.md).
