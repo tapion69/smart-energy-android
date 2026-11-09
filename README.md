@@ -46,3 +46,15 @@ Ce dépôt contient maintenant **un premier prototype de configuration JK** : ap
 ➡️ Voir [feuille de route](docs/ROADMAP.md), [architecture](docs/ARCHITECTURE.md) et [sécurité](docs/SECURITY.md).
 
 Les projets Home Assistant existants ainsi que WaterVan ne sont pas modifiés par ce dépôt.
+
+
+## Développement actif — Smart Energy Android
+
+**Branches GitHub :** `main` (référence stable conservée) et `dev` (travail courant). L'historique de chaque branche expérimentale supprimée a été sauvegardé sous un tag `archive/2026-11-09/*`, sans perte de commits.
+
+- Application Android expérimentale **0.3.12-dev** : onglet configuration distinct, trois lecteurs JK sélectionnables (deux BMS maximum par lecteur), renommage de batteries et activation encadrée des modifications de paramètres.
+- Firmware JK **0.3.11-dev** : récupération automatique des sessions BLE figées, test prolongé avec deux BMS encore nécessaire.
+- Firmware VPN expérimental **0.2.0-dev-multi3** : jusqu'à trois lecteurs JK sur le LAN, GET uniquement, configuration personnelle locale nécessaire ; ne remplace pas le VPN actuellement installé sans test.
+- **Flasheur Windows `.exe`** : source dans `tools/windows-flasher`, construit via GitHub Actions. JK APP-ONLY `0x10000` et construction/flash VPN avec paramètres propres à l'utilisateur. Usage expérimental ; voir les prérequis dans le README du flasheur.
+
+[Plan de reprise, limites et étapes](docs/ARCHITECTURE-DEV-3-ESP32.md) · [Flasheur Windows](tools/windows-flasher/README.md)
