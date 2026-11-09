@@ -347,11 +347,13 @@ static void start_private_http(void) {
 
 void app_main(void) {
     esp_err_t err = nvs_flash_init();
-    if (err == ESP_ERR_NVS_NO_FREE_PAGES || err == ESP_ERR_NVS_NEW_VERSION_FOUND) {
-        ESP_ERROR_CHECK(nvs_flash_erase());
-        err = nvs_flash_init();
+    // Never silently erase NVS: it holds the Tailscale identity and
+    // user's USB credentials. Abort and require deliberate recovery.
+    if(err!=ESP_OK) {
+        ESP_LOGE(TAG,"NVS error %s: refusing startup without erase",
+                 esp_err_to_name(err));
+        return;
     }
-    ESP_ERROR_CHECK(err);
 
     // First boot enters physical UART0 setup (no Wi-Fi / HTTP / Tailscale).
     // Existing devices can re-enter it by holding BOOT for 3 s just after
