@@ -128,6 +128,8 @@ class MainActivity : Activity() {
     private lateinit var tabExtended: Button
     private lateinit var tabSettings: Button
     private lateinit var telemetryStatus: TextView
+    private lateinit var parameterFeedback: TextView
+    private var lastParameterFeedback: String = ""
     @Volatile private var telemetryBusy = false
     private val telemetryTicker = object : Runnable {
         override fun run() {
@@ -401,6 +403,8 @@ class MainActivity : Activity() {
         }
         add(root, bmsTabStrip, 8)
         add(root, detailsTabRow, 8)
+        parameterFeedback=label("",12f,false,mint).apply { visibility=View.GONE }
+        add(root, parameterFeedback, 6)
         highlightActiveTab()
         telemetryPanel = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         add(root, telemetryPanel, 8)
@@ -533,6 +537,13 @@ class MainActivity : Activity() {
     }
 
     private fun state(message: String) = runOnUiThread { status.text = message }
+
+    private fun writeFeedback(message: String) = runOnUiThread {
+        lastParameterFeedback=message
+        parameterFeedback.text=message
+        parameterFeedback.visibility=if(currentTab==2)View.VISIBLE else View.GONE
+        status.text=message
+    }
 
     private fun wifiState(message: String) = runOnUiThread {
         wifiStatus.text = message
@@ -1444,6 +1455,8 @@ class MainActivity : Activity() {
             return
         }
         currentTab = tab
+        parameterFeedback.visibility =
+            if(tab==2 && lastParameterFeedback.isNotBlank()) View.VISIBLE else View.GONE
         highlightActiveTab()
         mountedTab = -1
         lastTelemetry?.let { showTelemetry(it) }
@@ -1493,24 +1506,30 @@ class MainActivity : Activity() {
             return
         }
         if(!lanVerified || setupTransport) {
-            state("Connecte d'abord ton JK sur le réseau local pour modifier un paramètre.")
+            writeFeedback("Connecte d'abord ton JK sur le réseau local pour modifier un paramètre.")
             return
         }
         if(lastLanFirmwareVersion.substringBefore("-").let {
             val p=it.split(".").mapNotNull {n->n.toIntOrNull()}
             p.size < 3 || p[0] == 0 && p[1] < 3
         }) {
-            state("Firmware JK 0.3.0 requis pour les modifications contrôlées.")
+            writeFeedback("Firmware JK 0.3.0 ou supérieur requis pour les modifications contrôlées.")
             return
         }
         val key=param.optString("key")
         val label=param.optString("label",key)
         if(!param.optBoolean("editable") || key.isBlank())return
+        val pilot=detailForMac(mac)?.optJSONObject("write_pilot")
+        if(pilot != null && !pilot.optBoolean("ready")) {
+            writeFeedback("Modification bloquée : " +
+                JkWriteHelp.reason(pilot.optString("reason")))
+            return
+        }
         val isBool=param.optString("type")=="bool"
         val oldValue=if(isBool) param.optBoolean("value") else param.optDouble("value",Double.NaN)
         fun confirmAndSend(newValue: Any) {
             if(!isBool && (newValue !is Double || !newValue.isFinite())) {
-                state("Valeur numérique incorrecte.");return
+                writeFeedback("Valeur numérique incorrecte.");return
             }
             val oldText=if(isBool) if(oldValue==true)"Activé" else "Désactivé"
                 else oldValue.toString()
@@ -1532,7 +1551,7 @@ class MainActivity : Activity() {
                                 .put("value",newValue).put("expected_old",oldValue)
                                 .put("confirmation","APPLY_TO_SELECTED_BMS")
                             httpCall("POST","/api/v1/jk/write",req)
-                            state("Commande envoyée à $label ; vérification du BMS…")
+                            writeFeedback("Commande envoyée à $label ; relecture et vérification du BMS…")
                             var finalState="sent_unconfirmed"
                             for(i in 0 until 9) {
                                 Thread.sleep(1500)
@@ -1543,14 +1562,17 @@ class MainActivity : Activity() {
                                 if(finalState !in setOf("queued","sent_unconfirmed"))break
                             }
                             if(finalState=="confirmed"){
-                                state("Confirmé par le BMS : $label = $newText")
-                            } else state("Écriture non confirmée ($finalState). " +
-                                "Vérifie le BMS avant toute nouvelle tentative.")
+                                writeFeedback("Confirmé par une nouvelle trame paramètres JK : $label = $newText")
+                            } else writeFeedback("Modification non confirmée : " +
+                                JkWriteHelp.reason(finalState) +
+                                ". Vérifie le BMS avant toute nouvelle tentative.")
                             lastDetailsFetchedAt=0
                             refreshDetails()
                         }catch(ex:Exception) {
-                            state("Modification refusée ou interrompue : " +
-                                (ex.message ?: "erreur") + ". Ne réessaie pas sans relire le BMS.")
+                            val reason=ex.message ?: "erreur"
+                            writeFeedback("Modification refusée ou interrompue : " +
+                                JkWriteHelp.reason(reason) +
+                                ". Les paramètres du BMS ne sont pas déclarés modifiés.")
                         }
                     }
                 }.show()
@@ -1570,7 +1592,7 @@ class MainActivity : Activity() {
                 .setView(field).setNegativeButton("Annuler",null)
                 .setPositiveButton("Vérifier"){_,_->
                     val next=field.text.toString().trim().replace(',','.').toDoubleOrNull()
-                    if(next==null || !next.isFinite())state("Nouvelle valeur incorrecte.")
+                    if(next==null || !next.isFinite())writeFeedback("Nouvelle valeur incorrecte.")
                     else confirmAndSend(next)
                 }.show()
         }
