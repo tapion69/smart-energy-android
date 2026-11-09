@@ -18,4 +18,14 @@ class JkAggregateMathTest {
         assertNull(JkAggregateMath.sumWhenComplete(listOf(-250.0, Double.NaN), 2))
         assertNull(JkAggregateMath.sumWhenComplete(emptyList(), 0))
     }
+    @Test fun sixBmsAcrossThreeReadersMustAllCount() {
+        assertEquals(660.0, JkAggregateMath.sumWhenComplete(
+            listOf(100.0, 110.0, 120.0, 130.0, 90.0, 110.0), 6)!!, 0.001)
+    }
+    @Test fun sixBmsOneOfflineMustNeverPublishAnIncompleteTotal() {
+        assertNull(JkAggregateMath.sumWhenComplete(
+            listOf(100.0, 110.0, 120.0, Double.NaN, 90.0, 110.0), 6))
+        assertNull(JkAggregateMath.sumWhenComplete(
+            listOf(100.0, 110.0, 120.0, 130.0, 90.0), 6))
+    }
 }
