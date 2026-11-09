@@ -497,9 +497,18 @@ class MainActivity : Activity() {
         add(b, scanPanel)
         saveBtn = action("Sauvegarder les batteries choisies") { saveSelection() }
         add(b, saveBtn)
-        add(b, label("Pour ce jalon, la sélection est conservée après redémarrage ; la lecture des mesures JK sera ajoutée ensuite.", 12f, color = subdued))
+        add(b, label("Les BMS enregistrés restent mémorisés après redémarrage. Les sessions Bluetooth déjà connectées continuent leur lecture en permanence.", 12f, color = subdued))
 
-        val c = section(advanced, "4. Connecter l'ESP32 à un réseau Wi-Fi 2,4 GHz")
+        val wifiMaintenance=LinearLayout(this).apply {
+            orientation=LinearLayout.VERTICAL
+            visibility=View.GONE
+        }
+        add(advanced, action("Changer le Wi-Fi de l'ESP32 (dépannage)") {
+            wifiMaintenance.visibility=
+                if(wifiMaintenance.visibility==View.VISIBLE) View.GONE else View.VISIBLE
+        }, 12)
+        advanced.addView(wifiMaintenance)
+        val c = section(wifiMaintenance, "Modifier le Wi-Fi 2,4 GHz de l'ESP32")
         wifiScanBtn = action("Rechercher les réseaux Wi-Fi disponibles") { scanRouterWifi() }
         add(c, wifiScanBtn)
         wifiNetworks = RadioGroup(this).apply { orientation = RadioGroup.VERTICAL }
@@ -517,9 +526,9 @@ class MainActivity : Activity() {
         add(c, wifiBtn)
         wifiStatus = label("Si ton ESP32 est déjà connecté à ta box, inutile de remplir cette section. Ce bouton sert à changer le réseau Wi-Fi.", 13f, color = subdued)
         add(c, wifiStatus)
-        add(c, label("Réseau local de confiance uniquement (HTTP non chiffré dans ce prototype). Le firmware doit être en v0.1.3-dev pour modifier le Wi-Fi depuis la box.", 12f, color = subdued))
+        add(c, label("À utiliser seulement en cas de changement de box, SSID ou mot de passe. La première association BOOT configure déjà le Wi-Fi. Réseau local de confiance uniquement ; ne jamais exposer l'API ESP32 sur Internet.", 12f, color = subdued))
 
-        val access = section(advanced, "5. Code d'accès de l'ESP32")
+        val access = section(advanced, "Code d'accès de l'ESP32")
         add(access, label("Modifie le code personnel de la passerelle après association. Minimum 8 caractères pour protéger aussi son point d'accès Wi-Fi.", 13f, color = subdued))
         accessCodeNew = input("Nouveau code ESP32 (8 à 32 caractères)", true)
         add(access, accessCodeNew)
@@ -1499,81 +1508,125 @@ class MainActivity : Activity() {
     private fun editJkParameter(mac: String, param: JSONObject) {
         if(remoteGatewayConnection || remoteVpnConnection) {
             AlertDialog.Builder(this).setTitle("Écriture distante désactivée")
-                .setMessage("L'ESP32 Tailscale actuel n'autorise que les lectures. " +
-                    "Les écritures seront proposées à distance après validation " +
-                    "du relais et d'une authentification spécifique.")
+                .setMessage("Notre ESP32 VPN est exclusivement en lecture. " +
+                    "Pour modifier un BMS, connecte-toi directement à l'ESP32 JK " +
+                    "sur le Wi-Fi de confiance.")
                 .setPositiveButton("Compris",null).show()
             return
         }
         if(!lanVerified || setupTransport) {
-            writeFeedback("Connecte d'abord ton JK sur le réseau local pour modifier un paramètre.")
+            writeFeedback("Connecte d'abord ton ESP32 JK sur le réseau local.")
             return
         }
-        if(lastLanFirmwareVersion.substringBefore("-").let {
-            val p=it.split(".").mapNotNull {n->n.toIntOrNull()}
-            p.size < 3 || p[0] == 0 && p[1] < 3
-        }) {
-            writeFeedback("Firmware JK 0.3.0 ou supérieur requis pour les modifications contrôlées.")
+        val parts=lastLanFirmwareVersion.substringBefore("-").split(".")
+            .mapNotNull { it.toIntOrNull() }
+        if(parts.size!=3 || parts[0]!=0 || parts[1]!=3 || parts[2]<7) {
+            writeFeedback("Firmware JK 0.3.7 ou supérieur requis pour cet éditeur complet.")
             return
         }
         val key=param.optString("key")
         val label=param.optString("label",key)
-        if(!param.optBoolean("editable") || key.isBlank())return
+        if(!param.optBoolean("editable") || key.isBlank()) return
+        val risk=param.optInt("risk_level",2)
         val pilot=detailForMac(mac)?.optJSONObject("write_pilot")
-        if(pilot != null && !pilot.optBoolean("ready")) {
-            writeFeedback("Modification bloquée : " +
+        if(pilot!=null && !pilot.optBoolean("ready")) {
+            writeFeedback("Modification bloquée : "+
                 JkWriteHelp.reason(pilot.optString("reason")))
             return
         }
         val isBool=param.optString("type")=="bool"
-        val oldValue=if(isBool) param.optBoolean("value") else param.optDouble("value",Double.NaN)
+        val oldValue: Any = if(isBool) param.optBoolean("value")
+            else param.optDouble("value",Double.NaN)
+        if(oldValue is Double && !oldValue.isFinite()) {
+            writeFeedback("Valeur actuelle manquante : relis les paramètres.")
+            return
+        }
+
+        fun sendWrite(newValue: Any) {
+            io.execute {
+                try {
+                    val arm=JSONObject().put("mac",mac)
+                        .put("confirmation","I_CONFIRM_ONE_JK_WRITE")
+                    httpCall("POST","/api/v1/jk/write-arm",arm)
+                    val req=JSONObject().put("mac",mac).put("key",key)
+                        .put("value",newValue).put("expected_old",oldValue)
+                        .put("confirmation","APPLY_TO_SELECTED_BMS")
+                    if(risk>=2) req.put("risk_confirmation","I_ACCEPT_PROTECTION_RISK")
+                    httpCall("POST","/api/v1/jk/write",req)
+                    writeFeedback("Commande envoyée à $label : vérification de la valeur sur le BMS…")
+                    var finalState="sent_unconfirmed"
+                    for(i in 0 until 12) {
+                        Thread.sleep(1500)
+                        val path="/api/v1/jk/write-status?mac="+
+                            java.net.URLEncoder.encode(mac,"UTF-8")
+                        val status=httpCall("GET",path)
+                        finalState=status.optString("state","sent_unconfirmed")
+                        if(finalState !in setOf("queued","sent_unconfirmed")) break
+                    }
+                    if(finalState=="confirmed") {
+                        writeFeedback("BMS confirmé : $label a été modifié et relu.")
+                    } else {
+                        writeFeedback("Modification NON confirmée : "+
+                            JkWriteHelp.reason(finalState)+
+                            ". Contrôle la valeur sur le JK avant de recommencer.")
+                    }
+                    lastDetailsFetchedAt=0
+                    refreshDetails()
+                } catch(ex:Exception) {
+                    writeFeedback("Modification REFUSÉE : "+
+                        JkWriteHelp.reason(ex.message ?: "erreur")+
+                        ". Ne réessaie pas avant une nouvelle lecture.")
+                }
+            }
+        }
+
         fun confirmAndSend(newValue: Any) {
             if(!isBool && (newValue !is Double || !newValue.isFinite())) {
-                writeFeedback("Valeur numérique incorrecte.");return
+                writeFeedback("Valeur numérique incorrecte.")
+                return
+            }
+            if(newValue==oldValue) {
+                writeFeedback("La valeur demandée est déjà celle enregistrée.")
+                return
             }
             val oldText=if(isBool) if(oldValue==true)"Activé" else "Désactivé"
                 else oldValue.toString()
             val newText=if(isBool) if(newValue==true)"Activé" else "Désactivé"
                 else newValue.toString()
+            val warning=when(risk) {
+                0 -> "Réglage courant."
+                1 -> "Réglage opérationnel : peut modifier le comportement du BMS."
+                else -> "PARAMÈTRE DE PROTECTION CRITIQUE : un mauvais réglage peut " +
+                    "désactiver une protection, endommager la batterie ou provoquer " +
+                    "un incident électrique/thermique."
+            }
             AlertDialog.Builder(this)
-                .setTitle("Confirmer sur ce JK uniquement")
-                .setMessage("$label\nAncienne valeur : $oldText\nNouvelle valeur : $newText\n\n" +
-                    "Aucune autre batterie ne sera modifiée. " +
-                    "La confirmation n'apparaîtra qu'après relecture du BMS.")
+                .setTitle(if(risk>=2) "Attention : protection du BMS" else
+                    "Confirmer le réglage sur un seul JK")
+                .setMessage("Batterie ciblée : $mac\nParamètre : $label\n"+
+                    "Valeur actuelle : $oldText\nNouvelle valeur : $newText\n\n"+
+                    warning+"\n\nL'écriture reste locale, limitée à ce BMS "+
+                    "et doit être confirmée par relecture.")
                 .setNegativeButton("Annuler",null)
-                .setPositiveButton("Confirmer") { _, _ ->
-                    io.execute {
-                        try {
-                            val arm=JSONObject().put("mac",mac)
-                                .put("confirmation","I_CONFIRM_ONE_JK_WRITE")
-                            httpCall("POST","/api/v1/jk/write-arm",arm)
-                            val req=JSONObject().put("mac",mac).put("key",key)
-                                .put("value",newValue).put("expected_old",oldValue)
-                                .put("confirmation","APPLY_TO_SELECTED_BMS")
-                            httpCall("POST","/api/v1/jk/write",req)
-                            writeFeedback("Commande envoyée à $label ; relecture et vérification du BMS…")
-                            var finalState="sent_unconfirmed"
-                            for(i in 0 until 9) {
-                                Thread.sleep(1500)
-                                val path="/api/v1/jk/write-status?mac="+
-                                    java.net.URLEncoder.encode(mac,"UTF-8")
-                                val status=httpCall("GET",path)
-                                finalState=status.optString("state","sent_unconfirmed")
-                                if(finalState !in setOf("queued","sent_unconfirmed"))break
-                            }
-                            if(finalState=="confirmed"){
-                                writeFeedback("Confirmé par une nouvelle trame paramètres JK : $label = $newText")
-                            } else writeFeedback("Modification non confirmée : " +
-                                JkWriteHelp.reason(finalState) +
-                                ". Vérifie le BMS avant toute nouvelle tentative.")
-                            lastDetailsFetchedAt=0
-                            refreshDetails()
-                        }catch(ex:Exception) {
-                            val reason=ex.message ?: "erreur"
-                            writeFeedback("Modification refusée ou interrompue : " +
-                                JkWriteHelp.reason(reason) +
-                                ". Les paramètres du BMS ne sont pas déclarés modifiés.")
-                        }
+                .setPositiveButton(if(risk>=2) "Continuer" else "Confirmer") {_,_->
+                    if(risk<2) {
+                        sendWrite(newValue)
+                    } else {
+                        // A second, deliberate human confirmation is mandatory.
+                        val phrase=input("Saisir PROTECTION pour confirmer")
+                        AlertDialog.Builder(this)
+                            .setTitle("Confirmation de sécurité")
+                            .setMessage("Ne confirme que si tu connais les conséquences "+
+                                "de ce changement sur les protections de la batterie. "+
+                                "Saisis PROTECTION pour autoriser cette écriture unique.")
+                            .setView(phrase)
+                            .setNegativeButton("Annuler",null)
+                            .setPositiveButton("Autoriser") {_,_->
+                                if(phrase.text.toString().trim()!="PROTECTION")
+                                    writeFeedback("Modification critique annulée : "+
+                                        "confirmation PROTECTION absente.")
+                                else sendWrite(newValue)
+                            }.show()
                     }
                 }.show()
         }
@@ -1588,11 +1641,12 @@ class MainActivity : Activity() {
                 android.text.InputType.TYPE_NUMBER_FLAG_DECIMAL or
                 android.text.InputType.TYPE_NUMBER_FLAG_SIGNED
             AlertDialog.Builder(this).setTitle(label)
-                .setMessage("Ancienne valeur : $oldValue ${param.optString("unit")}")
+                .setMessage("Valeur actuelle : $oldValue ${param.optString("unit")}")
                 .setView(field).setNegativeButton("Annuler",null)
                 .setPositiveButton("Vérifier"){_,_->
                     val next=field.text.toString().trim().replace(',','.').toDoubleOrNull()
-                    if(next==null || !next.isFinite())writeFeedback("Nouvelle valeur incorrecte.")
+                    if(next==null || !next.isFinite())
+                        writeFeedback("Nouvelle valeur incorrecte.")
                     else confirmAndSend(next)
                 }.show()
         }
