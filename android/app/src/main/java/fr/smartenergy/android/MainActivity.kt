@@ -2297,7 +2297,7 @@ class MainActivity : Activity() {
                 if(mac != selectedBmsMac) continue
                 when(currentTab) {
                     0 -> dashboardCards[mac]?.bind(i,item)
-                    1 -> advancedCards[mac]?.measurements(i,item)
+                    1 -> advancedCards[mac]?.measurements(i,item,debugEnabled)
                     2 -> advancedCards[mac]?.settings(i,detailForMac(mac),item,
                         parameterEditingEnabled,
                         { toggleParameterEditMode() }) { param ->
