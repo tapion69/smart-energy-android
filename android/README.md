@@ -175,3 +175,14 @@ Un code **8 caractères** fonctionne aussi pour les quelques paramètres pilotes
 - **Limite importante :** les cartes affichent actuellement un seul lecteur ESP32 à la fois, sélectionné dans Configuration. Une synthèse transversale des six batteries est un chantier suivant, pas une fonction disponible dans cette APK.
 - Le paquet debug `.vpntrial312` s'installe séparément de `.vpntrial310`. Une nouvelle association locale est nécessaire : ne pas désinstaller l'ancienne APK fonctionnelle. Aucun flash JK obligatoire si le firmware est déjà 0.3.11-dev.
 - [Architecture et protocole de validation](../docs/ARCHITECTURE-DEV-3-ESP32.md).
+
+
+## Mise à jour Android 0.3.13-dev
+
+Accueil : toutes les batteries associées aux lecteurs JK 1, 2 et 3 (jusqu'à deux par lecteur), avec vue globale et somme seulement lorsque toutes les mesures sont fraîches. Carte hors ligne si le lecteur ne répond plus ou si la donnée a plus de 15 s. Aucune requête BLE supplémentaire : l'application consulte les caches HTTP indépendants des lecteurs.
+
+Configuration → Debug et diagnostics : désactivé par défaut, réactive les détails GAP/radio/RSSI/mémoire en haut du tableau.
+
+Paramètres JK : le firmware 0.3.13-dev lit les réglages au démarrage, puis toutes les 30 minutes. L'APK ne consulte pas les détails en boucle ; un déverrouillage d'édition demande une lecture ciblée et après toute écriture, une trame de réglage fraîche vérifie la valeur. Un ancien firmware JK ne reconnaît pas `POST /api/v1/jk/settings-refresh`.
+
+La version debug `.vpntrial313` est séparée des autres APK expérimentales. Ne pas supprimer l'application actuellement fonctionnelle sans migration et sauvegarde.
