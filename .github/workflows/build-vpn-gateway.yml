@@ -4,6 +4,7 @@ on:
     branches: [dev]
     paths:
       - 'firmware/vpn-gateway/**'
+      - 'firmware/voltronic-esp32/**'
       - 'tools/windows-flasher/**'
       - 'firmware/jk-esp32/**'
       - '.github/workflows/build-vpn-gateway.yml'
@@ -164,9 +165,48 @@ jobs:
           if-no-files-found: error
           retention-days: 30
 
+  voltronic-s3:
+    name: Compile Voltronic ESP32-S3 read-only image for Windows bundle
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify whitelist, CRC and parsers before bundling
+        run: |
+          gcc -std=gnu11 -Wall -Wextra -Werror \
+            firmware/voltronic-esp32/tests/test_protocol.c \
+            -o /tmp/se-voltronic-protocol -lm
+          /tmp/se-voltronic-protocol
+      - name: ESP-IDF 5.3.2 ESP32-S3 build
+        uses: espressif/esp-idf-ci-action@v1
+        with:
+          esp_idf_version: v5.3.2
+          target: esp32s3
+          path: firmware/voltronic-esp32
+      - name: Produce Voltronic S3 read-only factory / app-only images
+        run: |
+          set -euo pipefail
+          python -m pip install "esptool==4.9.0"
+          mkdir -p firmware/voltronic-esp32/dist
+          cp firmware/voltronic-esp32/build/smart_energy_voltronic_s3.bin \
+            firmware/voltronic-esp32/dist/smart-energy-voltronic-S3-APP-0x10000.bin
+          python -m esptool --chip esp32s3 merge_bin \
+            --flash_mode dio --flash_freq 40m --flash_size 16MB \
+            -o firmware/voltronic-esp32/dist/smart-energy-voltronic-S3-FACTORY-0x0.bin \
+            0x0 firmware/voltronic-esp32/build/bootloader/bootloader.bin \
+            0x8000 firmware/voltronic-esp32/build/partition_table/partition-table.bin \
+            0x10000 firmware/voltronic-esp32/build/smart_energy_voltronic_s3.bin
+      - uses: actions/upload-artifact@v4
+        with:
+          name: SmartEnergy-VOLTRONIC-ESP32S3-N16R8-READONLY
+          path: |
+            firmware/voltronic-esp32/dist/smart-energy-voltronic-S3-FACTORY-0x0.bin
+            firmware/voltronic-esp32/dist/smart-energy-voltronic-S3-APP-0x10000.bin
+          if-no-files-found: error
+          retention-days: 30
+
   windows-bundle:
-    name: Build all-in-one Windows flasher with JK and VPN firmwares
-    needs: [esp32, esp32s3, jk]
+    name: Build all-in-one Windows flasher with JK/VPN/S3 Voltronic
+    needs: [esp32, esp32s3, jk, voltronic-s3]
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
@@ -182,6 +222,10 @@ jobs:
         with:
           name: SmartEnergy-VPN-ESP32S3-N16R8-USB-PRECOMPILED
           path: firmware/vpn-gateway/dist-s3
+      - uses: actions/download-artifact@v4
+        with:
+          name: SmartEnergy-VOLTRONIC-ESP32S3-N16R8-READONLY
+          path: firmware/voltronic-esp32/dist
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
@@ -195,7 +239,7 @@ jobs:
       - name: Package one EXE with both JK and VPN factory/update firmwares
         shell: pwsh
         run: |
-          python -m PyInstaller --clean --noconfirm --onefile --windowed --name SmartEnergyFlasher --collect-all esptool --hidden-import serial.tools.list_ports --add-data "firmware/vpn-gateway/dist/smart-energy-vpn-USB-FACTORY-ESP32-0x0.bin;embedded_firmware" --add-data "firmware/vpn-gateway/dist/smart-energy-vpn-USB-APP-ESP32-0x10000.bin;embedded_firmware" --add-data "firmware/vpn-gateway/dist-s3/smart-energy-vpn-USB-FACTORY-ESP32S3-N16R8-0x0.bin;embedded_firmware" --add-data "firmware/vpn-gateway/dist-s3/smart-energy-vpn-USB-APP-ESP32S3-N16R8-0x10000.bin;embedded_firmware" --add-data "firmware/jk-esp32/dist/smart-jk-esp32-factory.bin;embedded_firmware" --add-data "firmware/jk-esp32/dist/smart-jk-esp32-app-only.bin;embedded_firmware" tools/windows-flasher/smart_energy_flasher.py
+          python -m PyInstaller --clean --noconfirm --onefile --windowed --name SmartEnergyFlasher --collect-all esptool --hidden-import serial.tools.list_ports --hidden-import voltronic_usb --add-data "firmware/vpn-gateway/dist/smart-energy-vpn-USB-FACTORY-ESP32-0x0.bin;embedded_firmware" --add-data "firmware/vpn-gateway/dist/smart-energy-vpn-USB-APP-ESP32-0x10000.bin;embedded_firmware" --add-data "firmware/vpn-gateway/dist-s3/smart-energy-vpn-USB-FACTORY-ESP32S3-N16R8-0x0.bin;embedded_firmware" --add-data "firmware/vpn-gateway/dist-s3/smart-energy-vpn-USB-APP-ESP32S3-N16R8-0x10000.bin;embedded_firmware" --add-data "firmware/jk-esp32/dist/smart-jk-esp32-factory.bin;embedded_firmware" --add-data "firmware/jk-esp32/dist/smart-jk-esp32-app-only.bin;embedded_firmware" --add-data "firmware/voltronic-esp32/dist/smart-energy-voltronic-S3-FACTORY-0x0.bin;embedded_firmware" --add-data "firmware/voltronic-esp32/dist/smart-energy-voltronic-S3-APP-0x10000.bin;embedded_firmware" tools/windows-flasher/smart_energy_flasher.py
           if ((Get-Item "dist/SmartEnergyFlasher.exe").Length -lt 3000000) { throw "All-in-one Windows EXE suspiciously small" }
       - name: Upload all-in-one Windows flasher
         uses: actions/upload-artifact@v4
