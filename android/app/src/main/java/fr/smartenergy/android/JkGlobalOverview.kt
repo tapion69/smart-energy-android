@@ -73,7 +73,7 @@ class JkGlobalOverview(private val ctx: Context) : LinearLayout(ctx) {
         }
     }
     private fun metric(label: String, value: String, warning: Boolean = false,
-                       source:String="") = LinearLayout(ctx).apply {
+                       source:String="", valueColor:Int?=null) = LinearLayout(ctx).apply {
         orientation = VERTICAL
         background = GradientDrawable().apply {
             setColor(Color.rgb(29, 45, 65)); cornerRadius=dp(10).toFloat()
@@ -81,7 +81,7 @@ class JkGlobalOverview(private val ctx: Context) : LinearLayout(ctx) {
         setPadding(dp(11),dp(10),dp(11),dp(10))
         gravity=Gravity.CENTER_VERTICAL
         addView(text(label,11f,muted))
-        addView(text(value,18f,if(warning) red else normal,true))
+        addView(text(value,18f,valueColor ?: (if(warning) red else normal),true))
         if(source.isNotBlank())addView(text(source,11f,muted))
     }
 
@@ -136,12 +136,23 @@ class JkGlobalOverview(private val ctx: Context) : LinearLayout(ctx) {
         val hottestSource=hottest?.let {
             it.label + if(allLive) "" else " · BMS en ligne seulement"
         } ?: ""
+        fun knownAlarm(values:JSONObject?):Boolean? {
+            if(values==null)return null
+            if(values.has("alarm_active") && !values.isNull("alarm_active"))
+                return values.optBoolean("alarm_active")
+            if(values.has("error_mask") && !values.isNull("error_mask"))
+                return (values.optLong("error_mask") and (1L shl 4).inv())!=0L
+            return null
+        }
         val alarmed=entries.filter {
-            it.optBoolean("available") && it.optJSONObject("values")?.optBoolean("alarm_active") == true
+            it.optBoolean("available") && knownAlarm(it.optJSONObject("values")) == true
+        }
+        val alarmComplete=allLive && entries.all {
+            knownAlarm(it.optJSONObject("values"))!=null
         }
         val alarms=when {
             alarmed.isNotEmpty() -> alarmed.size.toString()+" BMS"
-            !allLive -> "À vérifier"
+            !alarmComplete -> "À vérifier"
             else -> "Aucune"
         }
         val board=panel()
@@ -172,7 +183,12 @@ class JkGlobalOverview(private val ctx: Context) : LinearLayout(ctx) {
             78
         )
         gridRow(
-            metric("Alarmes",alarms,alarmed.isNotEmpty()),
+            metric("Alarmes",alarms,alarmed.isNotEmpty(),
+                valueColor=when {
+                    alarmed.isNotEmpty() -> red
+                    alarmComplete -> mint
+                    else -> muted
+                }),
             metric("Température max",hottestValue,
                 hottest?.celsius?.let { it>=55.0 } == true,hottestSource),
             90
