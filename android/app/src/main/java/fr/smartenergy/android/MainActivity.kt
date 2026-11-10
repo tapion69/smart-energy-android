@@ -3,6 +3,9 @@ package fr.smartenergy.android
 import android.Manifest
 import android.app.Activity
 import android.app.AlertDialog
+import android.app.Notification
+import android.app.NotificationChannel
+import android.app.NotificationManager
 import android.content.Intent
 import android.net.Uri
 import android.content.Context
@@ -427,6 +430,26 @@ class MainActivity : Activity() {
         }
     }
 
+    private fun sendAlarmTestNotification() {
+        if(Build.VERSION.SDK_INT>=33 &&
+           checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS)!=PackageManager.PERMISSION_GRANTED) {
+            alarmSettingsState.text="Autorise les notifications Android pour recevoir l'alerte de test."
+            requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS),318)
+            return
+        }
+        val manager=getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+        manager.createNotificationChannel(NotificationChannel(
+            JkAlarmMonitorService.CHANNEL_ALARMS,"Alarmes JK BMS",
+            NotificationManager.IMPORTANCE_HIGH))
+        manager.notify(3203,Notification.Builder(this,JkAlarmMonitorService.CHANNEL_ALARMS)
+            .setSmallIcon(android.R.drawable.ic_dialog_info)
+            .setContentTitle("Smart Energy : notification de test")
+            .setContentText("Test réussi côté application. Aucune alarme BMS n'a été provoquée.")
+            .setAutoCancel(true)
+            .build())
+        alarmSettingsState.text="Notification de test envoyée à Android."
+    }
+
     private fun rounded(color: Int) = GradientDrawable().apply {
         setColor(color)
         cornerRadius = d(14).toFloat()
@@ -782,6 +805,7 @@ class MainActivity : Activity() {
             setOnCheckedChangeListener { _,enabled -> setAlarmMonitoring(enabled) }
         }
         add(alerts,alarmNotificationSwitch,8)
+        add(alerts,action("Envoyer une notification de test") { sendAlarmTestNotification() },6)
         alarmSettingsState=label("Notifications désactivées",12f,false,subdued)
         add(alerts,alarmSettingsState,6)
         add(alerts,label("Android affiche une notification permanente pendant la surveillance. "+
