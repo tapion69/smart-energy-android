@@ -69,7 +69,8 @@ def flash_precompiled(port: str, image: Path, mode: str,
 
 def provision_over_serial(port: str, values: dict[str, str],
                           log: Callable[[str], None],
-                          timeout_seconds: int = 50) -> None:
+                          timeout_seconds: int = 50,
+                          on_ready: Callable[[], None] | None = None) -> None:
     """Never echoes passwords, tokens or the JSON payload into logs."""
     payload = format_usb_configuration(values)
     deadline = time.monotonic() + timeout_seconds
@@ -110,6 +111,8 @@ def provision_over_serial(port: str, values: dict[str, str],
                 "Sur une passerelle déjà associée, redémarre puis maintiens "
                 "BOOT pendant 3 secondes au démarrage pour autoriser la modification."
             )
+        if on_ready is not None:
+            on_ready()
         ser.write(payload)
         ser.flush()
         confirmation_deadline = time.monotonic() + 10
