@@ -14,6 +14,7 @@ import android.net.NetworkCapabilities
 import android.os.Build
 import android.os.IBinder
 import android.util.Base64
+import org.json.JSONArray
 import org.json.JSONObject
 import java.net.HttpURLConnection
 import java.net.URL
@@ -27,12 +28,14 @@ import javax.crypto.spec.GCMParameterSpec
 
 /**
  * Opt-in foreground monitoring of cached JK readings, not a BLE reader.
- * No measurements or history are persisted; only alarm transitions notify.
+ * No measurements or history are persisted; only transitions across configured
+ * SOC, cell, temperature or BMS alarm thresholds notify.
  * Android may still stop the service; force-stop and lost connectivity prevent alerts.
  */
 class JkAlarmMonitorService : Service() {
     companion object {
         const val ACTION_STOP = "fr.smartenergy.android.STOP_MONITOR"
+        const val ACTION_RELOAD = "fr.smartenergy.android.RELOAD_MONITOR"
         const val CHANNEL_RUNNING = "smart_energy_monitor"
         const val CHANNEL_ALARMS = "smart_energy_bms_alarms"
         private const val SERVICE_ID = 3201
@@ -44,6 +47,10 @@ class JkAlarmMonitorService : Service() {
     }
     private var scheduler: ScheduledExecutorService? = null
     private val reported = mutableSetOf<String>()
+    private val temperatureNames = listOf(
+        "Sonde 1" to "temp1_c", "Sonde 2" to "temp2_c",
+        "Sonde 3" to "temp3_c", "Sonde 4" to "temp4_c",
+        "Sonde 5" to "temp5_c", "MOS" to "mos_temp_c")
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -57,7 +64,7 @@ class JkAlarmMonitorService : Service() {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        if (intent?.action == ACTION_STOP || !prefs.getBoolean("bms_alarm_notifications", false)) {
+        if (intent?.action == ACTION_STOP || !prefs.getBoolean(JkAlertPreferences.MONITOR, false)) {
             stopSelf()
             return START_NOT_STICKY
         }
@@ -66,7 +73,7 @@ class JkAlarmMonitorService : Service() {
             startForeground(SERVICE_ID, Notification.Builder(this, CHANNEL_RUNNING)
                 .setSmallIcon(android.R.drawable.ic_dialog_info)
                 .setContentTitle("Smart Energy : surveillance active")
-                .setContentText("Vérification des alarmes JK toutes les 30 secondes")
+                .setContentText("Alarmes, SOC, cellules et températures · toutes les 30 s")
                 .setContentIntent(openAppIntent())
                 .setOngoing(true)
                 .build())
@@ -77,10 +84,16 @@ class JkAlarmMonitorService : Service() {
         if (scheduler == null) {
             scheduler = Executors.newSingleThreadScheduledExecutor()
             scheduler?.scheduleWithFixedDelay({
-                try { checkAlarms() } catch (_: Exception) {
+                try { checkThresholds() } catch (_: Exception) {
                     // A network or permission failure must not create a false alarm.
                 }
             }, 0, 30, TimeUnit.SECONDS)
+        } else if (intent?.action == ACTION_RELOAD) {
+            // Explicit rule save: reset one-shot state and check new rules now.
+            scheduler?.execute {
+                reported.clear()
+                try { checkThresholds() } catch (_: Exception) {}
+            }
         }
         return START_STICKY
     }
@@ -166,52 +179,131 @@ class JkAlarmMonitorService : Service() {
         } finally { connection.disconnect() }
     }
 
-    private fun checkAlarms() {
-        val vpn = vpnConnected()
-        for (slot in 1..3) {
-            if (Thread.currentThread().isInterrupted ||
-                !prefs.getBoolean("bms_alarm_notifications", false)) return
-            // Skip a reader without pairing data; no network discovery in background.
-            if (pref(slot, "device_id").isBlank()) continue
-            val response = try { read(slot, vpn) } catch (_: Exception) { null }
-                ?: continue
-            val devices = response.optJSONArray("devices") ?: continue
-            for (index in 0 until devices.length()) {
-                val bms = devices.optJSONObject(index) ?: continue
-                if (!bms.optBoolean("available")) continue
-                val values = bms.optJSONObject("values") ?: continue
-                val mac = bms.optString("mac")
-                if (mac.isBlank()) continue
-                val active: Boolean = when {
-                    values.has("error_mask") && !values.isNull("error_mask") ->
-                        values.optLong("error_mask", 0L) != 0L
-                    values.has("alarm_active") -> values.optBoolean("alarm_active")
-                    else -> continue
-                }
-                val identity = "${slot}:${mac}"
-                if (active && reported.add(identity)) {
-                    val custom = prefs.getString("bms_name_" + mac.replace(":", ""), "")
-                        ?.takeIf { it.isNotBlank() }
-                    notifyAlarm(identity, custom ?: "Batt-${index+1}")
-                } else if (!active) reported.remove(identity)
-            }
-        }
+    private fun registeredMacs(slot: Int): List<String> = try {
+        val raw = pref(slot, "paired_bms_json")
+        val list = JSONArray(raw.ifBlank { "[]" })
+        (0 until list.length()).mapNotNull {
+            list.optString(it).takeIf { mac -> mac.isNotBlank() }
+        }.distinct()
+    } catch (_: Exception) { emptyList() }
+
+    private fun validNumber(values: JSONObject, key: String): Double? {
+        if (!values.has(key) || values.isNull(key)) return null
+        return values.optDouble(key, Double.NaN).takeIf { it.isFinite() }
     }
 
-    private fun notifyAlarm(identity: String, name: String) {
+    private fun parseBattery(
+        slot: Int, record: JSONObject, defaultName: String
+    ): JkBatteryReading? {
+        val mac = record.optString("mac")
+        if (mac.isBlank()) return null
+        val values = record.optJSONObject("values")
+        val fresh = record.optBoolean("available") && values != null
+        val name = prefs.getString("bms_name_" + mac.replace(":", ""), "")
+            ?.takeIf { it.isNotBlank() } ?: defaultName
+        val socValue = values?.let { validNumber(it, "soc_pct") }
+        val soc = socValue?.takeIf { it in 0.0..100.0 }?.toInt()
+        val capacity = values?.let { validNumber(it, "nominal_capacity_ah") }
+        val alarm: Boolean? = when {
+            values == null -> null
+            values.has("alarm_active") && !values.isNull("alarm_active") ->
+                values.optBoolean("alarm_active")
+            values.has("error_mask") && !values.isNull("error_mask") ->
+                (values.optLong("error_mask") and (1L shl 4).inv()) != 0L
+            else -> null
+        }
+        val cells = values?.optJSONArray("cells")?.let { list ->
+            (0 until list.length()).mapNotNull { idx ->
+                val cell = list.optJSONObject(idx) ?: return@mapNotNull null
+                val voltage = validNumber(cell,"voltage_v") ?: return@mapNotNull null
+                JkCellReading(cell.optInt("number",-1),voltage)
+            }
+        } ?: emptyList()
+        val temps = values?.let { v ->
+            temperatureNames.mapNotNull { (name,key) ->
+                val value = validNumber(v,key) ?: return@mapNotNull null
+                JkProbeReading(name,value)
+            }
+        } ?: emptyList()
+        return JkBatteryReading(
+            "$slot:$mac", name, soc, capacity, cells, temps, alarm, fresh)
+    }
+
+    private fun thresholds(): JkAlertThresholds = JkAlertThresholds(
+        alarmEnabled=prefs.getBoolean(JkAlertPreferences.ALARM,true),
+        globalSocEnabled=prefs.getBoolean(JkAlertPreferences.GLOBAL_SOC,false),
+        globalSocBelow=prefs.getInt(JkAlertPreferences.GLOBAL_SOC_THRESHOLD,20).coerceIn(1,100),
+        bmsSocEnabled=prefs.getBoolean(JkAlertPreferences.BMS_SOC,false),
+        bmsSocBelow=prefs.getInt(JkAlertPreferences.BMS_SOC_THRESHOLD,20).coerceIn(1,100),
+        cellHighEnabled=prefs.getBoolean(JkAlertPreferences.CELL_HIGH,false),
+        cellAboveV=prefs.getFloat(JkAlertPreferences.CELL_HIGH_THRESHOLD,3.5f)
+            .toDouble().coerceIn(2.0,4.5),
+        tempHighEnabled=prefs.getBoolean(JkAlertPreferences.TEMP_HIGH,false),
+        tempAboveC=prefs.getFloat(JkAlertPreferences.TEMP_HIGH_THRESHOLD,50.0f)
+            .toDouble().coerceIn(0.0,120.0)
+    )
+
+    private fun checkThresholds() {
+        if (!prefs.getBoolean(JkAlertPreferences.MONITOR,false)) return
+        val vpn = vpnConnected()
+        val configured = (1..3).associateWith { registeredMacs(it) }
+        val expectedCount = configured.values.sumOf { it.size }
+        // Stable numbering across readers, regardless of the selected settings tab.
+        val names = mutableMapOf<String,Int>()
+        var nextNumber = 1
+        for (slot in 1..3)
+            for (mac in configured[slot].orEmpty())
+                names["$slot:$mac"] = nextNumber++
+        val samples = mutableListOf<JkBatteryReading>()
+        for (slot in 1..3) {
+            if (Thread.currentThread().isInterrupted ||
+                !prefs.getBoolean(JkAlertPreferences.MONITOR,false)) return
+            if (configured[slot].isNullOrEmpty() && pref(slot,"device_id").isBlank()) continue
+            val reply = try { read(slot,vpn) } catch (_: Exception) { null } ?: continue
+            val records = reply.optJSONArray("devices") ?: continue
+            val macs = configured[slot].orEmpty()
+            for (index in 0 until records.length()) {
+                val record=records.optJSONObject(index) ?: continue
+                val mac=record.optString("mac")
+                if(macs.isNotEmpty() && mac !in macs) continue
+                val name="Batt-${names["$slot:$mac"] ?: (index+1)}"
+                parseBattery(slot,record,name)?.let { samples += it }
+            }
+        }
+        val options = thresholds()
+        val result = JkAlertRules.evaluate(samples,expectedCount,options)
+        val activeKeys = result.active.map { it.key }.toSet()
+        // Clear only after a genuinely fresh measurement has returned to normal.
+        // Unreachable readers cannot reset state and trigger false repeats.
+        reported.removeAll { key ->
+            val disabled=(key=="soc-global" && !options.globalSocEnabled) ||
+                (key.startsWith("alarm:") && !options.alarmEnabled) ||
+                (key.startsWith("soc:") && !options.bmsSocEnabled) ||
+                (key.startsWith("cell:") && !options.cellHighEnabled) ||
+                (key.startsWith("temp:") && !options.tempHighEnabled)
+            disabled || (key in result.evaluatedKeys && key !in activeKeys)
+        }
+        for (event in result.active)
+            if (event.key !in reported && notifyAlert(event))
+                reported += event.key
+    }
+
+    private fun notifyAlert(event: JkAlertEvent): Boolean {
         if (Build.VERSION.SDK_INT >= 33 &&
             checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) !=
-                PackageManager.PERMISSION_GRANTED) return
+                PackageManager.PERMISSION_GRANTED) return false
         val notification = Notification.Builder(this, CHANNEL_ALARMS)
             .setSmallIcon(android.R.drawable.ic_dialog_alert)
-            .setContentTitle("Alarme JK BMS : ${name}")
-            .setContentText("Une alarme est active. Ouvre Smart Energy pour consulter le détail.")
+            .setContentTitle(event.title)
+            .setContentText(event.message)
+            .setStyle(Notification.BigTextStyle().bigText(event.message))
             .setContentIntent(openAppIntent())
             .setAutoCancel(true)
-            .setCategory(Notification.CATEGORY_ALARM)
+            .setCategory(Notification.CATEGORY_STATUS)
             .build()
         (getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager)
-            .notify(identity, 3202, notification)
+            .notify(event.key, 3202, notification)
+        return true
     }
 
     override fun onDestroy() {
