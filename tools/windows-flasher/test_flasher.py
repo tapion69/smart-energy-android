@@ -64,7 +64,7 @@ class FlasherTests(unittest.TestCase):
 
     def test_invalid_serial_labels_rejected(self):
         for item in ("", "ttyUSB0", "COM5 && erase_flash", "COM5 — ",
-                     "COM5 — device\\nrm"):
+                     "COM5 — device\nrm"):
             with self.subTest(item=item):
                 with self.assertRaises(ValueError):
                     selected_serial_port(item)
