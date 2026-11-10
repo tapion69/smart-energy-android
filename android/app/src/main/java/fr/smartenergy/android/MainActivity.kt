@@ -421,7 +421,7 @@ class MainActivity : Activity() {
             if(enabled) startAlarmMonitoringService()
             else stopService(Intent(this,JkAlarmMonitorService::class.java))
             alarmSettingsState.text=if(enabled)
-                "Surveillance activée · vérification toutes les 30 secondes"
+                "Surveillance activée · contrôle des seuils toutes les 30 secondes"
                 else "Surveillance désactivée"
         } catch(ex:Exception) {
             prefs.edit().putBoolean("bms_alarm_notifications",false).apply()
@@ -793,27 +793,130 @@ class MainActivity : Activity() {
         add(advanced, label("BLE multi-batteries, OTA et accès distant : fonctions en développement.", 12f, color = subdued), 12)
 
         add(settingsPage,label("Réglages de l'application",25f,true),16)
-        val alerts=section(settingsPage,"Notifications des alarmes JK",true)
-        add(alerts,label("La surveillance continue lorsque tu quittes l'écran de l'application, "+
-            "avec un service Android visible. L'ESP32 ne conserve aucun historique : "+
-            "l'application vérifie seulement ses mesures actuelles toutes les 30 secondes.",
-            13f,color=subdued))
+        val alerts=section(settingsPage,"Notifications et seuils JK",true)
+        add(alerts,label(
+            "Surveillance de tous les BMS configurés sur ESP 1, 2 et 3, "+
+            "même lorsque Smart Energy n'est plus à l'écran. Vérification "+
+            "toutes les 30 secondes, sans enregistrer d'historique sur "+
+            "le téléphone ou les ESP32.",13f,color=subdued))
         alarmNotificationSwitch=CheckBox(this).apply {
-            text="M'avertir lorsqu'un BMS passe en alarme"
+            text="Activer la surveillance en arrière-plan"
             setTextColor(normal)
-            isChecked=prefs.getBoolean("bms_alarm_notifications",false)
+            isChecked=prefs.getBoolean(JkAlertPreferences.MONITOR,false)
             setOnCheckedChangeListener { _,enabled -> setAlarmMonitoring(enabled) }
         }
         add(alerts,alarmNotificationSwitch,8)
-        add(alerts,action("Envoyer une notification de test") { sendAlarmTestNotification() },6)
+        fun alertCheck(textValue:String,key:String,default:Boolean=false)=
+            CheckBox(this).apply {
+                text=textValue
+                setTextColor(normal)
+                isChecked=prefs.getBoolean(key,default)
+            }
+        fun thresholdField(hintText:String,value:String):EditText =
+            input(hintText).apply {
+                setText(value)
+                inputType=android.text.InputType.TYPE_CLASS_NUMBER or
+                    android.text.InputType.TYPE_NUMBER_FLAG_DECIMAL
+                setSelectAllOnFocus(true)
+            }
+        val alarmRule=alertCheck("Alarmes signalées par les BMS",
+            JkAlertPreferences.ALARM,true)
+        add(alerts,alarmRule,8)
+        val globalRule=alertCheck("SOC global inférieur au seuil (%)",
+            JkAlertPreferences.GLOBAL_SOC)
+        add(alerts,globalRule,8)
+        val globalField=thresholdField("SOC global minimum (%)",
+            prefs.getInt(JkAlertPreferences.GLOBAL_SOC_THRESHOLD,20).toString())
+        add(alerts,globalField,4)
+        val bmsRule=alertCheck("SOC de chaque BMS inférieur au seuil (%)",
+            JkAlertPreferences.BMS_SOC)
+        add(alerts,bmsRule,8)
+        val bmsField=thresholdField("SOC BMS minimum (%)",
+            prefs.getInt(JkAlertPreferences.BMS_SOC_THRESHOLD,20).toString())
+        add(alerts,bmsField,4)
+        val cellRule=alertCheck("Tension d'une cellule supérieure au seuil (V)",
+            JkAlertPreferences.CELL_HIGH)
+        add(alerts,cellRule,8)
+        val cellField=thresholdField("Seuil maximum cellule (ex. 3,500 V)",
+            String.format(Locale.FRANCE,"%.3f",
+                prefs.getFloat(JkAlertPreferences.CELL_HIGH_THRESHOLD,3.5f)))
+        add(alerts,cellField,4)
+        val tempRule=alertCheck("Température d'une sonde ou du MOS supérieure au seuil (°C)",
+            JkAlertPreferences.TEMP_HIGH)
+        add(alerts,tempRule,8)
+        val tempField=thresholdField("Seuil température (°C)",
+            String.format(Locale.FRANCE,"%.1f",
+                prefs.getFloat(JkAlertPreferences.TEMP_HIGH_THRESHOLD,50f)))
+        add(alerts,tempField,4)
+        val thresholdFeedback=label(
+            "Les seuils sont désactivés par défaut. "+
+            "Un franchissement génère une notification avec la batterie, "+
+            "la valeur et la cellule ou sonde concernée.",12f,false,subdued)
+        add(alerts,thresholdFeedback,8)
+        add(alerts,action("Enregistrer les seuils et alertes") {
+            val global=JkAlertPreferences.soc(globalField.text.toString())
+            val bms=JkAlertPreferences.soc(bmsField.text.toString())
+            val cell=JkAlertPreferences.cell(cellField.text.toString())
+            val temp=JkAlertPreferences.temperature(tempField.text.toString())
+            when {
+                global==null -> thresholdFeedback.text=
+                    "SOC global : saisis un entier de 1 à 100 %."
+                bms==null -> thresholdFeedback.text=
+                    "SOC BMS : saisis un entier de 1 à 100 %."
+                cell==null -> thresholdFeedback.text=
+                    "Tension cellule : saisis une valeur de 2,000 à 4,500 V."
+                temp==null -> thresholdFeedback.text=
+                    "Température : saisis une valeur de 0 à 120 °C."
+                else -> {
+                    prefs.edit()
+                        .putBoolean(JkAlertPreferences.ALARM,alarmRule.isChecked)
+                        .putBoolean(JkAlertPreferences.GLOBAL_SOC,globalRule.isChecked)
+                        .putInt(JkAlertPreferences.GLOBAL_SOC_THRESHOLD,global)
+                        .putBoolean(JkAlertPreferences.BMS_SOC,bmsRule.isChecked)
+                        .putInt(JkAlertPreferences.BMS_SOC_THRESHOLD,bms)
+                        .putBoolean(JkAlertPreferences.CELL_HIGH,cellRule.isChecked)
+                        .putFloat(JkAlertPreferences.CELL_HIGH_THRESHOLD,cell.toFloat())
+                        .putBoolean(JkAlertPreferences.TEMP_HIGH,tempRule.isChecked)
+                        .putFloat(JkAlertPreferences.TEMP_HIGH_THRESHOLD,temp.toFloat())
+                        .apply()
+                    thresholdFeedback.text="Seuils enregistrés pour tous les BMS. "+
+                        "Les nouvelles règles sont prises en compte par la surveillance."
+                    if(prefs.getBoolean(JkAlertPreferences.MONITOR,false)) {
+                        try {
+                            val request=Intent(this,JkAlarmMonitorService::class.java)
+                                .setAction(JkAlarmMonitorService.ACTION_RELOAD)
+                            if(Build.VERSION.SDK_INT>=26)startForegroundService(request)
+                            else startService(request)
+                        }catch(ex:Exception) {
+                            thresholdFeedback.text="Seuils enregistrés. "+
+                                "Relance la surveillance : ${ex.javaClass.simpleName}."
+                        }
+                    }
+                }
+            }
+        },8)
+        add(alerts,action("Envoyer une notification de test") {
+            sendAlarmTestNotification()
+        },6)
         alarmSettingsState=label("Notifications désactivées",12f,false,subdued)
         add(alerts,alarmSettingsState,6)
-        add(alerts,label("Android affiche une notification permanente pendant la surveillance. "+
-            "Les restrictions batterie, une fermeture forcée de l'application, une perte de "+
-            "réseau ou un VPN indisponible peuvent interrompre les alertes. "+
-            "Aucun serveur distant ni historique n'est utilisé.",12f,color=subdued))
-        alarmSettingsState.text=if(prefs.getBoolean("bms_alarm_notifications",false))
-            "Surveillance demandée · une notification permanente indique son activité"
+        add(alerts,label(
+            "SOC : alerte strictement sous le seuil. Cellule/température : "+
+            "alerte strictement au-dessus. Pour un test sans risque, règle "+
+            "temporairement un seuil qui est déjà franchi, enregistre, "+
+            "active la surveillance puis ferme l'écran de l'application "+
+            "(sans forcer son arrêt). Rétablis ensuite le seuil souhaité. "+
+            "Android doit autoriser les notifications et le service actif.",
+            12f,color=subdued))
+        add(alerts,label(
+            "Une seule notification par seuil franchi et par BMS ; pas "+
+            "de répétition tant que la condition reste active. "+
+            "La perte Wi-Fi, l'absence de VPN et les restrictions batterie "+
+            "peuvent empêcher la surveillance. "+
+            "Le SOC global exige les données fraîches de TOUS les BMS configurés.",
+            12f,color=subdued))
+        alarmSettingsState.text=if(prefs.getBoolean(JkAlertPreferences.MONITOR,false))
+            "Surveillance demandée · vérifier la notification permanente Android"
             else "Surveillance désactivée"
 
         val enabled = false
