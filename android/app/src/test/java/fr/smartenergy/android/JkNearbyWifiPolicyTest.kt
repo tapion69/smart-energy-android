@@ -22,6 +22,21 @@ class JkNearbyWifiPolicyTest {
         assertTrue(JkNearbyWifiPolicy.isFresh(old.copy(ageMs=1_000)))
     }
 
+    @Test fun oneFreshUnclaimedDeviceIsSelectedForEsp2Only() {
+        val saved=mapOf(1 to "SmartJK-Setup-A1B2C3",2 to "",3 to "")
+        val discovered=listOf(
+            JkNearbyWifi("SmartJK-Setup-A1B2C3",-42,500),
+            JkNearbyWifi("SmartJK-Setup-45FA19",-56,1400),
+            JkNearbyWifi("SmartJK-Setup-123456",-78,90000)
+        )
+        assertEquals("SmartJK-Setup-45FA19",
+            JkNearbyWifiPolicy.uniqueFreshUnclaimed(discovered,2,saved)?.ssid)
+        assertNull(JkNearbyWifiPolicy.uniqueFreshUnclaimed(
+            listOf(discovered[0]),2,saved))
+        assertNull(JkNearbyWifiPolicy.uniqueFreshUnclaimed(
+            listOf(discovered[1],discovered[1].copy(ssid="SmartJK-Setup-81AF40")),2,saved))
+    }
+
     @Test fun firstReaderIsNeverAutoAssignedToSecondSlot() {
         val saved=mapOf(1 to "SmartJK-Setup-A1B2C3", 2 to "")
         assertEquals(1,JkNearbyWifiPolicy.assignedToAnotherSlot(
