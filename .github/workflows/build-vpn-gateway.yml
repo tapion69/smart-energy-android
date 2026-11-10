@@ -5,6 +5,7 @@ on:
     paths:
       - 'firmware/vpn-gateway/**'
       - 'tools/windows-flasher/**'
+      - 'firmware/jk-esp32/**'
       - '.github/workflows/build-vpn-gateway.yml'
   workflow_dispatch:
 
@@ -70,9 +71,49 @@ jobs:
           if-no-files-found: error
           retention-days: 30
 
+  jk:
+    name: Build classic ESP32 JK firmware for all-in-one installer
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Compile known-good JK ESP32 firmware
+        run: |
+          python -m pip install "platformio==6.1.18"
+          python firmware/jk-esp32/tests/test_ble_manager_architecture.py
+          python firmware/jk-esp32/tests/test_settings_cadence.py
+          pio run -d firmware/jk-esp32
+      - name: Prepare factory and app-only JK binaries
+        run: |
+          set -euo pipefail
+          mkdir -p firmware/jk-esp32/dist
+          FRAMEWORK="$HOME/.platformio/packages/framework-arduinoespressif32"
+          TOOL="$HOME/.platformio/packages/tool-esptoolpy/esptool.py"
+          python "$TOOL" --chip esp32 merge_bin \
+            -o firmware/jk-esp32/dist/smart-jk-esp32-factory.bin \
+            --flash_mode dio --flash_freq 40m --flash_size 4MB \
+            0x1000 firmware/jk-esp32/.pio/build/esp32dev/bootloader.bin \
+            0x8000 firmware/jk-esp32/.pio/build/esp32dev/partitions.bin \
+            0xe000 "$FRAMEWORK/tools/partitions/boot_app0.bin" \
+            0x10000 firmware/jk-esp32/.pio/build/esp32dev/firmware.bin
+          cp firmware/jk-esp32/.pio/build/esp32dev/firmware.bin \
+            firmware/jk-esp32/dist/smart-jk-esp32-app-only.bin
+          test -s firmware/jk-esp32/dist/smart-jk-esp32-factory.bin
+          test -s firmware/jk-esp32/dist/smart-jk-esp32-app-only.bin
+      - uses: actions/upload-artifact@v4
+        with:
+          name: SmartEnergy-JK-ESP32-USB-PRECOMPILED
+          path: |
+            firmware/jk-esp32/dist/smart-jk-esp32-factory.bin
+            firmware/jk-esp32/dist/smart-jk-esp32-app-only.bin
+          if-no-files-found: error
+          retention-days: 30
+
   windows-bundle:
-    name: Build one-click Windows kit with VPN firmware embedded
-    needs: esp32
+    name: Build all-in-one Windows flasher with JK and VPN firmwares
+    needs: [esp32, jk]
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
@@ -80,6 +121,10 @@ jobs:
         with:
           name: SmartEnergy-VPN-ESP32-USB-PRECOMPILED
           path: firmware/vpn-gateway/dist
+      - uses: actions/download-artifact@v4
+        with:
+          name: SmartEnergy-JK-ESP32-USB-PRECOMPILED
+          path: firmware/jk-esp32/dist
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
@@ -90,14 +135,14 @@ jobs:
         shell: pwsh
         working-directory: tools/windows-flasher
         run: python -m unittest discover -p "test_*.py" -v
-      - name: Package one EXE with generic ESP32 VPN factory and app firmware
+      - name: Package one EXE with both JK and VPN factory/update firmwares
         shell: pwsh
         run: |
-          python -m PyInstaller --clean --noconfirm --onefile --windowed --name SmartEnergyVPNFlasher --collect-all esptool --hidden-import serial.tools.list_ports --add-data "firmware/vpn-gateway/dist/smart-energy-vpn-USB-FACTORY-ESP32-0x0.bin;embedded_firmware" --add-data "firmware/vpn-gateway/dist/smart-energy-vpn-USB-APP-ESP32-0x10000.bin;embedded_firmware" tools/windows-flasher/smart_energy_flasher.py
-          if ((Get-Item "dist/SmartEnergyVPNFlasher.exe").Length -lt 2000000) { throw "EXE too small" }
-      - name: Upload one-click Windows VPN setup executable
+          python -m PyInstaller --clean --noconfirm --onefile --windowed --name SmartEnergyFlasher --collect-all esptool --hidden-import serial.tools.list_ports --add-data "firmware/vpn-gateway/dist/smart-energy-vpn-USB-FACTORY-ESP32-0x0.bin;embedded_firmware" --add-data "firmware/vpn-gateway/dist/smart-energy-vpn-USB-APP-ESP32-0x10000.bin;embedded_firmware" --add-data "firmware/jk-esp32/dist/smart-jk-esp32-factory.bin;embedded_firmware" --add-data "firmware/jk-esp32/dist/smart-jk-esp32-app-only.bin;embedded_firmware" tools/windows-flasher/smart_energy_flasher.py
+          if ((Get-Item "dist/SmartEnergyFlasher.exe").Length -lt 3000000) { throw "All-in-one Windows EXE suspiciously small" }
+      - name: Upload all-in-one Windows flasher
         uses: actions/upload-artifact@v4
         with:
-          name: SmartEnergyVPNFlasher-Windows-ESP32-Firmware-Included
-          path: dist/SmartEnergyVPNFlasher.exe
+          name: SmartEnergyFlasher-Windows-AllInOne-JK-VPN
+          path: dist/SmartEnergyFlasher.exe
           retention-days: 30
