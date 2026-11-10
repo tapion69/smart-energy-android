@@ -93,6 +93,29 @@ def valid_serial_port(port: str) -> bool:
     return bool(re.fullmatch(r"COM[1-9][0-9]*", port.strip().upper()))
 
 
+def selected_serial_port(selection: str) -> str:
+    """Safely recover a COM port from a dropdown label, never a shell command."""
+    match = re.fullmatch(
+        r"(COM[1-9][0-9]*)(?:\\s+—\\s+[^\\r\\n]+)?",
+        selection.strip(), flags=re.IGNORECASE
+    )
+    if not match:
+        raise ValueError("Choisis un port COM dans la liste déroulante.")
+    return match.group(1).upper()
+
+
+def serial_port_label(device: str, description: str) -> str:
+    """Show a short, human-readable device name without a serial number."""
+    if not valid_serial_port(device):
+        raise ValueError("Port COM invalide.")
+    short_description = " ".join(description.split())[:66]
+    if not short_description or short_description.lower() in (
+        "n/a", "unknown", "périphérique inconnu"
+    ):
+        return device.upper()
+    return f"{device.upper()} — {short_description}"
+
+
 class Flasher(tk.Tk):
     def __init__(self) -> None:
         super().__init__()
@@ -143,11 +166,20 @@ class Flasher(tk.Tk):
         ).pack(anchor="w", pady=(0, 8))
         connection = ttk.Frame(outer)
         connection.pack(fill="x")
+        connection.columnconfigure(1, weight=1)
         self._label(connection, "Port série USB :", 0)
-        self._entry(connection, self.port, 0, width=18)
-        ttk.Button(connection, text="Détecter", command=self._ports).grid(
+        self.port_combo = ttk.Combobox(
+            connection, textvariable=self.port, state="readonly",
+            width=48, postcommand=self._ports
+        )
+        self.port_combo.grid(row=0, column=1, sticky="ew", padx=8, pady=5)
+        ttk.Button(connection, text="↻ Actualiser", command=self._ports).grid(
             row=0, column=2, padx=6
         )
+        self.port_hint = ttk.Label(connection,
+            text="Branche un seul ESP32 à la fois, puis choisis son port USB.")
+        self.port_hint.grid(row=1, column=0, columnspan=3,
+                            sticky="w", padx=8, pady=(0, 4))
         tabs = ttk.Notebook(outer)
         tabs.pack(fill="both", expand=True, pady=10)
         jk = ttk.Frame(tabs, padding=12)
@@ -162,15 +194,52 @@ class Flasher(tk.Tk):
         self.log_widget = tk.Text(outer, height=10, wrap="word", state="disabled")
         self.log_widget.pack(fill="x")
         self._log("Le bouton Flash ne lance jamais erase_flash.")
+        self._ports()
 
     def _ports(self) -> None:
+        """Refresh dropdown on launch, button click and just before opening it."""
         try:
             from serial.tools import list_ports
-            choices = [p.device for p in list_ports.comports()]
-            if len(choices) == 1:
+            devices = sorted(
+                (p for p in list_ports.comports() if valid_serial_port(p.device)),
+                key=lambda p: int(p.device.upper()[3:])
+            )
+            choices = [serial_port_label(p.device, p.description or "") for p in devices]
+            previous = self.port.get()
+            previous_com = ""
+            if previous:
+                try:
+                    previous_com = selected_serial_port(previous)
+                except ValueError:
+                    pass
+            self.port_combo.configure(values=choices)
+            retained = next(
+                (label for label in choices
+                 if selected_serial_port(label) == previous_com), ""
+            )
+            if retained:
+                self.port.set(retained)
+            elif not previous and len(choices) == 1:
+                # Only one board: convenient initial selection.
                 self.port.set(choices[0])
-            messagebox.showinfo("Ports USB", "\n".join(choices) or "Aucun port détecté.")
+            else:
+                # An unplugged port must never silently switch to another board.
+                self.port.set("")
+            if not choices:
+                self.port_hint.configure(
+                    text="Aucun port COM : branche l'ESP32 avec un câble USB données, "
+                         "puis clique Actualiser."
+                )
+            elif len(choices) == 1:
+                self.port_hint.configure(text="1 port COM détecté. Vérifie qu'il s'agit "
+                    "du bon ESP32 avant de flasher.")
+            else:
+                self.port_hint.configure(text=f"{len(choices)} ports COM détectés. "
+                    "Sélectionne celui du bon ESP32 ; aucun choix automatique.")
         except Exception as exc:
+            self.port_combo.configure(values=())
+            self.port.set("")
+            self.port_hint.configure(text="Impossible de lire les ports COM.")
             messagebox.showerror("Ports", f"Erreur de détection : {exc}")
 
     def _build_jk(self, root: ttk.Frame) -> None:
@@ -242,9 +311,13 @@ class Flasher(tk.Tk):
     def _assert_ready(self) -> str:
         if self.busy:
             raise ValueError("Une opération est déjà en cours.")
-        port = self.port.get().strip().upper()
-        if not valid_serial_port(port):
-            raise ValueError("Sélectionne un port USB COM valide.")
+        port = selected_serial_port(self.port.get())
+        from serial.tools import list_ports
+        available = {p.device.upper() for p in list_ports.comports()}
+        if port not in available:
+            self._ports()
+            raise ValueError("Ce port COM n'est plus connecté. "
+                             "Reconnecte l'ESP32 et actualise la liste.")
         return port
 
     def _flash_jk(self) -> None:
