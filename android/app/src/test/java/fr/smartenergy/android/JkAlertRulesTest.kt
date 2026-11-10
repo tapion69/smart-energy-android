@@ -28,7 +28,8 @@ class JkAlertRulesTest {
             it.message.contains("Cellule 7") && it.message.contains("3,510 V") })
         assertTrue(result.active.any { it.key=="temp:reader-2:BMS-4" &&
             it.message.contains("Batt-4") && it.message.contains("55,0") })
-        assertFalse(result.active.any { it.key=="soc-global" })
+        assertTrue(result.active.any { it.key=="soc-global" &&
+            it.message.contains("SOC global") })
     }
 
     @Test fun globalSocRequiresAllConfiguredFreshReadings() {
