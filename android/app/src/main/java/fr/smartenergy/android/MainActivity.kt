@@ -119,6 +119,7 @@ class MainActivity : Activity() {
     private var activeReaderSlot = 1
     private lateinit var readerSelector: LinearLayout
     private lateinit var readerHeader: TextView
+    private lateinit var pairingStatus: TextView
     private var selectedBmsMac = "" // empty = global overview if multiple BMS
     private var mountedBmsMac = ""
     private lateinit var bmsTabStrip: android.widget.HorizontalScrollView
@@ -528,9 +529,39 @@ class MainActivity : Activity() {
         add(readers,label("Trois lecteurs JK indépendants, soit jusqu'à six BMS. Sélectionne un lecteur avant de l'associer, le configurer ou choisir ses batteries.",12f,color=subdued))
         readerSelector=LinearLayout(this).apply { orientation=LinearLayout.HORIZONTAL }
         add(readers,readerSelector,6)
-        readerHeader=label("",13f,false,subdued)
+        readerHeader=label("",13f,false,normal)
         add(readers,readerHeader,8)
         refreshReaderSelector()
+
+        // Keep the pairing controls together, immediately under the reader
+        // selector. Both the scan and BOOT pairing act on the chosen slot.
+        val assistant=section(advanced,"Associer le lecteur sélectionné")
+        add(assistant,label("1. Choisis ESP 1, ESP 2 ou ESP 3 ci-dessus. "+
+            "Chaque lecteur garde son propre code, Wi-Fi et ses deux batteries.",12f,color=subdued))
+        autoEspBtn=action("1 · Rechercher mon ESP32") { findNearbyEsp32() }
+        add(assistant,autoEspBtn,8)
+        apName=input("SmartJK-Setup-XXXXXX (réseau du lecteur choisi)")
+        apName.setText(prefs.getString("setup_ssid","") ?: "")
+        add(assistant,apName,6)
+        pairingStatus=label("ESP $activeReaderSlot sélectionné. "+
+            "Recherche son réseau SmartJK-Setup, puis associe-le avec BOOT.",13f,false,mint)
+        add(assistant,pairingStatus,8)
+        add(assistant,label("2. Sur cet ESP32 déjà allumé, maintiens BOOT "+
+            "pendant 4 secondes, puis relâche. Le Wi-Fi temporaire "+
+            "d'association reste ouvert environ 2 minutes.",12f,color=subdued))
+        physicalRecoverBtn=action("2 · Associer ESP $activeReaderSlot avec BOOT") {
+            beginBootPairing()
+        }
+        add(assistant,physicalRecoverBtn,8)
+        add(assistant,label("3. Après avoir saisi ton code dans la fenêtre "+
+            "d'association et accepté la connexion Android, attends le message "+
+            "« Code prêt ». Maintiens ensuite BOOT 2 secondes sur le même ESP32, "+
+            "relâche, puis confirme dans l'application.",12f,color=subdued))
+        bootCommitBtn=action("3 · Après le 2e BOOT : confirmer l'association") {
+            commitBootPairing()
+        }
+        add(assistant,bootCommitBtn,8)
+
         val diagnosticSection=section(advanced,"Debug et diagnostics")
         val diagnosticSwitch=CheckBox(this).apply {
             text="Afficher les diagnostics avancés (BLE, radio, Wi-Fi, mémoire)"
@@ -558,16 +589,11 @@ class MainActivity : Activity() {
             connectHomeLan()
         }
         add(lan, lanConnectBtn)
-        physicalRecoverBtn = action("Associer avec BOOT (première fois / code oublié)") { beginBootPairing() }
-        add(lan, physicalRecoverBtn)
-        bootCommitBtn = action("Après le 2e BOOT : confirmer l'association") { commitBootPairing() }
-        add(lan, bootCommitBtn)
-        add(lan, label("ESP32 JK v0.3.1 : appuie 4 secondes sur BOOT, choisis un code de 8 à 32 caractères dans l'application, puis confirme par un second appui BOOT de 2 secondes. Aucun ancien code ni USB nécessaires ; Wi-Fi et BMS conservés.",12f,color=subdued))
         lanDiscoverBtn = action("Rechercher sur mon Wi-Fi") { discoverHomeLan() }
         add(lan, lanDiscoverBtn)
-        autoEspBtn = action("Trouver un ESP32 proche") { findNearbyEsp32() }
-        add(lan, autoEspBtn)
-        add(lan, label("La recherche utilise mDNS ; si elle échoue, renseigne une fois l'adresse IP vue dans les journaux ESP32.", 12f, color = subdued))
+        add(lan, label("Ce bouton retrouve un lecteur déjà connecté à ta box. "+
+            "Pour associer un ESP32 neuf, utilise les étapes 1, 2 et 3 juste "+
+            "sous le choix ESP 1 / ESP 2 / ESP 3.",12f,color=subdued))
 
         val remote = section(advanced, "Accès extérieur — ESP32 VPN")
         add(remote, label("Notre deuxième ESP32 relaie les lectures JK via le VPN Tailscale. Aucun mini-PC, aucun serveur Smart Energy et aucun port à ouvrir sur la box.", 13f, color = subdued))
@@ -614,11 +640,10 @@ class MainActivity : Activity() {
 
         val a = section(advanced, "2. Première association / dépannage")
 
-        add(a, label("Méthode recommandée : « Associer avec BOOT » dans la section 1. Le code personnel est choisi une fois et conservé chiffré. Cette section permet aussi d'utiliser une ancienne passerelle déjà configurée.", color = subdued))
-        apName = input("SmartJK-Setup-XXXXXX")
-        setupCode = input("Code unique de l'ESP32 (vide = code mémorisé)", true)
-        apName.setText(prefs.getString("setup_ssid", "") ?: "")
-        add(a, apName)
+        add(a, label("Méthode normale : choisis ton ESP en haut, recherche son "+
+            "Wi-Fi puis lance l'association BOOT. Cette section sert seulement "+
+            "aux anciens lecteurs avec un code déjà connu.",color=subdued))
+        setupCode = input("Ancien code ESP32 (vide = code mémorisé)",true)
         add(a, setupCode)
         add(a, action("Connecter l'ESP32") { connectSetupAp() }, 12)
         add(a, label("Avec le mode BOOT 0.3.1, l'application rejoint automatiquement le Wi-Fi temporaire et demande une seconde confirmation physique ; il reste ouvert au maximum 2 minutes.", 12f, color = subdued))
@@ -689,6 +714,11 @@ class MainActivity : Activity() {
     private fun state(message: String) = runOnUiThread {
         status.text = message
         if(::dashboardDebugStatus.isInitialized) dashboardDebugStatus.text=message
+    }
+
+    private fun pairingState(message:String) = runOnUiThread {
+        if(::pairingStatus.isInitialized)pairingStatus.text=message
+        state(message)
     }
 
     private fun writeFeedback(message: String) = runOnUiThread {
@@ -2082,8 +2112,16 @@ class MainActivity : Activity() {
                 rightMargin=d(4)
             })
         }
-        readerHeader.text="Lecteur sélectionné : ESP $activeReaderSlot. " +
-            "Chaque lecteur possède son propre Wi-Fi, code d'accès et deux BMS."
+        val configured=prefs.getString("device_id","")?.isNotBlank()==true
+        readerHeader.text="ESP $activeReaderSlot sélectionné — "+
+            (if(configured)"lecteur déjà associé" else "lecteur à associer")+
+            ". Toutes les opérations ci-dessous concernent cet ESP32."
+        if(::physicalRecoverBtn.isInitialized)
+            physicalRecoverBtn.text="2 · Associer ESP $activeReaderSlot avec BOOT"
+        if(::pairingStatus.isInitialized)
+            pairingStatus.text="ESP $activeReaderSlot sélectionné. "+
+                if(configured)"Tu peux retrouver ce lecteur ou relancer BOOT." else
+                    "Recherche son réseau SmartJK-Setup, puis associe-le avec BOOT."
     }
 
     private fun switchReaderSlot(target:Int) {
