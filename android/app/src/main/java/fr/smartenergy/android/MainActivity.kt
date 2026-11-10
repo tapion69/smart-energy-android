@@ -156,6 +156,12 @@ class MainActivity : Activity() {
     private val fleetOwnerByMac=mutableMapOf<String,Int>()
     private val fleetNumberByMac=mutableMapOf<String,Int>()
     private var lastLocalSettingsRefreshAt=0L
+    private var fleetTabSignature = ""
+    private var pendingBmsNavigationMac = ""
+    private val expandedSections = mutableMapOf<LinearLayout, MutableList<LinearLayout>>()
+    private val expandedSectionHeaders = mutableMapOf<LinearLayout, MutableList<() -> Unit>>()
+    private lateinit var alarmNotificationSwitch: CheckBox
+    private lateinit var alarmSettingsState: TextView
     private val telemetryTicker = object : Runnable {
         override fun run() {
             if (!lanVerified && !lanConnectionPending && !setupTransport) {
@@ -253,6 +259,12 @@ class MainActivity : Activity() {
             JkTransportPolicy.Route.NO_CONNECTION ->
                 if(storedCode().isNotBlank()) discoverHomeLan()
         }
+        // Restore an explicitly enabled foreground monitoring service after
+        // reopening the app, even when Android had previously reclaimed it.
+        if(prefs.getBoolean("bms_alarm_notifications",false) &&
+            (Build.VERSION.SDK_INT<33 ||
+             checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS)==PackageManager.PERMISSION_GRANTED))
+            startAlarmMonitoringService()
     }
 
     private fun encryptionKey(): SecretKey {
@@ -387,6 +399,34 @@ class MainActivity : Activity() {
 
     private fun d(v: Int) = (v * resources.displayMetrics.density + .5f).toInt()
 
+    private fun startAlarmMonitoringService() {
+        val intent=Intent(this,JkAlarmMonitorService::class.java)
+        if(Build.VERSION.SDK_INT>=26) startForegroundService(intent)
+        else startService(intent)
+    }
+
+    private fun setAlarmMonitoring(enabled:Boolean) {
+        if(enabled && Build.VERSION.SDK_INT>=33 &&
+           checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS)!=PackageManager.PERMISSION_GRANTED) {
+            alarmNotificationSwitch.isChecked=false
+            alarmSettingsState.text="Autorise les notifications Android, puis réactive la surveillance."
+            requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS),317)
+            return
+        }
+        try {
+            prefs.edit().putBoolean("bms_alarm_notifications",enabled).apply()
+            if(enabled) startAlarmMonitoringService()
+            else stopService(Intent(this,JkAlarmMonitorService::class.java))
+            alarmSettingsState.text=if(enabled)
+                "Surveillance activée · vérification toutes les 30 secondes"
+                else "Surveillance désactivée"
+        } catch(ex:Exception) {
+            prefs.edit().putBoolean("bms_alarm_notifications",false).apply()
+            alarmNotificationSwitch.isChecked=false
+            alarmSettingsState.text="Impossible de lancer la surveillance : ${ex.javaClass.simpleName}"
+        }
+    }
+
     private fun rounded(color: Int) = GradientDrawable().apply {
         setColor(color)
         cornerRadius = d(14).toFloat()
@@ -413,15 +453,40 @@ class MainActivity : Activity() {
         else android.text.InputType.TYPE_CLASS_TEXT
     }
 
-    private fun section(root: LinearLayout, heading: String): LinearLayout {
-        val p = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            background = rounded(panel)
-            setPadding(d(15), d(16), d(15), d(16))
+    private fun section(root: LinearLayout, heading: String,
+                        initiallyOpen: Boolean = heading.startsWith("Mes passerelles")): LinearLayout {
+        val shell=LinearLayout(this).apply {
+            orientation=LinearLayout.VERTICAL
+            background=rounded(panel)
+            setPadding(d(15),d(12),d(15),d(12))
         }
-        root.addView(p, LinearLayout.LayoutParams(-1, -2).apply { topMargin = d(12) })
-        p.addView(label(heading, 17f, true), LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = d(10) })
-        return p
+        val body=LinearLayout(this).apply {
+            orientation=LinearLayout.VERTICAL
+            visibility=if(initiallyOpen) View.VISIBLE else View.GONE
+        }
+        val header=label("",17f,true)
+        fun refreshHeader() {
+            header.text=(if(body.visibility==View.VISIBLE) "⌄  " else "›  ")+heading
+            header.contentDescription=heading+
+                if(body.visibility==View.VISIBLE) ", réduire" else ", développer"
+        }
+        header.setPadding(0,d(7),0,d(7))
+        header.isClickable=true
+        header.isFocusable=true
+        header.setOnClickListener {
+            val opening=body.visibility!=View.VISIBLE
+            expandedSections[root]?.forEach { if(it!==body)it.visibility=View.GONE }
+            body.visibility=if(opening)View.VISIBLE else View.GONE
+            // Restore every header's arrow, including the ones just collapsed.
+            expandedSectionHeaders[root]?.forEach { it() }
+        }
+        shell.addView(header)
+        shell.addView(body)
+        root.addView(shell,LinearLayout.LayoutParams(-1,-2).apply { topMargin=d(10) })
+        expandedSections.getOrPut(root){ mutableListOf() }.add(body)
+        expandedSectionHeaders.getOrPut(root){ mutableListOf() }.add { refreshHeader() }
+        refreshHeader()
+        return body
     }
 
     private fun add(p: LinearLayout, view: android.view.View, space: Int = 8) {
@@ -462,28 +527,33 @@ class MainActivity : Activity() {
         add(root, brand, 2)
         val dashboardPage=LinearLayout(this).apply { orientation=LinearLayout.VERTICAL }
         val configurationPage=LinearLayout(this).apply { orientation=LinearLayout.VERTICAL }
-        fun showConfiguration(show:Boolean) {
-            dashboardPage.visibility=if(show) View.GONE else View.VISIBLE
-            configurationPage.visibility=if(show) View.VISIBLE else View.GONE
+        val settingsPage=LinearLayout(this).apply { orientation=LinearLayout.VERTICAL }
+        fun showPage(page:Int) {
+            dashboardPage.visibility=if(page==0)View.VISIBLE else View.GONE
+            configurationPage.visibility=if(page==1)View.VISIBLE else View.GONE
+            settingsPage.visibility=if(page==2)View.VISIBLE else View.GONE
             parameterEditingEnabled=false
             mountedTab=-1
-            if(!show) lastTelemetry?.let { showTelemetry(it) }
+            if(page==0) lastTelemetry?.let { showTelemetry(it) }
             scroll.post { scroll.scrollTo(0,0) }
         }
         val navigation=LinearLayout(this).apply { orientation=LinearLayout.HORIZONTAL }
-        for((title,config) in listOf("Tableau de bord" to false,"Configuration et association" to true)) {
-            val item=action(title) { showConfiguration(config) }
-            item.textSize=12f
+        for((title,page) in listOf("Tableau de bord" to 0,
+            "Configuration" to 1,"Réglages" to 2)) {
+            val item=action(title) { showPage(page) }
+            item.textSize=11f
             navigation.addView(item,LinearLayout.LayoutParams(0,d(48),1f).apply {
-                rightMargin=d(4);leftMargin=d(4)
+                rightMargin=d(3);leftMargin=d(3)
             })
         }
         add(root,navigation,14)
         root.addView(dashboardPage)
         root.addView(configurationPage)
+        root.addView(settingsPage)
         val startInConfig=storedCode().isBlank()
         dashboardPage.visibility=if(startInConfig) View.GONE else View.VISIBLE
         configurationPage.visibility=if(startInConfig) View.VISIBLE else View.GONE
+        settingsPage.visibility=View.GONE
         add(dashboardPage, label("Tableau de bord JK", 25f, true), 12)
         // Connection/setup feedback remains accessible in Configuration.
         // Its mirror on the dashboard is shown ONLY in Debug mode.
@@ -698,6 +768,29 @@ class MainActivity : Activity() {
         add(access, accessCodeBtn)
 
         add(advanced, label("BLE multi-batteries, OTA et accès distant : fonctions en développement.", 12f, color = subdued), 12)
+
+        add(settingsPage,label("Réglages de l'application",25f,true),16)
+        val alerts=section(settingsPage,"Notifications des alarmes JK",true)
+        add(alerts,label("La surveillance continue lorsque tu quittes l'écran de l'application, "+
+            "avec un service Android visible. L'ESP32 ne conserve aucun historique : "+
+            "l'application vérifie seulement ses mesures actuelles toutes les 30 secondes.",
+            13f,color=subdued))
+        alarmNotificationSwitch=CheckBox(this).apply {
+            text="M'avertir lorsqu'un BMS passe en alarme"
+            setTextColor(normal)
+            isChecked=prefs.getBoolean("bms_alarm_notifications",false)
+            setOnCheckedChangeListener { _,enabled -> setAlarmMonitoring(enabled) }
+        }
+        add(alerts,alarmNotificationSwitch,8)
+        alarmSettingsState=label("Notifications désactivées",12f,false,subdued)
+        add(alerts,alarmSettingsState,6)
+        add(alerts,label("Android affiche une notification permanente pendant la surveillance. "+
+            "Les restrictions batterie, une fermeture forcée de l'application, une perte de "+
+            "réseau ou un VPN indisponible peuvent interrompre les alertes. "+
+            "Aucun serveur distant ni historique n'est utilisé.",12f,color=subdued))
+        alarmSettingsState.text=if(prefs.getBoolean("bms_alarm_notifications",false))
+            "Surveillance demandée · une notification permanente indique son activité"
+            else "Surveillance désactivée"
 
         val enabled = false
         scanBtn.isEnabled = enabled
@@ -2293,6 +2386,11 @@ class MainActivity : Activity() {
                 else -> state("ESP32 $target : configure ou choisis le mode de connexion.")
             }
         }
+        val pending=pendingBmsNavigationMac
+        if(pending.isNotBlank() && fleetOwnerByMac[pending]==target) {
+            pendingBmsNavigationMac=""
+            selectBms(pending)
+        } else renderFleetOverview()
     }
 
     private fun displayBmsName(mac:String,default:String):String {
@@ -2465,6 +2563,18 @@ class MainActivity : Activity() {
             }.show()
     }
 
+    private fun navigateToBms(mac:String) {
+        val slot=fleetOwnerByMac[mac] ?: activeReaderSlot
+        if(slot!=activeReaderSlot) {
+            pendingBmsNavigationMac=mac
+            switchReaderSlot(slot)
+            // Queued slot changes will select the battery once completed.
+            return
+        }
+        pendingBmsNavigationMac=""
+        selectBms(mac)
+    }
+
     private fun selectBms(mac: String) {
         parameterEditingEnabled=false
         selectedBmsMac = mac
@@ -2475,29 +2585,26 @@ class MainActivity : Activity() {
         if(::fleetPanel.isInitialized)
             fleetPanel.visibility=if(JkDashboardVisibility.showFleet(mac))View.VISIBLE else View.GONE
         lastTelemetry?.let { showTelemetry(it) }
+        renderFleetOverview()
         if (currentTab == 2 && mac.isNotBlank()) refreshDetails()
     }
 
-    private fun renderBmsTabs(macs: List<String>, showGlobal: Boolean) {
+    private fun renderBmsTabs(tabs:List<JkBmsTab>) {
         bmsTabRow.removeAllViews()
-        if (!showGlobal) {
-            bmsTabStrip.visibility = View.GONE
-            return
-        }
-        bmsTabStrip.visibility = View.VISIBLE
-        fun button(caption: String, targetMac: String) {
-            val active = selectedBmsMac == targetMac
-            val item = action(caption) { selectBms(targetMac) }
-            item.textSize = 12f
-            item.backgroundTintList = ColorStateList.valueOf(
-                if (active) mint else Color.rgb(38,57,77))
-            item.setTextColor(if (active) background else normal)
-            bmsTabRow.addView(item, LinearLayout.LayoutParams(d(103),d(43)).apply{
+        bmsTabStrip.visibility=View.VISIBLE
+        fun button(caption:String,mac:String) {
+            val active=selectedBmsMac==mac
+            val item=action(caption) { navigateToBms(mac) }
+            item.textSize=12f
+            item.backgroundTintList=ColorStateList.valueOf(
+                if(active)mint else Color.rgb(38,57,77))
+            item.setTextColor(if(active)background else normal)
+            bmsTabRow.addView(item,LinearLayout.LayoutParams(d(103),d(43)).apply{
                 rightMargin=d(6)
             })
         }
-        button("Accueil", "")
-        for ((index,mac) in macs.withIndex()) button(displayBmsName(mac,"BMS ${index+1}"),mac)
+        button("Accueil","")
+        for(tab in tabs)button(tab.name,tab.mac)
     }
 
 
@@ -2549,19 +2656,24 @@ class MainActivity : Activity() {
         }
         fleetConfiguredCount=all.length()
         fleetAvailableCount=(0 until all.length()).count { all.optJSONObject(it)?.optBoolean("available")==true }
+        val tabs=JkBmsTabOrder.sorted((0 until all.length()).mapNotNull { index ->
+            val bms=all.optJSONObject(index) ?: return@mapNotNull null
+            val mac=bms.optString("mac")
+            if(mac.isBlank())null else JkBmsTab(mac,
+                displayBmsName(mac,"Batt-${index+1}"),bms.optInt("reader_slot",1))
+        })
+        val tabsSignature=tabs.joinToString("|") { "${it.mac}:${it.name}:${it.reader}" }+
+            "#${selectedBmsMac}"
+        if(tabsSignature!=fleetTabSignature) {
+            fleetTabSignature=tabsSignature
+            renderBmsTabs(tabs)
+        }
         // Keep fleet health counters current for Debug, but don't recreate
         // hidden global views on every 2.5s telemetry tick of a selected BMS.
         if(!JkDashboardVisibility.showFleet(selectedBmsMac))return
         fleetOverview.bind(all,
-            { mac ->
-                val slot=fleetOwnerByMac[mac] ?: activeReaderSlot
-                if(slot!=activeReaderSlot) switchReaderSlot(slot)
-                selectBms(mac)
-            },
-            { mac,index ->
-                val slot=fleetOwnerByMac[mac] ?: 1
-                displayBmsName(mac,"ESP $slot · BMS ${fleetNumberByMac[mac] ?: index+1}")
-            })
+            { mac -> navigateToBms(mac) },
+            { mac,index -> displayBmsName(mac,"Batt-${index+1}") })
     }
 
     private fun slotPairingCode(slot:Int):String {
@@ -2672,7 +2784,6 @@ class MainActivity : Activity() {
             globalOverview = null
             telemetryPanel.removeAllViews()
             detailsTabRow.visibility = if(global) View.GONE else View.VISIBLE
-            renderBmsTabs(macs,true)
             if(!global) {
                 val mac = selectedBmsMac
                 if(currentTab == 0) {
