@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Smart Energy — Windows ESP32 classic flasher (development utility).
+"""Smart Energy — Windows ESP32 and ESP32-S3 flasher (development utility).
 
 No automatic erase-flash. JK firmware can be installed APP-ONLY to 0x10000.
 JK and VPN firmware are built in GitHub Actions and bundled in one EXE.
@@ -182,7 +182,7 @@ def monitor_esptool_progress(callback: Callable[[int], None]):
 class Flasher(tk.Tk):
     def __init__(self) -> None:
         super().__init__()
-        self.title("Smart Energy — Flasheur JK 0.3.14-dev + VPN (expérimental)")
+        self.title("Smart Energy — JK ESP32 + VPN ESP32 / ESP32-S3")
         self.geometry("840x810")
         self.minsize(740, 620)
         self.events: queue.Queue[tuple[str, str]] = queue.Queue()
@@ -195,6 +195,7 @@ class Flasher(tk.Tk):
         self.jk_mode = tk.StringVar(value="update")
         self.vpn_image = tk.StringVar()
         self.vpn_mode = tk.StringVar(value="update")
+        self.vpn_chip = tk.StringVar(value="esp32")  # Explicit chip; never guess from COM port.
         self.fields: dict[str, tk.StringVar] = {}
         self._build()
         self.after(100, self._drain)
@@ -226,7 +227,7 @@ class Flasher(tk.Tk):
         outer = ttk.Frame(self, padding=12)
         outer.pack(fill="both", expand=True)
         ttk.Label(
-            outer, text="ESP32 classique uniquement — ne pas utiliser sur ESP32-S3",
+            outer, text="JK : ESP32 classique · VPN : ESP32 classique ou ESP32-S3 N16R8",
             font=("Segoe UI", 12, "bold")
         ).pack(anchor="w", pady=(0, 8))
         connection = ttk.Frame(outer)
@@ -371,8 +372,16 @@ class Flasher(tk.Tk):
                  "aucun fichier .bin, Git ou ESP-IDF nécessaire.",
             wraplength=720
         ).grid(row=0, column=0, columnspan=3, sticky="w", padx=8, pady=5)
+        board = ttk.LabelFrame(root, text="Matériel VPN à flasher", padding=5)
+        board.grid(row=1, column=0, columnspan=3, sticky="ew", padx=8, pady=5)
+        ttk.Radiobutton(board,
+            text="ESP32 classique (4 Mo flash)",
+            variable=self.vpn_chip, value="esp32").pack(anchor="w", pady=2)
+        ttk.Radiobutton(board,
+            text="ESP32-S3 N16R8 (16 Mo flash / 8 Mo PSRAM) — prototype",
+            variable=self.vpn_chip, value="esp32s3").pack(anchor="w", pady=2)
         modes = ttk.LabelFrame(root, text="Type de flash VPN", padding=5)
-        modes.grid(row=1, column=0, columnspan=3, sticky="ew", padx=8, pady=6)
+        modes.grid(row=2, column=0, columnspan=3, sticky="ew", padx=8, pady=6)
         ttk.Radiobutton(
             modes, text="Nouvelle passerelle — FACTORY à 0x0000 (ESP32 vierge uniquement)",
             variable=self.vpn_mode, value="factory"
@@ -383,7 +392,7 @@ class Flasher(tk.Tk):
         ).pack(anchor="w", pady=2)
 
         connection = ttk.LabelFrame(root, text="Wi-Fi et Tailscale", padding=5)
-        connection.grid(row=2, column=0, columnspan=3, sticky="ew",
+        connection.grid(row=3, column=0, columnspan=3, sticky="ew",
                         padx=8, pady=5)
         connection.columnconfigure(1, weight=1)
         for i, (caption, key, password) in enumerate([
@@ -395,7 +404,7 @@ class Flasher(tk.Tk):
             self._field(connection, caption, key, i, password)
 
         readers = ttk.LabelFrame(root, text="Lecteurs JK du réseau local", padding=5)
-        readers.grid(row=3, column=0, columnspan=3, sticky="ew",
+        readers.grid(row=4, column=0, columnspan=3, sticky="ew",
                      padx=8, pady=5)
         readers.columnconfigure(1, weight=1)
         for i, (caption, key, password) in enumerate([
@@ -410,7 +419,7 @@ class Flasher(tk.Tk):
 
         expert = ttk.Frame(root)
         expert.columnconfigure(1, weight=1)
-        expert.grid(row=5, column=0, columnspan=3, sticky="ew", padx=8)
+        expert.grid(row=6, column=0, columnspan=3, sticky="ew", padx=8)
         expert.grid_remove()
         self._label(expert, "Firmware VPN externe (.bin) :", 0)
         self._entry(expert, self.vpn_image, 0, width=42)
@@ -419,13 +428,13 @@ class Flasher(tk.Tk):
             root, text="Options avancées : sélectionner un .bin externe",
             command=lambda: expert.grid_remove()
                 if expert.winfo_ismapped() else expert.grid()
-        ).grid(row=4, column=0, columnspan=3, sticky="w",
+        ).grid(row=5, column=0, columnspan=3, sticky="w",
                padx=8, pady=(4, 0))
         ttk.Label(root,
             text="VPN déjà fonctionnel : tester d’abord sur une carte de réserve. "
                  "Ne pas choisir FACTORY pour une mise à jour.",
             wraplength=720
-        ).grid(row=6,column=0,columnspan=3,sticky="w",padx=8,pady=(4,0))
+        ).grid(row=7,column=0,columnspan=3,sticky="w",padx=8,pady=(4,0))
         ttk.Button(root, text="Flasher et configurer l'ESP32 VPN",
                    command=self._flash_vpn).grid(
             row=7, column=0, columnspan=3, pady=(8, 4))
@@ -507,15 +516,17 @@ class Flasher(tk.Tk):
         return file
 
     @staticmethod
-    def _bundled_vpn_image(mode: str) -> Path:
+    def _bundled_vpn_image(mode: str, chip: str = "esp32") -> Path:
         base = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent))
         names = {
-            "factory": "smart-energy-vpn-USB-FACTORY-ESP32-0x0.bin",
-            "update": "smart-energy-vpn-USB-APP-ESP32-0x10000.bin",
+            ("esp32","factory"): "smart-energy-vpn-USB-FACTORY-ESP32-0x0.bin",
+            ("esp32","update"): "smart-energy-vpn-USB-APP-ESP32-0x10000.bin",
+            ("esp32s3","factory"): "smart-energy-vpn-USB-FACTORY-ESP32S3-N16R8-0x0.bin",
+            ("esp32s3","update"): "smart-energy-vpn-USB-APP-ESP32S3-N16R8-0x10000.bin",
         }
-        if mode not in names:
-            raise ValueError("Mode VPN invalide.")
-        file = base / "embedded_firmware" / names[mode]
+        if (chip,mode) not in names:
+            raise ValueError("Type de puce VPN ou mode invalide.")
+        file = base / "embedded_firmware" / names[(chip,mode)]
         if not file.is_file():
             raise ValueError("Ce flasheur ne contient pas les images VPN. "
                              "Télécharge le kit Windows avec firmware intégré "
@@ -543,14 +554,15 @@ class Flasher(tk.Tk):
             port = self._assert_ready()
             values = self._vpn_values()
             mode = self.vpn_mode.get()
+            chip = self.vpn_chip.get()
             if self.vpn_image.get().strip():
                 file = Path(self.vpn_image.get().strip())
             else:
-                file = self._bundled_vpn_image(mode)
-            check_precompiled_image(file, mode)
+                file = self._bundled_vpn_image(mode, chip)
+            check_precompiled_image(file, mode, chip=chip)
             if not messagebox.askyesno(
                 "Confirmer le flash ESP32 VPN",
-                "Vérifie qu'il s'agit de la carte ESP32 VPN, pas d'un lecteur JK.\n"
+                f"Matériel sélectionné : {chip}. Vérifie la bonne carte, pas un lecteur JK.\n"
                 + ("FACTORY remplace le partitionnement et risque de rendre les "
                    "anciennes données inaccessibles.\n" if mode == "factory" else
                    "APP-ONLY conserve le partitionnement/NVS existants.\n")
@@ -558,17 +570,17 @@ class Flasher(tk.Tk):
                   "par le câble USB uniquement. Continuer ?"
             ):
                 return
-            self._run_async(lambda: self._do_vpn(port, file, mode, values), mode="vpn")
+            self._run_async(lambda: self._do_vpn(port, file, mode, values, chip), mode="vpn")
         except Exception as exc:
             messagebox.showerror("Flash VPN", str(exc))
 
     def _do_vpn(self, port: str, image: Path, mode: str,
-                values: dict[str, str]) -> None:
+                values: dict[str, str], chip: str = "esp32") -> None:
         ensure_esptool_console_streams()
         from vpn_usb import flash_precompiled, provision_over_serial
         self._progress_stage("Connexion à l'ESP32 VPN et écriture du firmware…")
         with monitor_esptool_progress(self._flash_percent):
-            flash_precompiled(port, image, mode, self._log)
+            flash_precompiled(port, image, mode, self._log, chip=chip)
         self._progress_step(80, "Firmware VPN écrit : attente de la liaison USB…")
         provision_over_serial(
             port, values, self._log,
