@@ -2248,7 +2248,7 @@ class MainActivity : Activity() {
         // Overview is strictly the Accueil page, never a permanent
         // header above the detail of a selected BMS.
         if(::fleetPanel.isInitialized)
-            fleetPanel.visibility=if(mac.isBlank())View.VISIBLE else View.GONE
+            fleetPanel.visibility=if(JkDashboardVisibility.showFleet(mac))View.VISIBLE else View.GONE
         lastTelemetry?.let { showTelemetry(it) }
         if (currentTab == 2 && mac.isNotBlank()) refreshDetails()
     }
@@ -2291,7 +2291,7 @@ class MainActivity : Activity() {
 
     private fun renderFleetOverview() {
         if(!::fleetOverview.isInitialized) return
-        fleetPanel.visibility=if(selectedBmsMac.isBlank())View.VISIBLE else View.GONE
+        fleetPanel.visibility=if(JkDashboardVisibility.showFleet(selectedBmsMac))View.VISIBLE else View.GONE
         val all=JSONArray()
         val now=android.os.SystemClock.elapsedRealtime()
         fleetOwnerByMac.clear()
@@ -2326,7 +2326,7 @@ class MainActivity : Activity() {
         fleetAvailableCount=(0 until all.length()).count { all.optJSONObject(it)?.optBoolean("available")==true }
         // Keep fleet health counters current for Debug, but don't recreate
         // hidden global views on every 2.5s telemetry tick of a selected BMS.
-        if(selectedBmsMac.isNotBlank())return
+        if(!JkDashboardVisibility.showFleet(selectedBmsMac))return
         fleetOverview.bind(all,
             { mac ->
                 val slot=fleetOwnerByMac[mac] ?: activeReaderSlot
@@ -2433,7 +2433,7 @@ class MainActivity : Activity() {
         if (selectedBmsMac.isNotBlank() && selectedBmsMac !in macs)
             selectedBmsMac = ""
         // Always provide Accueil, even for a single BMS.
-        val global = selectedBmsMac.isBlank()
+        val global = JkDashboardVisibility.showFleet(selectedBmsMac)
         renderFleetOverview()
         parameterFeedback.visibility=if(global)View.GONE else
             if(currentTab==2 && lastParameterFeedback.isNotBlank())View.VISIBLE else View.GONE
