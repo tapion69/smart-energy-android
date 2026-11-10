@@ -2,7 +2,7 @@
 """Smart Energy — Windows ESP32 classic flasher (development utility).
 
 No automatic erase-flash. JK firmware can be installed APP-ONLY to 0x10000.
-VPN firmware is built locally with the owner's credentials using ESP-IDF 5.3.2.
+JK and VPN firmware are built in GitHub Actions and bundled in one EXE.
 No personal tokens are uploaded to GitHub or stored in the executable.
 """
 from __future__ import annotations
@@ -114,6 +114,14 @@ def serial_port_label(device: str, description: str) -> str:
     ):
         return device.upper()
     return f"{device.upper()} — {short_description}"
+
+
+def ensure_esptool_console_streams() -> None:
+    """PyInstaller --windowed sets stdout/stderr to None; esptool flushes them."""
+    if sys.stdout is None:
+        sys.stdout = open(os.devnull, "w", encoding="utf-8")
+    if sys.stderr is None:
+        sys.stderr = open(os.devnull, "w", encoding="utf-8")
 
 
 class Flasher(tk.Tk):
@@ -347,6 +355,7 @@ class Flasher(tk.Tk):
             messagebox.showerror("Flash JK", str(exc))
 
     def _do_jk(self, port: str, file: Path, offset: str) -> None:
+        ensure_esptool_console_streams()
         self._log(f"Flash JK {port}, offset {offset}, fichier {file.name}")
         # Bundled esptool is used directly, without erase_flash or shell.
         from esptool import main as esptool_main
@@ -413,6 +422,7 @@ class Flasher(tk.Tk):
 
     def _do_vpn(self, port: str, image: Path, mode: str,
                 values: dict[str, str]) -> None:
+        ensure_esptool_console_streams()
         from vpn_usb import flash_precompiled, provision_over_serial
         flash_precompiled(port, image, mode, self._log)
         provision_over_serial(port, values, self._log)
@@ -473,4 +483,5 @@ class Flasher(tk.Tk):
 
 
 if __name__ == "__main__":
+    ensure_esptool_console_streams()
     Flasher().mainloop()
