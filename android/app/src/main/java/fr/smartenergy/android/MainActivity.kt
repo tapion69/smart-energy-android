@@ -143,6 +143,7 @@ class MainActivity : Activity() {
     @Volatile private var telemetryBusy = false
     private var debugEnabled=false
     private val fleetWorker=Executors.newSingleThreadExecutor()
+    private val settingsWorker=Executors.newSingleThreadExecutor()
     @Volatile private var fleetBusy=false
     private val fleetCache=mutableMapOf<Int,Pair<Long,JSONObject>>() // UI-thread only
     private var nextFleetSlot=1
@@ -2094,22 +2095,60 @@ class MainActivity : Activity() {
     private fun requestFreshSettingsForEditing() {
         if(!parameterEditingEnabled || !lanVerified || remoteGatewayConnection ||
            remoteVpnConnection || setupTransport || selectedBmsMac.isBlank())return
+        if(settingsRefreshBusy) {
+            writeFeedback("Actualisation des réglages déjà en cours.")
+            return
+        }
         val mac=selectedBmsMac
+        val reader=activeReaderSlot
+        settingsRefreshBusy=true
         lastLocalSettingsRefreshAt=android.os.SystemClock.elapsedRealtime()
-        io.execute {
+        writeFeedback("Relecture des paramètres du BMS en cours…")
+        // A separate worker ensures temperature/SOC telemetry remains responsive.
+        // GET /details only reads the ESP32's cache, NOT an extra BLE request.
+        settingsWorker.execute {
             try {
                 httpCall("POST","/api/v1/jk/settings-refresh",
                     JSONObject().put("mac",mac))
-                Thread.sleep(1400)
+                var latest:JSONObject?=null
+                var ready=false
+                for(attempt in 0 until 8) {
+                    Thread.sleep(1100)
+                    val details=httpCall("GET","/api/v1/details")
+                    val devices=details.optJSONArray("devices")
+                    val match=(0 until (devices?.length() ?: 0))
+                        .mapNotNull { devices?.optJSONObject(it) }
+                        .firstOrNull { it.optString("mac")==mac }
+                    latest=details
+                    ready=match?.optJSONObject("write_pilot")
+                        ?.optBoolean("ready")==true
+                    if(ready)break
+                }
+                val result=latest
                 runOnUiThread {
-                    if(parameterEditingEnabled && selectedBmsMac==mac) {
-                        lastDetailsFetchedAt=0L
-                        refreshDetails()
+                    if(reader==activeReaderSlot && parameterEditingEnabled &&
+                       selectedBmsMac==mac && currentTab==2 && result!=null) {
+                        lastDetails=result
+                        lastDetailsFetchedAt=android.os.SystemClock.elapsedRealtime()
+                        lastTelemetry?.let { showTelemetry(it) }
+                        if(ready)
+                            writeFeedback("Réglages à jour. Tu peux modifier un autre paramètre.")
+                        else
+                            writeFeedback("Le BMS n'autorise pas encore une nouvelle modification. "+
+                                "Utilise « Actualiser les réglages » pour réessayer.")
                     }
                 }
             } catch(ex:Exception) {
-                writeFeedback("Actualisation du BMS indisponible : "+
-                    (ex.message ?: "vérifie le firmware JK 0.3.13"))
+                runOnUiThread {
+                    if(reader==activeReaderSlot && selectedBmsMac==mac &&
+                       parameterEditingEnabled) {
+                        writeFeedback("Relecture indisponible : "+
+                            (ex.message ?: "vérifie la connexion locale")+
+                            ". Aucun nouveau réglage n'a été écrit.")
+                    }
+                }
+            } finally {
+                runOnUiThread { settingsRefreshBusy=false }
             }
         }
     }
@@ -2464,6 +2503,8 @@ class MainActivity : Activity() {
         discoverListener = null
         releaseConnection()
         io.shutdownNow()
+        fleetWorker.shutdownNow()
+        settingsWorker.shutdownNow()
         super.onDestroy()
     }
 }
