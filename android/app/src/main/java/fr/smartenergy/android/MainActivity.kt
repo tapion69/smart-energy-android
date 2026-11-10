@@ -149,6 +149,7 @@ class MainActivity : Activity() {
     private var debugEnabled=false
     private val fleetWorker=Executors.newSingleThreadExecutor()
     private val settingsWorker=Executors.newSingleThreadExecutor()
+    private val inverterWorker=Executors.newSingleThreadExecutor()
     @Volatile private var fleetBusy=false
     private val fleetCache=mutableMapOf<Int,Pair<Long,JSONObject>>() // UI-thread only
     private var nextFleetSlot=1
@@ -790,6 +791,85 @@ class MainActivity : Activity() {
         accessCodeBtn = action("Changer le code de ma passerelle") { changeDeviceCode() }
         add(access, accessCodeBtn)
 
+        // First inverter interoperability test: authenticated Voltronic GET or
+        // SunSpec Modbus/TCP FC03 discovery, never changes inverter settings.
+        val inverter=section(advanced,"Onduleurs Voltronic / SunSpec — lecture seule")
+        add(inverter,label("Détection expérimentale sur le Wi-Fi local. "+
+            "Voltronic nécessite un ESP32-S3 équipé d'une interface RS232 "+
+            "adaptée ; SunSpec lit directement les modèles Modbus TCP d'un "+
+            "onduleur qui prend en charge cette norme. Aucun réglage n'est écrit.",
+            12f,color=subdued))
+        val inverterTypes=RadioGroup(this).apply { orientation=RadioGroup.VERTICAL }
+        val inverterVolt=RadioButton(this).apply {
+            text="Voltronic / Axpert — ESP32-S3 RS232"
+            setTextColor(normal)
+        }
+        val inverterSun=RadioButton(this).apply {
+            text="SunSpec — Modbus TCP (FC03 uniquement)"
+            setTextColor(normal)
+        }
+        inverterTypes.addView(inverterVolt)
+        inverterTypes.addView(inverterSun)
+        inverterVolt.isChecked=prefs.getString("inverter_probe_type","voltronic")!="sunspec"
+        inverterSun.isChecked=!inverterVolt.isChecked
+        add(inverter,inverterTypes,5)
+        val inverterIp=input("Adresse IP locale du lecteur / onduleur")
+        inverterIp.setText(prefs.getString("inverter_probe_ip","") ?: "")
+        add(inverter,inverterIp,6)
+        val inverterPort=input("Port TCP : 18081 (Voltronic) ou 502 (SunSpec)")
+        inverterPort.inputType=android.text.InputType.TYPE_CLASS_NUMBER
+        inverterPort.setText(prefs.getInt("inverter_probe_port",18081).toString())
+        inverterVolt.setOnClickListener { inverterPort.setText("18081") }
+        inverterSun.setOnClickListener { inverterPort.setText("502") }
+        add(inverter,inverterPort,6)
+        val inverterCode=input("Code de lecture ESP32 Voltronic (8–32 caractères)",true)
+        add(inverter,inverterCode,6)
+        val inverterUnit=input("Adresse esclave SunSpec (1 par défaut)")
+        inverterUnit.inputType=android.text.InputType.TYPE_CLASS_NUMBER
+        inverterUnit.setText("1")
+        add(inverter,inverterUnit,6)
+        val inverterStatus=label("Aucune connexion testée.",12f,false,subdued)
+        add(inverter,inverterStatus,6)
+        add(inverter,action("Tester mon onduleur en lecture seule") {
+            val ip=inverterIp.text.toString().trim()
+            val type=if(inverterSun.isChecked)"sunspec" else "voltronic"
+            val port=inverterPort.text.toString().trim().toIntOrNull()
+            val unit=inverterUnit.text.toString().trim().toIntOrNull()
+            val code=inverterCode.text.toString()
+            if(!SunSpecReadOnly.isPrivateIPv4(ip) || port==null ||
+                port !in 1..65535 || (type=="voltronic" && code.length !in 8..32) ||
+                (type=="sunspec" && (unit==null || unit !in 0..247))) {
+                inverterStatus.text="Vérifie l'IP privée, le port, le code Voltronic "+
+                    "ou l'adresse esclave SunSpec."
+            }else {
+                prefs.edit().putString("inverter_probe_ip",ip)
+                    .putString("inverter_probe_type",type)
+                    .putInt("inverter_probe_port",port).apply()
+                inverterStatus.text="Lecture réseau en cours (aucune écriture)…"
+                inverterWorker.execute {
+                    val result=try {
+                        if(type=="sunspec"){
+                            val found=SunSpecReadOnly.discover(ip,port,unit!!)
+                            "SunSpec détecté : base ${found.baseRegister}, "+
+                                "${found.models.size} modèle(s) (IDs : "+
+                                found.models.joinToString(",") { it.modelId.toString() }+")."
+                        }else{
+                            val found=VoltronicReadOnlyClient.probe(ip,code,port)
+                            "Lecteur Voltronic reconnu : "+
+                                found.optString("version","version inconnue")+
+                                " · mode lecture seule confirmé."
+                        }
+                    }catch(ex:Exception){
+                        "Aucune lecture compatible : "+
+                            (ex.message?.take(120) ?: ex.javaClass.simpleName)
+                    }
+                    runOnUiThread { inverterStatus.text=result }
+                }
+            }
+        },8)
+        add(inverter,label("Cette première étape vérifie le protocole. "+
+            "L'affichage des mesures dans le tableau de bord sera ajouté "+
+            "après validation du modèle réel.",12f,color=subdued))
         add(advanced, label("BLE multi-batteries, OTA et accès distant : fonctions en développement.", 12f, color = subdued), 12)
 
         add(settingsPage,label("Réglages de l'application",25f,true),16)
@@ -3033,6 +3113,7 @@ class MainActivity : Activity() {
         io.shutdownNow()
         fleetWorker.shutdownNow()
         settingsWorker.shutdownNow()
+        inverterWorker.shutdownNow()
         super.onDestroy()
     }
 }
