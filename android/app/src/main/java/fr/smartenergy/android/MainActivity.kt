@@ -117,6 +117,7 @@ class MainActivity : Activity() {
     private var currentTab = 0 // 0 Batterie, 1 Détails, 2 Paramètres
     private var parameterEditingEnabled = false // Never persisted; always locked on navigation.
     private var activeReaderSlot = 1
+    private var pendingReaderTarget:Int?=null
     private lateinit var readerSelector: LinearLayout
     private lateinit var readerHeader: TextView
     private lateinit var pairingStatus: TextView
@@ -2215,10 +2216,38 @@ class MainActivity : Activity() {
 
     private fun switchReaderSlot(target:Int) {
         if(target !in 1..3 || target==activeReaderSlot) return
-        if(lanConnectionPending || setupTransport) {
-            pairingState("Termine la connexion ou l'association en cours avant de changer d'ESP32.")
+        if(setupTransport) {
+            pairingState("Une association BOOT est active. "+
+                "Termine-la ou annule avant de changer de lecteur.")
             return
         }
+        if(lanConnectionPending) {
+            // A previously selected reader may still have an automatic
+            // connect in progress. One tap must be enough to select ESP 2:
+            // queue the switch instead of silently rejecting the request.
+            pendingReaderTarget=target
+            pairingState("ESP $target demandé. La sélection sera appliquée "+
+                "automatiquement après la connexion en cours.")
+            uiHandler.postDelayed(object:Runnable {
+                var checks=0
+                override fun run() {
+                    if(isFinishing || pendingReaderTarget!=target)return
+                    if(lanConnectionPending) {
+                        if(++checks<45) uiHandler.postDelayed(this,400)
+                        else {
+                            pendingReaderTarget=null
+                            pairingState("Connexion précédente bloquée. "+
+                                "Réessaie ESP $target après avoir vérifié le Wi-Fi.")
+                        }
+                    } else {
+                        pendingReaderTarget=null
+                        switchReaderSlot(target)
+                    }
+                }
+            },400)
+            return
+        }
+        pendingReaderTarget=null
         val editor=prefs.edit()
         // Snapshot the active reader; slot 1 imports legacy APK preferences.
         for(key in readerKeys)
