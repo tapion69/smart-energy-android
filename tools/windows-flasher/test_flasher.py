@@ -1,11 +1,12 @@
 import unittest
+import io
 import os
 import sys
 import tempfile
 from pathlib import Path
 from unittest.mock import patch
 
-from smart_energy_flasher import sdkconfig_contents, valid_lan_ip, valid_serial_port, validate_vpn_config, selected_serial_port, serial_port_label, ensure_esptool_console_streams, Flasher
+from smart_energy_flasher import sdkconfig_contents, valid_lan_ip, valid_serial_port, validate_vpn_config, selected_serial_port, serial_port_label, ensure_esptool_console_streams, Flasher, FlashProgressWriter, monitor_esptool_progress
 
 
 def config():
@@ -88,6 +89,40 @@ class FlasherTests(unittest.TestCase):
             finally:
                 sys.stdout.close()
                 sys.stderr.close()
+
+    def test_esptool_real_percent_carriage_returns_and_chunks(self):
+        values=[]
+        stream=io.StringIO()
+        observer=FlashProgressWriter(stream,values.append)
+        observer.write("Compressed 100 to 40 bytes\n")
+        observer.write("Writing at 0x00000000... (3")
+        observer.write("1 %)\r")
+        observer.flush()
+        observer.write("Writing at 0x00010000... (100 %)\r")
+        observer.write("Hash of data verified.\n")
+        self.assertEqual(values,[31,100])
+        self.assertIn("Writing at",stream.getvalue())
+
+    def test_progress_observer_ignores_unrelated_percent(self):
+        values=[]
+        observer=FlashProgressWriter(io.StringIO(),values.append)
+        observer.write("Wi-Fi signal 99 %\n")
+        observer.write("Writing at 0x00010000... (20 %)\r")
+        observer.write("Writing at 0x00010000... (10 %)\r")
+        self.assertEqual(values,[20])
+
+    def test_progress_observer_restores_stdout_on_failure(self):
+        values=[]
+        original=sys.stdout
+        with patch.object(sys,"stdout",io.StringIO()):
+            local=sys.stdout
+            with self.assertRaises(RuntimeError):
+                with monitor_esptool_progress(values.append):
+                    print("Writing at 0x00010000... (45 %)")
+                    raise RuntimeError("synthetic flash failure")
+            self.assertIs(sys.stdout,local)
+        self.assertIs(sys.stdout,original)
+        self.assertEqual(values,[45])
 
     def test_bundled_jk_factory_and_app_selected_by_mode(self):
         with tempfile.TemporaryDirectory() as directory:
