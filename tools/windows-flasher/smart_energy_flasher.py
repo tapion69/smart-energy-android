@@ -182,7 +182,7 @@ def monitor_esptool_progress(callback: Callable[[int], None]):
 class Flasher(tk.Tk):
     def __init__(self) -> None:
         super().__init__()
-        self.title("Smart Energy — Flasheur ESP32 (expérimental)")
+        self.title("Smart Energy — Flasheur JK 0.3.14-dev + VPN (expérimental)")
         self.geometry("840x810")
         self.minsize(740, 620)
         self.events: queue.Queue[tuple[str, str]] = queue.Queue()
@@ -317,7 +317,7 @@ class Flasher(tk.Tk):
     def _build_jk(self, root: ttk.Frame) -> None:
         ttk.Label(
             root,
-            text="Firmware JK 0.3.13-dev précompilé et inclus dans cet EXE. "
+            text="Firmware JK 0.3.14-dev corrigé (identifiant unique par ESP32), précompilé et inclus dans cet EXE. "
                  "Aucun fichier à chercher.",
             wraplength=720
         ).grid(row=0, column=0, columnspan=3, sticky="w", padx=8, pady=(10, 15))
