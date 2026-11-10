@@ -11,10 +11,11 @@
 #include "jk_write.h"
 #include "setup_code_policy.h"
 #include "boot_pair_policy.h"
+#include "jk_identity_policy.h"
 #include <ArduinoJson.h>
 #include <ctype.h>
 
-static const char *VERSION = "0.3.13-dev";
+static const char *VERSION = "0.3.14-dev";
 static const uint32_t WIFI_JOIN_TIMEOUT_MS = 30000; // Return to temporary setup after 30s
 static const uint32_t SETUP_AUTORETRY_MS = 120000; // Retry saved Wi-Fi after brief fallback
 static const int SETUP_BUTTON = 0; // BOOT is physical proof for pairing recovery.
@@ -29,6 +30,7 @@ WebServer http(80);
 String hostName;
 String setupSsid;
 String setupCode;
+uint8_t deviceIdScheme = 0;
 bool setupMode = false;
 bool automaticSetupFallback = false;
 uint32_t setupFallbackAt = 0;
@@ -208,6 +210,7 @@ void onInfo() {
   doc["version"] = VERSION;
   doc["identity_decoder_revision"] = "jk02-info-json-owned-4";
   doc["device_id"] = hostName;
+  doc["device_id_scheme"] = deviceIdScheme;
   doc["setup_mode"] = setupMode;
   doc["wifi_auto_recovery"] = setupMode && automaticSetupFallback;
   doc["wifi_connected"] = WiFi.status() == WL_CONNECTED;
@@ -672,13 +675,27 @@ void setup() {
   Serial.begin(115200);
   pinMode(SETUP_BUTTON, INPUT_PULLUP);
   delay(250);
-  uint32_t id = (uint32_t)(ESP.getEfuseMac() & 0xFFFFFF);
-  char hexId[7];
-  snprintf(hexId, sizeof(hexId), "%06X", id);
-  hostName = String("smartjk-") + hexId;
-  setupSsid = String("SmartJK-Setup-") + hexId;
-
+  // Firmware 0.3.13 erroneously used only the factory MAC vendor prefix as
+  // device ID, so multiple boards of the same make shared one Wi-Fi SSID.
+  // Existing Wi-Fi-configured readers keep their previously paired identity.
+  // New readers use the real last three MAC bytes, which differ by board.
   prefs.begin("smart-jk", false);
+  const uint8_t storedScheme = prefs.getUChar("idScheme", 0);
+  deviceIdScheme = jkidentity::chooseScheme(
+      storedScheme, !prefs.getString("ssid", "").isEmpty());
+  if(storedScheme != deviceIdScheme &&
+     prefs.putUChar("idScheme", deviceIdScheme) != 1) {
+    // Identity MUST persist before Wi-Fi setup or it could change at reboot.
+    Serial.println("[Identity] NVS unavailable; refusing network startup.");
+    while(true) { delay(1000); }
+  }
+  const uint32_t id=jkidentity::suffix(ESP.getEfuseMac(),deviceIdScheme);
+  char hexId[7];
+  snprintf(hexId,sizeof(hexId),"%06X",id);
+  hostName=String("smartjk-")+hexId;
+  setupSsid=String("SmartJK-Setup-")+hexId;
+  Serial.printf("[Identity] device=%s, scheme=%u (1=legacy, 2=unique MAC tail)\n",
+                hostName.c_str(),unsigned(deviceIdScheme));
   setupCode = prefs.getString("setupCode", "");
   if (!setupcode::valid(setupCode.c_str(), setupCode.length())) {
     // Only absent/invalid credentials are regenerated; valid 8-11 byte user
