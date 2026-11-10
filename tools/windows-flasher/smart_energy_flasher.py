@@ -469,18 +469,20 @@ class Flasher(tk.Tk):
             elif payload[0] != 0xE9:
                 raise ValueError("Le firmware APP-ONLY n'a pas l'en-tête ESP32 attendu.")
             offset = "0x0" if factory else "0x10000"
-            self._run_async(lambda: self._do_jk(port, path, offset))
+            self._run_async(lambda: self._do_jk(port, path, offset), mode="jk")
         except Exception as exc:
             messagebox.showerror("Flash JK", str(exc))
 
     def _do_jk(self, port: str, file: Path, offset: str) -> None:
         ensure_esptool_console_streams()
         self._log(f"Flash JK {port}, offset {offset}, fichier {file.name}")
-        # Bundled esptool is used directly, without erase_flash or shell.
+        self._progress_stage("Connexion à l'ESP32 JK et écriture du firmware…")
         from esptool import main as esptool_main
-        esptool_main(["--chip", "esp32", "--port", port, "--baud", "460800",
-                      "write_flash", "--flash_mode", "dio", "--flash_freq", "40m",
-                      "--flash_size", "4MB", offset, str(file)])
+        with monitor_esptool_progress(self._flash_percent):
+            esptool_main(["--chip", "esp32", "--port", port, "--baud", "460800",
+                          "write_flash", "--flash_mode", "dio", "--flash_freq", "40m",
+                          "--flash_size", "4MB", offset, str(file)])
+        self._progress_step(98, "Image JK écrite et vérifiée.")
         self._log("Flash JK terminé. Redémarre le lecteur, puis vérifie la version dans l'APK.")
 
     @staticmethod
@@ -552,7 +554,7 @@ class Flasher(tk.Tk):
                   "par le câble USB uniquement. Continuer ?"
             ):
                 return
-            self._run_async(lambda: self._do_vpn(port, file, mode, values))
+            self._run_async(lambda: self._do_vpn(port, file, mode, values), mode="vpn")
         except Exception as exc:
             messagebox.showerror("Flash VPN", str(exc))
 
@@ -560,8 +562,15 @@ class Flasher(tk.Tk):
                 values: dict[str, str]) -> None:
         ensure_esptool_console_streams()
         from vpn_usb import flash_precompiled, provision_over_serial
-        flash_precompiled(port, image, mode, self._log)
-        provision_over_serial(port, values, self._log)
+        self._progress_stage("Connexion à l'ESP32 VPN et écriture du firmware…")
+        with monitor_esptool_progress(self._flash_percent):
+            flash_precompiled(port, image, mode, self._log)
+        self._progress_step(80, "Firmware VPN écrit : attente de la liaison USB…")
+        provision_over_serial(
+            port, values, self._log,
+            on_ready=lambda: self._progress_step(
+                92, "ESP32 prêt : configuration VPN en cours d'enregistrement…"))
+        self._progress_step(98, "Configuration VPN enregistrée et confirmée par l'ESP32.")
 
     def _configure_only(self) -> None:
         try:
@@ -577,12 +586,37 @@ class Flasher(tk.Tk):
             ):
                 return
             from vpn_usb import provision_over_serial
-            self._run_async(lambda: provision_over_serial(port, values, self._log))
+            self._run_async(
+                lambda: provision_over_serial(
+                    port, values, self._log,
+                    on_ready=lambda: self._progress_step(
+                        90, "ESP32 prêt : transmission USB en cours…")),
+                mode="config")
         except Exception as exc:
             messagebox.showerror("Configuration VPN", str(exc))
 
-    def _run_async(self, callback: Callable[[], None]) -> None:
+    def _progress_stage(self, message: str) -> None:
+        self.events.put(("stage", message))
+
+    def _progress_step(self, percent: int, message: str) -> None:
+        self.events.put(("progress", str(max(0, min(99, percent)))))
+        self.events.put(("stage", message))
+
+    def _flash_percent(self, percent: int) -> None:
+        # Esptool reports actual flash-writing percentage; VPN still needs
+        # physical USB provisioning after image transfer.
+        bar = 5 + round((70 if self.operation_mode == "vpn" else 90) *
+                        percent / 100)
+        self.events.put(("progress", str(bar)))
+        self.events.put(("stage", f"Écriture du firmware : {percent} %"))
+
+    def _run_async(self, callback: Callable[[], None], mode: str) -> None:
         self.busy = True
+        self.operation_mode = mode
+        self.progress_percent = 0
+        self.progress_bar.configure(mode="indeterminate")
+        self.progress_bar.start(14)
+        self.progress_label.configure(text="Préparation de l'opération…")
         def job() -> None:
             try:
                 callback()
@@ -607,11 +641,24 @@ class Flasher(tk.Tk):
                     self.log_widget.insert("end", message + "\n")
                     self.log_widget.see("end")
                     self.log_widget.configure(state="disabled")
+                elif kind == "stage":
+                    self.progress_label.configure(text=message)
+                elif kind == "progress":
+                    self.progress_bar.stop()
+                    self.progress_bar.configure(mode="determinate")
+                    self.progress_percent = max(self.progress_percent, int(message))
+                    self.progress_bar.configure(value=self.progress_percent)
                 else:
                     self.busy = False
+                    self.progress_bar.stop()
+                    self.progress_bar.configure(mode="determinate")
                     if kind == "done":
+                        self.progress_bar.configure(value=100)
+                        self.progress_label.configure(text="Terminé — 100 %")
                         messagebox.showinfo("Smart Energy", message)
                     else:
+                        self.progress_bar.configure(value=self.progress_percent)
+                        self.progress_label.configure(text="Échec — consulte le journal.")
                         messagebox.showerror("Smart Energy", message)
         except queue.Empty:
             pass
