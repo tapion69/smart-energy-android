@@ -182,7 +182,7 @@ def monitor_esptool_progress(callback: Callable[[int], None]):
 class Flasher(tk.Tk):
     def __init__(self) -> None:
         super().__init__()
-        self.title("Smart Energy — JK ESP32 + VPN ESP32 / ESP32-S3")
+        self.title("Smart Energy — JK / VPN / Voltronic ESP32-S3")
         self.geometry("840x810")
         self.minsize(740, 620)
         self.events: queue.Queue[tuple[str, str]] = queue.Queue()
@@ -196,6 +196,9 @@ class Flasher(tk.Tk):
         self.vpn_image = tk.StringVar()
         self.vpn_mode = tk.StringVar(value="update")
         self.vpn_chip = tk.StringVar(value="esp32")  # Explicit chip; never guess from COM port.
+        self.volt_mode = tk.StringVar(value="factory")
+        self.volt_image = tk.StringVar()
+        self.volt_fields: dict[str, tk.StringVar] = {}
         self.fields: dict[str, tk.StringVar] = {}
         self._build()
         self.after(100, self._drain)
@@ -227,7 +230,7 @@ class Flasher(tk.Tk):
         outer = ttk.Frame(self, padding=12)
         outer.pack(fill="both", expand=True)
         ttk.Label(
-            outer, text="JK : ESP32 classique · VPN : ESP32 classique ou ESP32-S3 N16R8",
+            outer, text="JK classique · VPN classique/S3 · Voltronic S3 (lecture seule)",
             font=("Segoe UI", 12, "bold")
         ).pack(anchor="w", pady=(0, 8))
         connection = ttk.Frame(outer)
@@ -257,12 +260,16 @@ class Flasher(tk.Tk):
         tabs.pack(fill="both", expand=True, pady=10)
         jk = ttk.Frame(tabs, padding=12)
         vpn = ttk.Frame(tabs, padding=12)
+        voltronic = ttk.Frame(tabs, padding=12)
         jk.columnconfigure(1, weight=1)
         vpn.columnconfigure(1, weight=1)
+        voltronic.columnconfigure(1, weight=1)
         tabs.add(jk, text="ESP32 JK")
-        tabs.add(vpn, text="ESP32 VPN (3 lecteurs)")
+        tabs.add(vpn, text="ESP32 VPN")
+        tabs.add(voltronic, text="Voltronic S3")
         self._build_jk(jk)
         self._build_vpn(vpn)
+        self._build_voltronic(voltronic)
         ttk.Label(outer, text="Journal (aucun mot de passe ne doit apparaître) :").pack(anchor="w")
         self.log_widget = tk.Text(outer, height=10, wrap="word", state="disabled")
         self.log_widget.pack(fill="x")
@@ -437,10 +444,126 @@ class Flasher(tk.Tk):
         ).grid(row=7,column=0,columnspan=3,sticky="w",padx=8,pady=(4,0))
         ttk.Button(root, text="Flasher et configurer l'ESP32 VPN",
                    command=self._flash_vpn).grid(
-            row=7, column=0, columnspan=3, pady=(8, 4))
+            row=8, column=0, columnspan=3, pady=(8, 4))
         ttk.Button(root, text="Configurer via USB sans reflasher",
                    command=self._configure_only).grid(
-            row=8, column=0, columnspan=3, pady=(0, 6))
+            row=9, column=0, columnspan=3, pady=(0, 6))
+
+    def _build_voltronic(self, root: ttk.Frame) -> None:
+        ttk.Label(root,
+            text="ESP32-S3 N16R8 uniquement · lecteur Voltronic RS232 2400 bauds. "
+                 "Première version lecture seule. Pas de paramètre onduleur modifié.",
+            wraplength=690).grid(row=0,column=0,columnspan=3,sticky="w",padx=8,pady=8)
+        modes=ttk.LabelFrame(root,text="Type de flash Voltronic S3",padding=8)
+        modes.grid(row=1,column=0,columnspan=3,sticky="ew",padx=8,pady=8)
+        ttk.Radiobutton(modes,text="Nouvel ESP32-S3 — FACTORY à 0x0",
+                        variable=self.volt_mode,value="factory").pack(anchor="w")
+        ttk.Radiobutton(modes,text="Mise à jour ESP32-S3 compatible — APP-ONLY à 0x10000",
+                        variable=self.volt_mode,value="update").pack(anchor="w")
+        params=ttk.LabelFrame(root,text="Configuration USB du lecteur Voltronic",padding=8)
+        params.grid(row=2,column=0,columnspan=3,sticky="ew",padx=8,pady=8)
+        params.columnconfigure(1,weight=1)
+        for i,(description,key,secret) in enumerate([
+            ("Wi-Fi 2,4 GHz (SSID) :","wifi_ssid",False),
+            ("Mot de passe Wi-Fi :","wifi_password",True),
+            ("Code privé de lecture (8–32) :","read_code",True),
+        ]):
+            variable=tk.StringVar()
+            self.volt_fields[key]=variable
+            self._label(params,description,i)
+            self._entry(params,variable,i,password=secret)
+        expert=ttk.Frame(root)
+        expert.columnconfigure(1,weight=1)
+        expert.grid(row=4,column=0,columnspan=3,sticky="ew",padx=8)
+        expert.grid_remove()
+        self._label(expert,"Image Voltronic S3 externe (.bin) :",0)
+        self._entry(expert,self.volt_image,0,width=42)
+        self._picker(expert,0,self.volt_image,"Choisir un firmware Voltronic S3")
+        ttk.Button(root,text="Options expertes : fichier .bin externe",
+                   command=lambda: expert.grid_remove()
+                       if expert.winfo_ismapped() else expert.grid()).grid(
+            row=3,column=0,columnspan=3,sticky="w",padx=8,pady=5)
+        ttk.Label(root,
+            text="Attention : un port RS232 onduleur NE se branche jamais "
+                 "directement sur un GPIO 3,3 V ! MAX3232 et câblage validé "
+                 "indispensables. Ne pas écraser le VPN avec ce firmware.",
+            wraplength=690).grid(row=5,column=0,columnspan=3,sticky="w",padx=8,pady=8)
+        ttk.Button(root,text="Flasher et configurer Voltronic S3",
+                   command=self._flash_voltronic).grid(
+            row=6,column=0,columnspan=3,pady=6)
+        ttk.Button(root,text="Configurer Voltronic via USB sans reflasher",
+                   command=self._configure_voltronic_only).grid(
+            row=7,column=0,columnspan=3,pady=6)
+
+    @staticmethod
+    def _bundled_voltronic_image(mode: str) -> Path:
+        base=Path(getattr(sys,"_MEIPASS",Path(__file__).resolve().parent))
+        names={
+            "factory":"smart-energy-voltronic-S3-FACTORY-0x0.bin",
+            "update":"smart-energy-voltronic-S3-APP-0x10000.bin",
+        }
+        if mode not in names:
+            raise ValueError("Mode flash Voltronic S3 invalide.")
+        file=base/"embedded_firmware"/names[mode]
+        if not file.is_file():
+            raise ValueError("Firmware Voltronic S3 absent de ce flasheur : "
+                "télécharge le nouveau EXE tout-en-un GitHub.")
+        return file
+
+    def _voltronic_values(self) -> dict[str,str]:
+        from voltronic_usb import voltronic_config_line
+        values={key:variable.get() for key,variable in self.volt_fields.items()}
+        voltronic_config_line(values)  # Strict validation, no network.
+        self.secret_values=[values.get("wifi_password",""),
+                            values.get("read_code","")]
+        return values
+
+    def _flash_voltronic(self) -> None:
+        try:
+            from vpn_usb import check_precompiled_image
+            port=self._assert_ready()
+            values=self._voltronic_values()
+            mode=self.volt_mode.get()
+            image=(Path(self.volt_image.get().strip())
+                   if self.volt_image.get().strip()
+                   else self._bundled_voltronic_image(mode))
+            check_precompiled_image(image,mode,chip="esp32s3")
+            if not messagebox.askyesno("Flash Voltronic S3",
+                "Vérifie la puce ESP32-S3 N16R8 et le port COM.\n"
+                "FACTORY : CARTE VIERGE uniquement ; peut remplacer les partitions.\n"
+                "Jamais sur un ESP32 JK ou VPN déjà associé. Continuer ?"):
+                return
+            self._run_async(
+                lambda:self._do_voltronic(port,image,mode,values),
+                mode="voltronic")
+        except Exception as exc:
+            messagebox.showerror("Voltronic S3",str(exc))
+
+    def _do_voltronic(self,port:str,image:Path,mode:str,
+                      values:dict[str,str])->None:
+        from vpn_usb import flash_precompiled
+        from voltronic_usb import provision_voltronic
+        ensure_esptool_console_streams()
+        self._progress_stage("Écriture du firmware Voltronic S3…")
+        with monitor_esptool_progress(self._flash_percent):
+            flash_precompiled(port,image,mode,self._log,chip="esp32s3")
+        self._progress_step(80,"Firmware S3 chargé, configuration USB…")
+        provision_voltronic(port,values,self._log)
+        self._progress_step(98,"Voltronic S3 : confirmation USB reçue.")
+
+    def _configure_voltronic_only(self)->None:
+        try:
+            from voltronic_usb import provision_voltronic
+            port=self._assert_ready()
+            values=self._voltronic_values()
+            if not messagebox.askyesno("Reconfiguration USB Voltronic S3",
+                "Redémarre le S3 et maintiens BOOT 3 secondes "
+                "dans les 9 premières secondes, sans flasher. Continuer ?"):
+                return
+            self._run_async(lambda:provision_voltronic(port,values,self._log),
+                            mode="config")
+        except Exception as exc:
+            messagebox.showerror("Configuration Voltronic S3",str(exc))
 
     def _assert_ready(self) -> str:
         if self.busy:
@@ -621,7 +744,7 @@ class Flasher(tk.Tk):
     def _flash_percent(self, percent: int) -> None:
         # Esptool reports actual flash-writing percentage; VPN still needs
         # physical USB provisioning after image transfer.
-        bar = 5 + round((70 if self.operation_mode == "vpn" else 90) *
+        bar = 5 + round((70 if self.operation_mode in ("vpn","voltronic") else 90) *
                         percent / 100)
         self.events.put(("progress", str(bar)))
         self.events.put(("stage", f"Écriture du firmware : {percent} %"))
