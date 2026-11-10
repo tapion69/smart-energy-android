@@ -17,7 +17,9 @@ object JkAlertPreferences {
     fun number(value: String): Double? =
         value.trim().replace(',', '.').toDoubleOrNull()?.takeIf { it.isFinite() }
 
-    fun soc(value: String): Int? = value.trim().toIntOrNull()?.takeIf { it in 1..100 }
+    fun soc(value: String): Int? = number(value)?.takeIf {
+        it in 1.0..100.0 && it % 1.0 == 0.0
+    }?.toInt()
     fun cell(value: String): Double? = number(value)?.takeIf { it in 2.0..4.5 }
     fun temperature(value: String): Double? = number(value)?.takeIf { it in 0.0..120.0 }
 }
