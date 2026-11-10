@@ -2,7 +2,7 @@
 
 **État : expérimental.** Le firmware est précompilé une seule fois, sans secrets d'installation. Un programme Windows indépendant envoie ensuite le Wi-Fi, la clé Tailscale et les lecteurs JK par **USB physique**, et l'ESP32 garde ces valeurs dans sa partition NVS.
 
-**Pour l'instant : ESP32 classique uniquement. L'ESP32-S3 N16R8 nécessitera sa propre compilation, son paramétrage PSRAM et des essais USB.**
+**Deux variantes sont désormais précompilées : ESP32 classique (4 Mo) et ESP32-S3 N16R8 (16 Mo flash / 8 Mo PSRAM).** Le firmware S3 utilise le même protocole de configuration `SEVPN_READY_V1`/`SEVPN_CONFIG` mais son **USB Serial/JTAG natif**, pas l'UART0 sur pont USB du modèle classique. **Les images S3 ne sont pas encore validées sur carte réelle** ; l'ancien ESP32 VPN en service doit rester intact.
 
 ## Architecture
 
@@ -41,3 +41,16 @@ Les anciens scripts \`prepare-windows.cmd\` et \`sdkconfig.credentials.example\`
 - Le provisionnement se fait exclusivement sur le port série physique UART0 d'un ESP32 classique ; protéger l'accès physique au boîtier. Ne jamais envoyer les secrets à GitHub ou dans les journaux de diagnostic.
 - Le composant TailTiny est tiers. Sa stabilité et sa résilience après coupures Wi-Fi/DERP doivent être testées sur les cartes réelles.
 - L'image générique n'est pas encore validée matériellement. **Ne pas reflasher la passerelle VPN de production** avant d'avoir testé un autre ESP32 en parallèle.
+
+## ESP32-S3 N16R8 (prototype)
+
+Le job `esp32s3` du workflow `.github/workflows/build-vpn-gateway.yml` génère deux images ciblant **esp32s3** avec IDF 5.3.2 et PSRAM octale :
+
+- `smart-energy-vpn-USB-FACTORY-ESP32S3-N16R8-0x0.bin` — seulement pour un S3 vierge, bootloader S3 à **0x0**, table à 0x8000 et application à 0x10000 ;
+- `smart-energy-vpn-USB-APP-ESP32S3-N16R8-0x10000.bin` — application seule, **0x10000**, NVS conservée *si le partitionnement existant correspond*.
+
+Dans le nouveau `SmartEnergyFlasher.exe`, choisir explicitement **ESP32-S3 N16R8** dans l'onglet VPN, puis `Factory` pour un S3 neuf ; le programme vérifie les en-têtes d'image et l'identifiant de puce avant tout flash. Ne sélectionner **jamais** une image ESP32 classique sur un S3, ni l'inverse. Pas d'effacement de la flash par défaut.
+
+**Première validation sur matériel :** port USB de données reconnu Windows, envoi `SEVPN_READY_V1`, configuration physique avec confirmation `SEVPN_OK_REBOOT`, Wi-Fi connecté, identité Tailscale créée et GET `/api/v1/health` depuis le tailnet. Tester ensuite la lecture JK1/JK2/JK3. Aucune validation réelle ne peut être déclarée avant ces tests.
+
+Ce firmware reste expérimental : NVS non chiffrée, sécurité physique nécessaire, pas de serveur public ni de redirection de ports Internet.
