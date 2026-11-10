@@ -2185,6 +2185,10 @@ class MainActivity : Activity() {
         selectedBmsMac = mac
         mountedBmsMac = ""
         mountedTab = -1
+        // Overview is strictly the Accueil page, never a permanent
+        // header above the detail of a selected BMS.
+        if(::fleetPanel.isInitialized)
+            fleetPanel.visibility=if(mac.isBlank())View.VISIBLE else View.GONE
         lastTelemetry?.let { showTelemetry(it) }
         if (currentTab == 2 && mac.isNotBlank()) refreshDetails()
     }
@@ -2227,6 +2231,7 @@ class MainActivity : Activity() {
 
     private fun renderFleetOverview() {
         if(!::fleetOverview.isInitialized) return
+        fleetPanel.visibility=if(selectedBmsMac.isBlank())View.VISIBLE else View.GONE
         val all=JSONArray()
         val now=android.os.SystemClock.elapsedRealtime()
         fleetOwnerByMac.clear()
@@ -2259,6 +2264,9 @@ class MainActivity : Activity() {
         }
         fleetConfiguredCount=all.length()
         fleetAvailableCount=(0 until all.length()).count { all.optJSONObject(it)?.optBoolean("available")==true }
+        // Keep fleet health counters current for Debug, but don't recreate
+        // hidden global views on every 2.5s telemetry tick of a selected BMS.
+        if(selectedBmsMac.isNotBlank())return
         fleetOverview.bind(all,
             { mac ->
                 val slot=fleetOwnerByMac[mac] ?: activeReaderSlot
@@ -2347,9 +2355,10 @@ class MainActivity : Activity() {
         if(::dashboardDebugStatus.isInitialized)dashboardDebugStatus.text=status.text
         lastTelemetry = response
         fleetCache[activeReaderSlot]=android.os.SystemClock.elapsedRealtime() to response
-        renderFleetOverview()
         val devices = response.optJSONArray("devices")
         if (devices == null || devices.length() == 0) {
+            selectedBmsMac=""
+            renderFleetOverview()
             telemetryStatus.text = if (devices == null)
                 "Ce firmware ne prend pas en charge les mesures JK."
             else "Aucun JK enregistré. Ouvre « Configuration et association »."
@@ -2361,11 +2370,13 @@ class MainActivity : Activity() {
         val macs = (0 until devices.length()).mapNotNull { i ->
             devices.optJSONObject(i)?.optString("mac")?.takeIf { it.isNotBlank() }
         }
-        val multi = macs.size > 1
-        if (!multi) selectedBmsMac = macs.firstOrNull() ?: ""
-        else if (selectedBmsMac.isNotBlank() && selectedBmsMac !in macs)
+        if (selectedBmsMac.isNotBlank() && selectedBmsMac !in macs)
             selectedBmsMac = ""
-        val global = multi && selectedBmsMac.isBlank()
+        // Always provide Accueil, even for a single BMS.
+        val global = selectedBmsMac.isBlank()
+        renderFleetOverview()
+        parameterFeedback.visibility=if(global)View.GONE else
+            if(currentTab==2 && lastParameterFeedback.isNotBlank())View.VISIBLE else View.GONE
         val rerender = macs != dashboardMacs ||
             mountedTab != currentTab || mountedBmsMac != selectedBmsMac
         if (rerender) {
@@ -2376,14 +2387,8 @@ class MainActivity : Activity() {
             globalOverview = null
             telemetryPanel.removeAllViews()
             detailsTabRow.visibility = if(global) View.GONE else View.VISIBLE
-            renderBmsTabs(macs,multi)
-            if(global) {
-                // The multi-reader global overview is already shown above.
-                // Do not draw a misleading, selected-reader-only total.
-                telemetryPanel.addView(label(
-                    "Choisis une batterie pour afficher ses mesures détaillées.",13f,
-                    color=subdued),LinearLayout.LayoutParams(-1,-2))
-            } else {
+            renderBmsTabs(macs,true)
+            if(!global) {
                 val mac = selectedBmsMac
                 if(currentTab == 0) {
                     val card = BatteryDashboardCard(this)
