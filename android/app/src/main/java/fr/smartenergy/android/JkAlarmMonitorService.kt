@@ -135,7 +135,8 @@ class JkAlarmMonitorService : Service() {
         val code: String
         val route: String
         val header: String
-        if (vpn && preference != "local") {
+        if (vpn && preference != "local" &&
+            (preference == "gateway" || prefs.getBoolean("remote_gateway_enabled", false))) {
             host = prefs.getString("remote_gateway_ip", "") ?: ""
             code = decrypt("remote_gateway_token_cipher")
             if (!validIp(host, true) || code.length !in 20..128 ||
