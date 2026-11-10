@@ -1863,7 +1863,7 @@ class MainActivity : Activity() {
                     // safety margin. The server independently enforces it.
                     val writeAcceptedAt=android.os.SystemClock.elapsedRealtime()
                     runOnUiThread {
-                        parameterWriteCooldownUntil=writeAcceptedAt+16500L
+                        parameterWriteCooldownUntil=JkEditRecoveryPolicy.nextAllowedAt(writeAcceptedAt)
                     }
                     writeFeedback("Commande envoyée à $label : vérification de la valeur sur le BMS…")
                     var finalState="sent_unconfirmed"
@@ -1889,9 +1889,9 @@ class MainActivity : Activity() {
                     refreshDetails()
                     if(finalState=="confirmed") {
                         runOnUiThread {
-                            val remaining=(parameterWriteCooldownUntil -
+                            val remaining=JkEditRecoveryPolicy.delayBeforeRefresh(
+                                parameterWriteCooldownUntil,
                                 android.os.SystemClock.elapsedRealtime())
-                                .coerceAtLeast(0L)+600L
                             uiHandler.postDelayed({
                                 if(!isFinishing && activeReaderSlot==readerAtStart &&
                                    selectedBmsMac==mac && currentTab==2 &&
