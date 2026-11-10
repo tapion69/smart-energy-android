@@ -1,0 +1,13 @@
+# ESP32-S3 N16R8 prototype: 16 MB flash, 8 MB OPI/Octal PSRAM.
+# Applied only when IDF_TARGET=esp32s3 (sdkconfig.defaults stays shared).
+# Validate the exact board and USB connector before the first hardware flash.
+CONFIG_ESPTOOLPY_FLASHSIZE_16MB=y
+CONFIG_ESPTOOLPY_FLASHMODE_DIO=y
+CONFIG_ESPTOOLPY_FLASHFREQ_40M=y
+CONFIG_SPIRAM=y
+CONFIG_SPIRAM_MODE_OCT=y
+CONFIG_SPIRAM_SPEED_80M=y
+CONFIG_SPIRAM_USE_MALLOC=y
+CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y
+# Native USB Serial/JTAG is used for provisioning on S3; no external UART bridge.
+CONFIG_USB_SERIAL_JTAG_ENABLED=y
