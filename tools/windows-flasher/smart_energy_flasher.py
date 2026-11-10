@@ -96,7 +96,7 @@ def valid_serial_port(port: str) -> bool:
 def selected_serial_port(selection: str) -> str:
     """Safely recover a COM port from a dropdown label, never a shell command."""
     match = re.fullmatch(
-        r"(COM[1-9][0-9]*)(?:\\s+—\\s+[^\\r\\n]+)?",
+        r"(COM[1-9][0-9]*)(?:\s+—\s+[^\r\n]+)?",
         selection.strip(), flags=re.IGNORECASE
     )
     if not match:
