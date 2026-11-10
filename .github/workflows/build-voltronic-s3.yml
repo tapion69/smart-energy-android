@@ -1,0 +1,72 @@
+name: Smart Energy Voltronic ESP32-S3 read-only experimental
+on:
+  push:
+    branches: [dev]
+    paths:
+      - 'firmware/voltronic-esp32/**'
+      - '.github/workflows/build-voltronic-s3.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  host-protocol:
+    name: CRC XMODEM / read-only protocol tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Strict host parser tests (no inverter, no RS232 output)
+        run: |
+          gcc -std=gnu11 -Wall -Wextra -Werror \
+            firmware/voltronic-esp32/tests/test_protocol.c \
+            -o /tmp/smart-voltronic-protocol -lm
+          /tmp/smart-voltronic-protocol
+      - name: Explicitly reject any serial SET/parameter commands
+        run: |
+          if grep -R -E '"(POP|PCP|PBCV|PBDV|PBFT|MNCHGC)' \
+             firmware/voltronic-esp32/main; then
+            echo "Write-command string detected in Voltronic READ-ONLY main"
+            exit 1
+          fi
+
+  esp32s3:
+    name: Compile ESP32-S3 N16R8 Voltronic reader
+    needs: host-protocol
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build with ESP-IDF 5.3.2 for S3 N16R8
+        uses: espressif/esp-idf-ci-action@v1
+        with:
+          esp_idf_version: v5.3.2
+          target: esp32s3
+          path: firmware/voltronic-esp32
+      - name: Verify S3 target and output
+        run: |
+          set -euo pipefail
+          test -s firmware/voltronic-esp32/build/smart_energy_voltronic_s3.bin
+          grep -q '^CONFIG_IDF_TARGET_ESP32S3=y' firmware/voltronic-esp32/sdkconfig
+          grep -q '^CONFIG_ESPTOOLPY_FLASHSIZE_16MB=y' firmware/voltronic-esp32/sdkconfig
+      - name: Precompile S3 factory/app-only read-only images
+        run: |
+          set -euo pipefail
+          python -m pip install "esptool==4.9.0"
+          mkdir -p firmware/voltronic-esp32/dist
+          cp firmware/voltronic-esp32/build/smart_energy_voltronic_s3.bin \
+             firmware/voltronic-esp32/dist/smart-energy-voltronic-S3-APP-0x10000.bin
+          python -m esptool --chip esp32s3 merge_bin \
+            --flash_mode dio --flash_freq 40m --flash_size 16MB \
+            -o firmware/voltronic-esp32/dist/smart-energy-voltronic-S3-FACTORY-0x0.bin \
+            0x0 firmware/voltronic-esp32/build/bootloader/bootloader.bin \
+            0x8000 firmware/voltronic-esp32/build/partition_table/partition-table.bin \
+            0x10000 firmware/voltronic-esp32/build/smart_energy_voltronic_s3.bin
+      - name: Publish VOLTRONIC S3 test images
+        uses: actions/upload-artifact@v4
+        with:
+          name: SmartEnergy-VOLTRONIC-ESP32S3-N16R8-READONLY
+          path: |
+            firmware/voltronic-esp32/dist/smart-energy-voltronic-S3-FACTORY-0x0.bin
+            firmware/voltronic-esp32/dist/smart-energy-voltronic-S3-APP-0x10000.bin
+          if-no-files-found: error
+          retention-days: 30
