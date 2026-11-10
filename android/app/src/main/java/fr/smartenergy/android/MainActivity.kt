@@ -1188,9 +1188,13 @@ class MainActivity : Activity() {
             "les deux champs Wi-Fi vides.",12f,color=subdued))
         val error=label("",12f,false,Color.rgb(255,170,150))
         add(form,error,6)
+        val scrollingForm=ScrollView(this).apply {
+            isFillViewport=false
+            addView(form)
+        }
         val dialog=AlertDialog.Builder(this)
             .setTitle("Associer ESP $slot avec BOOT")
-            .setView(form)
+            .setView(scrollingForm)
             .setNegativeButton("Annuler",null)
             .setPositiveButton("Se connecter à l'ESP32",null)
             .create()
@@ -1426,6 +1430,13 @@ class MainActivity : Activity() {
         }
 
     private fun findNearbyEsp32() {
+        if (Build.VERSION.SDK_INT >= 33 &&
+            checkSelfPermission(Manifest.permission.NEARBY_WIFI_DEVICES) !=
+                PackageManager.PERMISSION_GRANTED) {
+            requestPermissions(arrayOf(Manifest.permission.NEARBY_WIFI_DEVICES), 40)
+            pairingState("Autorise « Appareils Wi-Fi proches », puis relance la recherche.")
+            return
+        }
         if (checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION) != PackageManager.PERMISSION_GRANTED) {
             requestPermissions(arrayOf(Manifest.permission.ACCESS_FINE_LOCATION), 41)
             pairingState("Autorise la localisation pour rechercher les Wi-Fi SmartJK proches, puis relance la recherche.")
@@ -1487,8 +1498,10 @@ class MainActivity : Activity() {
                 }
                 // A single new, fresh unassigned reader is unambiguous.
                 // Do not make users select ESP 1 again from a list.
-                if(newFresh.size==1) {
-                    useFoundEsp32(newFresh.single().ssid)
+                val unique=JkNearbyWifiPolicy.uniqueFreshUnclaimed(
+                    candidates,scanSlot,assigned)
+                if(unique!=null) {
+                    useFoundEsp32(unique.ssid)
                     return@postDelayed
                 }
                 val options=candidates.map {
@@ -2194,14 +2207,16 @@ class MainActivity : Activity() {
             physicalRecoverBtn.text="2 · Associer ESP $activeReaderSlot avec BOOT"
         if(::pairingStatus.isInitialized)
             pairingStatus.text="ESP $activeReaderSlot sélectionné. "+
-                if(configured)"Tu peux retrouver ce lecteur ou relancer BOOT." else
-                    "Recherche son réseau SmartJK-Setup, puis associe-le avec BOOT."
+                (if(configured)
+                    "Tu peux retrouver ce lecteur ou relancer BOOT."
+                 else
+                    "Recherche son réseau SmartJK-Setup, puis associe-le avec BOOT.")
     }
 
     private fun switchReaderSlot(target:Int) {
         if(target !in 1..3 || target==activeReaderSlot) return
         if(lanConnectionPending || setupTransport) {
-            state("Termine la connexion ou l'association en cours avant de changer d'ESP32.")
+            pairingState("Termine la connexion ou l'association en cours avant de changer d'ESP32.")
             return
         }
         val editor=prefs.edit()
