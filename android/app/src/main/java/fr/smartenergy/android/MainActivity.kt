@@ -134,6 +134,9 @@ class MainActivity : Activity() {
     private lateinit var tabExtended: Button
     private lateinit var tabSettings: Button
     private lateinit var telemetryStatus: TextView
+    private lateinit var dashboardDebugStatus: TextView
+    private var parameterWriteInFlight=false
+    private var settingsRefreshBusy=false
     private lateinit var parameterFeedback: TextView
     private var lastParameterFeedback: String = ""
     @Volatile private var telemetryBusy = false
@@ -204,9 +207,9 @@ class MainActivity : Activity() {
                 if(currentTab==2 &&
                    android.os.SystemClock.elapsedRealtime()-lastDetailsFetchedAt>1800000L)
                     refreshDetails()
-                if(parameterEditingEnabled && currentTab==2 &&
-                   android.os.SystemClock.elapsedRealtime()-lastLocalSettingsRefreshAt>55000L)
-                    requestFreshSettingsForEditing()
+                // BMS settings are not polled every minute just to keep
+                // the editor armed. A single local read is requested on
+                // unlock, explicitly via Refresh, and after each write.
             }
             pollOtherFleetReader()
             uiHandler.postDelayed(this, 2500)
@@ -477,15 +480,13 @@ class MainActivity : Activity() {
         val startInConfig=storedCode().isBlank()
         dashboardPage.visibility=if(startInConfig) View.GONE else View.VISIBLE
         configurationPage.visibility=if(startInConfig) View.VISIBLE else View.GONE
-        add(dashboardPage, label("Tableau de bord JK", 25f, true), 18)
+        add(dashboardPage, label("Tableau de bord JK", 25f, true), 12)
+        // Connection/setup feedback remains accessible in Configuration.
+        // Its mirror on the dashboard is shown ONLY in Debug mode.
         status = label("Connexion à la passerelle…", 13f, false, subdued)
-        add(dashboardPage, status, 8)
+        add(configurationPage,status,10)
+        dashboardDebugStatus=label("",13f,false,subdued)
         telemetryStatus = label("En attente des mesures réelles du JK", 13f, false, subdued)
-        add(dashboardPage, telemetryStatus, 10)
-        fleetPanel=LinearLayout(this).apply { orientation=LinearLayout.VERTICAL }
-        fleetOverview=JkGlobalOverview(this)
-        fleetPanel.addView(fleetOverview,LinearLayout.LayoutParams(-1,-2))
-        add(dashboardPage,fleetPanel,10)
         val tabs = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
         tabOverview = action("Batterie") { switchDashboardTab(0) }
         tabExtended = action("Détails") { switchDashboardTab(1) }
@@ -505,6 +506,13 @@ class MainActivity : Activity() {
         }
         add(dashboardPage, bmsTabStrip, 8)
         add(dashboardPage, detailsTabRow, 8)
+        add(dashboardPage,dashboardDebugStatus,6)
+        add(dashboardPage,telemetryStatus,8)
+        refreshDebugVisibility()
+        fleetPanel=LinearLayout(this).apply { orientation=LinearLayout.VERTICAL }
+        fleetOverview=JkGlobalOverview(this)
+        fleetPanel.addView(fleetOverview,LinearLayout.LayoutParams(-1,-2))
+        add(dashboardPage,fleetPanel,10)
         parameterFeedback=label("",12f,false,mint).apply { visibility=View.GONE }
         add(dashboardPage, parameterFeedback, 6)
         highlightActiveTab()
@@ -529,6 +537,8 @@ class MainActivity : Activity() {
             setOnCheckedChangeListener { _,checked ->
                 debugEnabled=checked
                 prefs.edit().putBoolean("debug_enabled",checked).apply()
+                refreshDebugVisibility()
+                mountedTab=-1 // Recreate details so debug-only rows also disappear.
                 lastTelemetry?.let { showTelemetry(it) }
             }
         }
@@ -668,18 +678,29 @@ class MainActivity : Activity() {
         accessCodeBtn.isEnabled = true
     }
 
-    private fun state(message: String) = runOnUiThread { status.text = message }
+    private fun refreshDebugVisibility() {
+        if(::dashboardDebugStatus.isInitialized)
+            dashboardDebugStatus.visibility=if(debugEnabled)View.VISIBLE else View.GONE
+        if(::telemetryStatus.isInitialized)
+            telemetryStatus.visibility=if(debugEnabled)View.VISIBLE else View.GONE
+    }
+    private fun state(message: String) = runOnUiThread {
+        status.text = message
+        if(::dashboardDebugStatus.isInitialized) dashboardDebugStatus.text=message
+    }
 
     private fun writeFeedback(message: String) = runOnUiThread {
         lastParameterFeedback=message
         parameterFeedback.text=message
         parameterFeedback.visibility=if(currentTab==2)View.VISIBLE else View.GONE
         status.text=message
+        if(::dashboardDebugStatus.isInitialized)dashboardDebugStatus.text=message
     }
 
     private fun wifiState(message: String) = runOnUiThread {
         wifiStatus.text = message
         status.text = message
+        if(::dashboardDebugStatus.isInitialized)dashboardDebugStatus.text=message
     }
 
     private fun connectSetupAp() {
@@ -2238,6 +2259,7 @@ class MainActivity : Activity() {
     }
 
     private fun showTelemetry(response: JSONObject) {
+        if(::dashboardDebugStatus.isInitialized)dashboardDebugStatus.text=status.text
         lastTelemetry = response
         fleetCache[activeReaderSlot]=android.os.SystemClock.elapsedRealtime() to response
         renderFleetOverview()
@@ -2298,11 +2320,14 @@ class MainActivity : Activity() {
                 when(currentTab) {
                     0 -> dashboardCards[mac]?.bind(i,item)
                     1 -> advancedCards[mac]?.measurements(i,item,debugEnabled)
-                    2 -> advancedCards[mac]?.settings(i,detailForMac(mac),item,
-                        parameterEditingEnabled,
-                        { toggleParameterEditMode() }) { param ->
-                        editJkParameter(mac,param)
-                    }
+                    2 -> advancedCards[mac]?.settings(
+                        i,detailForMac(mac),item,
+                        allowEdits=parameterEditingEnabled,
+                        showDebug=debugEnabled,
+                        onModeToggle={ toggleParameterEditMode() },
+                        onRefresh={ requestFreshSettingsForEditing() },
+                        onEdit={ param -> editJkParameter(mac,param) }
+                    )
                 }
             }
         }
