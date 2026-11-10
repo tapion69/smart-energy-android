@@ -251,23 +251,43 @@ class Flasher(tk.Tk):
             messagebox.showerror("Ports", f"Erreur de détection : {exc}")
 
     def _build_jk(self, root: ttk.Frame) -> None:
-        self._label(root, "Firmware .bin officiel :", 0)
-        self._entry(root, self.jk_image, 0)
-        self._picker(root, 0, self.jk_image, "Choisir le firmware JK")
-        ttk.Radiobutton(
-            root, text="Mise à jour — APP-ONLY à 0x10000 (NVS conservée)",
-            variable=self.jk_mode, value="update"
-        ).grid(row=1, column=0, columnspan=3, sticky="w", padx=8, pady=8)
-        ttk.Radiobutton(
-            root, text="Nouvel ESP32 uniquement — image FULL à 0x0000",
-            variable=self.jk_mode, value="factory"
-        ).grid(row=2, column=0, columnspan=3, sticky="w", padx=8)
         ttk.Label(
-            root, text="Ne jamais choisir FULL pour mettre à jour un ESP32 déjà associé.\n"
-                       "Vérifie que le fichier correspond à la carte et au mode sélectionnés."
-        ).grid(row=3, column=0, columnspan=3, sticky="w", padx=8, pady=12)
-        ttk.Button(root, text="Flasher le lecteur JK", command=self._flash_jk).grid(
-            row=4, column=0, columnspan=3, pady=14
+            root,
+            text="Firmware JK 0.3.13-dev précompilé et inclus dans cet EXE. "
+                 "Aucun fichier à chercher.",
+            wraplength=720
+        ).grid(row=0, column=0, columnspan=3, sticky="w", padx=8, pady=(10, 15))
+        modes = ttk.LabelFrame(root, text="Type de flash", padding=8)
+        modes.grid(row=1, column=0, columnspan=3, sticky="ew", padx=8)
+        ttk.Radiobutton(
+            modes, text="Mise à jour — APP-ONLY à 0x10000 (conserve les données NVS)",
+            variable=self.jk_mode, value="update"
+        ).pack(anchor="w", pady=5)
+        ttk.Radiobutton(
+            modes, text="Nouvel ESP32 vierge — FACTORY à 0x0000",
+            variable=self.jk_mode, value="factory"
+        ).pack(anchor="w", pady=5)
+        ttk.Label(
+            root,
+            text="ATTENTION : FACTORY uniquement pour un nouvel ESP32. "
+                 "Ne jamais utiliser FACTORY pour mettre à jour un JK déjà associé.",
+            wraplength=720
+        ).grid(row=2, column=0, columnspan=3, sticky="w", padx=8, pady=12)
+        expert = ttk.Frame(root)
+        expert.columnconfigure(1, weight=1)
+        expert.grid(row=4, column=0, columnspan=3, sticky="ew", padx=8)
+        expert.grid_remove()
+        self._label(expert, "Firmware JK externe (.bin) :", 0)
+        self._entry(expert, self.jk_image, 0, width=42)
+        self._picker(expert, 0, self.jk_image, "Choisir un firmware JK officiel")
+        ttk.Button(
+            root, text="Options avancées : utiliser un autre firmware",
+            command=lambda: expert.grid_remove()
+                if expert.winfo_ismapped() else expert.grid()
+        ).grid(row=3, column=0, columnspan=3, sticky="w", padx=8)
+        ttk.Button(root, text="Flasher le lecteur JK",
+                   command=self._flash_jk).grid(
+            row=5, column=0, columnspan=3, pady=20
         )
 
     def _field(self, frame: ttk.Frame, text: str, key: str, row: int,
@@ -278,43 +298,71 @@ class Flasher(tk.Tk):
         self._entry(frame, variable, row, password=password)
 
     def _build_vpn(self, root: ttk.Frame) -> None:
-        self._label(root, "Firmware VPN précompilé :", 0)
-        self._entry(root, self.vpn_image, 0)
-        self._picker(root, 0, self.vpn_image, "Choisir un .bin (option expert)")
-        ttk.Label(root,text="Intégré à l'EXE recommandé ; champ facultatif.",
-                  foreground="#347d5a").grid(row=0,column=3,padx=5)
-        ttk.Radiobutton(root,
-            text="Nouvelle passerelle uniquement — image FACTORY à 0x0",
-            variable=self.vpn_mode,value="factory").grid(
-                row=1,column=0,columnspan=3,sticky="w",padx=8)
-        ttk.Radiobutton(root,
-            text="Mise à jour passerelle déjà configurée — APP-ONLY à 0x10000",
-            variable=self.vpn_mode,value="update").grid(
-                row=1,column=2,sticky="w",padx=8)
-        rows = [
-            ("Wi-Fi 2,4 GHz SSID :", "wifi_ssid", False),
+        # Each section owns its own 2-column grid. The old overlapping
+        # radio button in column 2 consumed the available width and made all
+        # Entry widgets effectively invisible on normal Windows DPI settings.
+        ttk.Label(
+            root,
+            text="Firmware VPN précompilé inclus : remplis le formulaire, "
+                 "aucun fichier .bin, Git ou ESP-IDF nécessaire.",
+            wraplength=720
+        ).grid(row=0, column=0, columnspan=3, sticky="w", padx=8, pady=5)
+        modes = ttk.LabelFrame(root, text="Type de flash VPN", padding=5)
+        modes.grid(row=1, column=0, columnspan=3, sticky="ew", padx=8, pady=6)
+        ttk.Radiobutton(
+            modes, text="Nouvelle passerelle — FACTORY à 0x0000 (ESP32 vierge uniquement)",
+            variable=self.vpn_mode, value="factory"
+        ).pack(anchor="w", pady=2)
+        ttk.Radiobutton(
+            modes, text="Mise à jour — APP-ONLY à 0x10000 (conserve NVS)",
+            variable=self.vpn_mode, value="update"
+        ).pack(anchor="w", pady=2)
+
+        connection = ttk.LabelFrame(root, text="Wi-Fi et Tailscale", padding=5)
+        connection.grid(row=2, column=0, columnspan=3, sticky="ew",
+                        padx=8, pady=5)
+        connection.columnconfigure(1, weight=1)
+        for i, (caption, key, password) in enumerate([
+            ("Wi-Fi 2,4 GHz (SSID) :", "wifi_ssid", False),
             ("Mot de passe Wi-Fi :", "wifi_password", True),
-            ("Clé Tailscale personnelle :", "tailscale_key", True),
-            ("Token privé de passerelle :", "gateway_token", True),
+            ("Clé Tailscale tskey-auth- :", "tailscale_key", True),
+            ("Token de passerelle (20-128) :", "gateway_token", True),
+        ]):
+            self._field(connection, caption, key, i, password)
+
+        readers = ttk.LabelFrame(root, text="Lecteurs JK du réseau local", padding=5)
+        readers.grid(row=3, column=0, columnspan=3, sticky="ew",
+                     padx=8, pady=5)
+        readers.columnconfigure(1, weight=1)
+        for i, (caption, key, password) in enumerate([
             ("ESP JK 1 — IP locale :", "jk1_ip", False),
             ("ESP JK 1 — code :", "jk1_code", True),
-            ("ESP JK 2 — IP locale (option) :", "jk2_ip", False),
-            ("ESP JK 2 — code (option) :", "jk2_code", True),
-            ("ESP JK 3 — IP locale (option) :", "jk3_ip", False),
-            ("ESP JK 3 — code (option) :", "jk3_code", True),
-        ]
-        for row, (label, key, password) in enumerate(rows, start=2):
-            self._field(root, label, key, row, password)
-        ttk.Label(
-            root, text="Aucun ESP-IDF, Git ou Python à installer : firmware VPN précompilé.\n"
-                       "Secrets transmis uniquement par USB et enregistrés localement.\n"
-                       "Nouvel ESP32 : FACTORY. Ancien ESP32 : APP-ONLY uniquement.",
-            wraplength=720
-        ).grid(row=12, column=0, columnspan=3, sticky="w", pady=8)
+            ("ESP JK 2 — IP (facultatif) :", "jk2_ip", False),
+            ("ESP JK 2 — code (facultatif) :", "jk2_code", True),
+            ("ESP JK 3 — IP (facultatif) :", "jk3_ip", False),
+            ("ESP JK 3 — code (facultatif) :", "jk3_code", True),
+        ]):
+            self._field(readers, caption, key, i, password)
+
+        expert = ttk.Frame(root)
+        expert.columnconfigure(1, weight=1)
+        expert.grid(row=5, column=0, columnspan=3, sticky="ew", padx=8)
+        expert.grid_remove()
+        self._label(expert, "Firmware VPN externe (.bin) :", 0)
+        self._entry(expert, self.vpn_image, 0, width=42)
+        self._picker(expert, 0, self.vpn_image, "Choisir un firmware VPN officiel")
+        ttk.Button(
+            root, text="Options avancées : sélectionner un .bin externe",
+            command=lambda: expert.grid_remove()
+                if expert.winfo_ismapped() else expert.grid()
+        ).grid(row=4, column=0, columnspan=3, sticky="w",
+               padx=8, pady=(4, 0))
         ttk.Button(root, text="Flasher et configurer l'ESP32 VPN",
-                   command=self._flash_vpn).grid(row=13,column=0,columnspan=3,pady=10)
+                   command=self._flash_vpn).grid(
+            row=6, column=0, columnspan=3, pady=(10, 4))
         ttk.Button(root, text="Configurer via USB sans reflasher",
-                   command=self._configure_only).grid(row=14,column=0,columnspan=3,pady=8)
+                   command=self._configure_only).grid(
+            row=7, column=0, columnspan=3, pady=(0, 6))
 
     def _assert_ready(self) -> str:
         if self.busy:
