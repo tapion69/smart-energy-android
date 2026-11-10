@@ -137,7 +137,7 @@ class Flasher(tk.Tk):
         self.jk_image = tk.StringVar()
         self.jk_mode = tk.StringVar(value="update")
         self.vpn_image = tk.StringVar()
-        self.vpn_mode = tk.StringVar(value="factory")
+        self.vpn_mode = tk.StringVar(value="update")
         self.fields: dict[str, tk.StringVar] = {}
         self._build()
         self.after(100, self._drain)
@@ -357,12 +357,17 @@ class Flasher(tk.Tk):
                 if expert.winfo_ismapped() else expert.grid()
         ).grid(row=4, column=0, columnspan=3, sticky="w",
                padx=8, pady=(4, 0))
+        ttk.Label(root,
+            text="VPN déjà fonctionnel : tester d’abord sur une carte de réserve. "
+                 "Ne pas choisir FACTORY pour une mise à jour.",
+            wraplength=720
+        ).grid(row=6,column=0,columnspan=3,sticky="w",padx=8,pady=(4,0))
         ttk.Button(root, text="Flasher et configurer l'ESP32 VPN",
                    command=self._flash_vpn).grid(
-            row=6, column=0, columnspan=3, pady=(10, 4))
+            row=7, column=0, columnspan=3, pady=(8, 4))
         ttk.Button(root, text="Configurer via USB sans reflasher",
                    command=self._configure_only).grid(
-            row=7, column=0, columnspan=3, pady=(0, 6))
+            row=8, column=0, columnspan=3, pady=(0, 6))
 
     def _assert_ready(self) -> str:
         if self.busy:
