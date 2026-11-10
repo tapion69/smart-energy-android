@@ -1,6 +1,6 @@
-# Smart Energy Flasher — un seul EXE Windows, JK + VPN classique + VPN ESP32-S3
+# Smart Energy Flasher — un EXE Windows : JK, VPN classique/S3, Voltronic S3
 
-**Version expérimentale :** `SmartEnergyFlasher.exe`, sans installation de Python, Git ou ESP-IDF sur Windows. Les firmwares **JK et VPN sont tous les deux déjà inclus** dans l'EXE.
+**Version expérimentale :** `SmartEnergyFlasher.exe`, sans Python, Git ni ESP-IDF sur Windows. Il contient les firmwares **JK classique**, **VPN classique et VPN ESP32-S3 N16R8**, ainsi que **Voltronic RS232 ESP32-S3 N16R8 lecture seule**.
 
 Télécharger l'artefact **`SmartEnergyFlasher-Windows-AllInOne-JK-VPN`** du dernier build réussi du [workflow tout-en-un](https://github.com/tapion69/smart-energy-android/actions/workflows/build-vpn-gateway.yml). Ne plus télécharger les anciens `SmartEnergyVPNFlasher-Windows-ESP32-Firmware-Included` ou `SmartEnergyFlasher-Windows-EXE` : ils n'ont pas les correctifs décrits ici.
 
@@ -8,7 +8,7 @@ Télécharger l'artefact **`SmartEnergyFlasher-Windows-AllInOne-JK-VPN`** du der
 
 1. Brancher **un seul ESP32 à la fois** (classique pour JK, classique ou S3 N16R8 pour VPN), avec un câble USB de données.
 2. En haut, sélectionner son port dans le **menu déroulant COM** (l'EXE détecte automatiquement les appareils USB et permet d'actualiser la liste). Un port débranché n'est jamais remplacé silencieusement par un autre.
-3. Choisir l'onglet **ESP32 JK** ou **ESP32 VPN**. Dans VPN, sélectionner obligatoirement **ESP32 classique** ou **ESP32-S3 N16R8** avant le flash. Les images correctes sont précompilées et choisies automatiquement.
+3. Choisir l'onglet **ESP32 JK**, **ESP32 VPN** ou **Voltronic S3**. Dans VPN, sélectionner obligatoirement **ESP32 classique** ou **ESP32-S3 N16R8** avant le flash. L'onglet Voltronic accepte uniquement le S3 N16R8 avec une image distincte. Aucun `.bin` externe n'est requis.
 4. Sélectionner **FACTORY** pour un **nouvel ESP32 vierge** ou **APP-ONLY** pour mettre à jour un appareil existant, sans effacer volontairement la NVS.
 5. Sur l'onglet **JK**, cliquer `Flasher le lecteur JK`. Sur l'onglet **VPN**, renseigner les champs **Wi-Fi, clé d'association Tailscale, token de passerelle, IP et codes personnels des ESP JK 1 à 3**, puis `Flasher et configurer`. Le firmware VPN enregistre les paramètres reçus via le port série dans la NVS.
 6. Lire la confirmation dans le journal ; contrôler ensuite sur le vrai appareil que les connexions Wi-Fi, BLE et/ou Tailscale sont effectives.
@@ -54,3 +54,15 @@ Ces versions **ne sont pas encore validées sur les ESP32 physiques**. Les tests
 - Les images S3 sont incluses dans l'EXE : Factory à 0x0 et APP-ONLY à 0x10000, 16 MB flash, **aucun erase_flash**.
 - Les secrets Tailscale/Wi-Fi sont transmis uniquement par USB ; ne jamais les enregistrer dans Git ni les envoyer en capture.
 - Ne pas utiliser ce nouveau firmware pour écraser ton ESP32 VPN actuel, qui demeure fonctionnel. Les connexions Tailscale, la résilience et l'USB natif doivent encore être vérifiés en situation réelle.
+
+## Nouveau lecteur Voltronic ESP32-S3 (prototype — sans modification des onduleurs)
+
+- Choisir **Voltronic S3** dans le flasheur, sélectionner une **carte S3 N16R8 distincte** de la passerelle VPN.
+- Pour une carte neuve, mode **FACTORY** (bootloader S3 à 0x0). Pour une mise à jour sur partitionnement compatible seulement, **APP-ONLY à 0x10000**, jamais `erase_flash`.
+- Configurer le Wi-Fi 2,4 GHz et un code de lecture personnel de 8–32 caractères. Le programme attend la réponse USB native `SEVOLT_READY_V1`, puis la confirmation `SEVOLT_OK_REBOOT`. Aucun mot de passe n'est affiché dans le journal.
+- Une fois le flash et le Wi-Fi validés, l'APK Android 0.3.20-dev peut tester `GET http://<adresse privée>:18081/api/v1/info` en lecture seule.
+- Pour les mesures Voltronic, prévoir **un convertisseur MAX3232 3,3 V** et le câble du vrai port RS232 PC de l'onduleur. **Ne jamais raccorder une broche RS232 directement au GPIO 3,3 V !** Le branchement et les trames doivent être vérifiés avant une utilisation prolongée.
+- L'ajout de SunSpec dans Android est une découverte Modbus TCP FC03 locale, distincte du firmware Voltronic. Il ne nécessite pas cet ESP quand l'onduleur fournit lui-même Modbus/TCP.
+- Pour reconfigurer le S3 sans reflasher : redémarrer, puis maintenir BOOT 3 s pendant la fenêtre initiale de 9 s, avant d'utiliser le bouton **Configurer via USB**.
+
+Toutes les fonctions S3 sont expérimentales et **ne sont pas validées sur les cartes réelles** ; ne jamais écraser le VPN classique qui fonctionne. Voir aussi `docs/READONLY-INVERTERS-SUNSPEC-VOLTRONIC-S3.md`.
