@@ -11,7 +11,7 @@ object JkWriteHelp {
         "unverified_bms_identity" ->
             "Identité BMS non confirmée (trame JK 0x03) : écriture bloquée"
         "stale_or_missing_settings" ->
-            "Réglages non relus depuis moins de 60 s : attendre une nouvelle trame 0x01"
+            "Réglages datant de plus de 60 s : relancer la lecture des paramètres"
         "parameter_not_readable" -> "Paramètre absent de la trame 0x01 validée"
         "stale_expected_value" ->
             "Valeur affichée différente de la valeur actuelle : rafraîchir les paramètres"
