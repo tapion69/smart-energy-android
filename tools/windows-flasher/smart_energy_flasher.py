@@ -241,6 +241,13 @@ class Flasher(tk.Tk):
             text="Branche un seul ESP32 à la fois, puis choisis son port USB.")
         self.port_hint.grid(row=1, column=0, columnspan=3,
                             sticky="w", padx=8, pady=(0, 4))
+        progress = ttk.LabelFrame(outer, text="Progression du flash / de la configuration", padding=8)
+        progress.pack(fill="x", pady=(4, 8))
+        self.progress_label = ttk.Label(progress, text="Prêt — sélectionne ton ESP32.")
+        self.progress_label.pack(anchor="w", pady=(0, 5))
+        self.progress_bar = ttk.Progressbar(progress, orient="horizontal",
+                                            mode="determinate", maximum=100, value=0)
+        self.progress_bar.pack(fill="x")
         tabs = ttk.Notebook(outer)
         tabs.pack(fill="both", expand=True, pady=10)
         jk = ttk.Frame(tabs, padding=12)
@@ -251,13 +258,6 @@ class Flasher(tk.Tk):
         tabs.add(vpn, text="ESP32 VPN (3 lecteurs)")
         self._build_jk(jk)
         self._build_vpn(vpn)
-        progress = ttk.LabelFrame(outer, text="Progression du flash / de la configuration", padding=8)
-        progress.pack(fill="x", pady=(4, 8))
-        self.progress_label = ttk.Label(progress, text="Prêt — sélectionne ton ESP32.")
-        self.progress_label.pack(anchor="w", pady=(0, 5))
-        self.progress_bar = ttk.Progressbar(progress, orient="horizontal",
-                                            mode="determinate", maximum=100, value=0)
-        self.progress_bar.pack(fill="x")
         ttk.Label(outer, text="Journal (aucun mot de passe ne doit apparaître) :").pack(anchor="w")
         self.log_widget = tk.Text(outer, height=10, wrap="word", state="disabled")
         self.log_widget.pack(fill="x")
