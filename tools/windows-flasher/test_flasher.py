@@ -1,6 +1,11 @@
 import unittest
+import os
+import sys
+import tempfile
+from pathlib import Path
+from unittest.mock import patch
 
-from smart_energy_flasher import sdkconfig_contents, valid_lan_ip, valid_serial_port, validate_vpn_config, selected_serial_port, serial_port_label
+from smart_energy_flasher import sdkconfig_contents, valid_lan_ip, valid_serial_port, validate_vpn_config, selected_serial_port, serial_port_label, ensure_esptool_console_streams, Flasher
 
 
 def config():
@@ -68,6 +73,51 @@ class FlasherTests(unittest.TestCase):
             with self.subTest(item=item):
                 with self.assertRaises(ValueError):
                     selected_serial_port(item)
+
+
+    def test_windowed_esptool_streams_never_none(self):
+        # PyInstaller --windowed sets stdout/stderr to None on Windows.
+        with patch.object(sys,"stdout",None), patch.object(sys,"stderr",None):
+            ensure_esptool_console_streams()
+            try:
+                self.assertIsNotNone(sys.stdout)
+                self.assertIsNotNone(sys.stderr)
+                sys.stdout.write("test")
+                sys.stdout.flush()
+                sys.stderr.flush()
+            finally:
+                sys.stdout.close()
+                sys.stderr.close()
+
+    def test_bundled_jk_factory_and_app_selected_by_mode(self):
+        with tempfile.TemporaryDirectory() as directory:
+            folder=Path(directory)/"embedded_firmware"
+            folder.mkdir()
+            (folder/"smart-jk-esp32-factory.bin").write_bytes(b"firmware_factory")
+            (folder/"smart-jk-esp32-app-only.bin").write_bytes(b"firmware_update")
+            with patch.object(sys,"_MEIPASS",directory,create=True):
+                self.assertEqual(Flasher._bundled_jk_image("factory").name,
+                                 "smart-jk-esp32-factory.bin")
+                self.assertEqual(Flasher._bundled_jk_image("update").name,
+                                 "smart-jk-esp32-app-only.bin")
+                with self.assertRaises(ValueError):
+                    Flasher._bundled_jk_image("unknown")
+            with patch.object(sys,"_MEIPASS",str(Path(directory)/"missing"),create=True):
+                with self.assertRaises(ValueError):
+                    Flasher._bundled_jk_image("factory")
+
+    def test_bundled_vpn_factory_and_app_selected_by_mode(self):
+        with tempfile.TemporaryDirectory() as directory:
+            folder=Path(directory)/"embedded_firmware"
+            folder.mkdir()
+            for filename in ("smart-energy-vpn-USB-FACTORY-ESP32-0x0.bin",
+                             "smart-energy-vpn-USB-APP-ESP32-0x10000.bin"):
+                (folder/filename).write_bytes(b"test")
+            with patch.object(sys,"_MEIPASS",directory,create=True):
+                self.assertIn("FACTORY",Flasher._bundled_vpn_image("factory").name)
+                self.assertIn("APP",Flasher._bundled_vpn_image("update").name)
+                with self.assertRaises(ValueError):
+                    Flasher._bundled_vpn_image("unknown")
 
 
 if __name__ == "__main__":
