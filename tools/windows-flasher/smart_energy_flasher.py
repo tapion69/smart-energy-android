@@ -162,6 +162,10 @@ class FlashProgressWriter:
     def isatty(self) -> bool:
         return False
 
+    def __getattr__(self, name: str):
+        # Allow esptool to inspect standard stream capabilities as before.
+        return getattr(self.target, name)
+
 
 @contextmanager
 def monitor_esptool_progress(callback: Callable[[int], None]):
