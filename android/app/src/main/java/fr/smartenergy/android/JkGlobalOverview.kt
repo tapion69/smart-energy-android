@@ -207,12 +207,13 @@ class JkGlobalOverview(private val ctx: Context) : LinearLayout(ctx) {
                 card.addView(text(if(available)"En ligne" else "Hors ligne",
                     11f,if(available)mint else muted))
                 if(available) {
+                    val reading=v!!
                     card.addView(text(
-                        "${v!!.optInt("soc_pct")}% · "+
-                        "${String.format(Locale.FRANCE,"%.2f",v.optDouble("voltage_v"))} V",
+                        "${reading.optInt("soc_pct")}% · "+
+                        "${String.format(Locale.FRANCE,"%.2f",reading.optDouble("voltage_v"))} V",
                         13f,normal,true))
                     card.addView(text(
-                        String.format(Locale.FRANCE,"%.0f W",v.optDouble("power_w")),
+                        String.format(Locale.FRANCE,"%.0f W",reading.optDouble("power_w")),
                         12f))
                 } else {
                     card.addView(text("Mesures indisponibles",11f,muted))
