@@ -1262,7 +1262,7 @@ class MainActivity : Activity() {
         val cb=object:ConnectivityManager.NetworkCallback() {
             override fun onAvailable(network:Network) {
                 apNetwork=network
-                state("Wi-Fi temporaire BOOT connecté : association en préparation…")
+                pairingState("Wi-Fi temporaire BOOT connecté : association en préparation…")
                 async {
                     try {
                         val info=httpCall("GET","/api/v1/info")
@@ -1293,27 +1293,27 @@ class MainActivity : Activity() {
                             throw IllegalStateException("Association non préparée.")
                         bootPairTicket=staged.optLong("ticket")
                         bootPairDeviceId=deviceId
-                        state("Code prêt : maintiens BOOT une deuxième fois pendant 2 secondes, " +
+                        pairingState("ESP $activeReaderSlot : code prêt. Maintiens BOOT une deuxième fois pendant 2 secondes, " +
                               "relâche, puis utilise le bouton « Après le 2e BOOT ».")
                     } catch(ex:Exception) {
                         bootPairTicket=0
-                        state("Association BOOT impossible : "+(ex.message ?: "erreur") +
+                        pairingState("Association BOOT impossible : "+(ex.message ?: "erreur") +
                             ". Vérifie que tu as maintenu BOOT 4 s et que le Wi-Fi temporaire est visible.")
                     }
                 }
             }
             override fun onLost(network:Network) {
                 if(apNetwork==network)apNetwork=null
-                if(!switchingToHome)state("Réseau BOOT perdu ou délai expiré : réessaie l'association.")
+                if(!switchingToHome)pairingState("Réseau BOOT perdu ou délai expiré : réessaie l'association.")
             }
             override fun onUnavailable() {
-                state("Réseau BOOT introuvable. Maintiens BOOT 4 s sur l'ESP32 allumé, puis réessaie.")
+                pairingState("Réseau BOOT introuvable. Maintiens BOOT 4 s sur l'ESP32 allumé, puis réessaie.")
             }
         }
         callback=cb
-        state("Recherche du réseau temporaire ouvert après BOOT… Accepte la demande Android.")
+        pairingState("Recherche du réseau temporaire ouvert après BOOT… Accepte la demande Android.")
         try{connectivity.requestNetwork(req,cb,30000)}
-        catch(ex:Exception){state("Connexion BOOT impossible : "+(ex.message ?: "réseau"))}
+        catch(ex:Exception){pairingState("Connexion BOOT impossible : "+(ex.message ?: "réseau"))}
     }
 
     private fun commitBootPairing() {
@@ -1322,14 +1322,14 @@ class MainActivity : Activity() {
         val code=bootPairCode
         if(ticket==0L || id.isBlank() || code.length !in 8..32 ||
             !setupTransport || apNetwork==null) {
-            state("Aucune association BOOT en attente. Commence par « Associer avec BOOT ».")
+            pairingState("Aucune association BOOT en attente. Commence par l’étape 2 « Associer avec BOOT ».")
             return
         }
         async {
             try {
                 val check=httpCall("GET","/api/v1/pair/boot/status?ticket=$ticket")
                 if(!check.optBoolean("confirmed_by_boot")) {
-                    state("Seconde confirmation absente : maintiens BOOT 2 secondes puis relâche.")
+                    pairingState("Seconde confirmation absente : maintiens BOOT 2 secondes puis relâche.")
                     return@async
                 }
                 val result=httpCall("POST","/api/v1/pair/boot/commit",
@@ -1345,12 +1345,12 @@ class MainActivity : Activity() {
                 runOnUiThread {
                     setupCode.text.clear()
                     homePassword.text.clear()
-                    state("Association physique réussie. Code mémorisé et BMS conservés. " +
+                    pairingState("ESP $activeReaderSlot : association réussie ! Code mémorisé et BMS conservés. " +
                           "L'ESP32 rejoint maintenant ton Wi-Fi 2,4 GHz.")
                     uiHandler.postDelayed({ discoverHomeLan() },9000)
                 }
             }catch(ex:Exception){
-                state("Confirmation BOOT impossible : "+(ex.message ?: "erreur") +
+                pairingState("Confirmation BOOT impossible : "+(ex.message ?: "erreur") +
                     ". Ne réappuie pas plusieurs fois sur BOOT ; vérifie l'état avant de relancer.")
             }
         }
