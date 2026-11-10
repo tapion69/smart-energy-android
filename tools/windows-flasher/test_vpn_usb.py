@@ -47,11 +47,43 @@ class UsbProtocolTests(unittest.TestCase):
             factory = Path(dirname) / "factory.bin"
             content = bytearray(b"\xff" * (0x10000 + 17000))
             content[0x1000] = 0xe9
+            content[0x1000 + 12:0x1000 + 14] = b"\x00\x00"
             content[0x10000] = 0xe9
+            content[0x10000 + 12:0x10000 + 14] = b"\x00\x00"
             factory.write_bytes(content)
             self.assertEqual(check_precompiled_image(factory, "factory"), 0)
             with self.assertRaises(ValueError):
                 check_precompiled_image(factory, "update")
+
+
+    def test_s3_n16r8_factory_at_zero_and_app_at_0x10000(self):
+        with tempfile.TemporaryDirectory() as folder:
+            destination = Path(folder) / "esp32-s3.bin"
+            body = bytearray(b"\xff" * (0x10000 + 17000))
+            for where in (0, 0x10000):
+                body[where] = 0xE9
+                body[where+12:where+14] = (9).to_bytes(2,"little")
+            destination.write_bytes(body)
+            self.assertEqual(check_precompiled_image(destination,"factory","esp32s3"),0)
+            with self.assertRaises(ValueError):
+                check_precompiled_image(destination,"factory","esp32")
+            app=Path(folder)/"s3-app.bin"
+            app.write_bytes(body[0x10000:])
+            self.assertEqual(check_precompiled_image(app,"update","esp32s3"),0x10000)
+            with self.assertRaises(ValueError):
+                check_precompiled_image(app,"update","esp32")
+
+    def test_factory_bootloader_requires_target_header(self):
+        with tempfile.TemporaryDirectory() as folder:
+            path=Path(folder)/"bad-factory.bin"
+            body=bytearray(b"\xff" * (0x10000+17000))
+            body[0] = 0xE9
+            body[12:14] = (9).to_bytes(2,"little")
+            body[0x10000] = 0xE9
+            body[0x10000+12:0x10000+14] = (0).to_bytes(2,"little")
+            path.write_bytes(body)
+            with self.assertRaises(ValueError):
+                check_precompiled_image(path,"factory","esp32s3")
 
 
 if __name__ == "__main__":
