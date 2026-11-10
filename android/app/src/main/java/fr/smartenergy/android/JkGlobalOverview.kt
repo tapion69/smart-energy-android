@@ -64,6 +64,7 @@ class JkGlobalOverview(private val ctx: Context) : LinearLayout(ctx) {
             val r=kotlin.math.min(width,height)*0.35f
             val rect=RectF(cx-r,cy-r,cx+r,cy+r)
             canvas.drawArc(rect, -90f, 360f, false, track)
+            bar.color = JkSocPalette.color(soc)
             soc?.let { canvas.drawArc(rect,-90f,it*3.6f,false,bar) }
             ink.textSize = r*0.48f
             canvas.drawText(soc?.let { "$it%" } ?: "—",cx,cy+ink.textSize*.22f,ink)
@@ -77,9 +78,10 @@ class JkGlobalOverview(private val ctx: Context) : LinearLayout(ctx) {
         background = GradientDrawable().apply {
             setColor(Color.rgb(29, 45, 65)); cornerRadius=dp(10).toFloat()
         }
-        setPadding(dp(9),dp(9),dp(9),dp(9))
+        setPadding(dp(11),dp(10),dp(11),dp(10))
+        gravity=Gravity.CENTER_VERTICAL
         addView(text(label,11f,muted))
-        addView(text(value,16f,if(warning) red else normal,true))
+        addView(text(value,18f,if(warning) red else normal,true))
         if(source.isNotBlank())addView(text(source,11f,muted))
     }
 
@@ -147,7 +149,7 @@ class JkGlobalOverview(private val ctx: Context) : LinearLayout(ctx) {
         // Equal-width responsive two-column cards, rather than a long
         // five-metric stack beside a large SOC ring.
         // Rows: [SOC, Voltage], [Power, Current], [Alarms, Temperature].
-        fun gridRow(left:View,right:View,heightDp:Int) {
+        fun gridRow(left:View,right:View,heightDp:Int,compactRight:Boolean=false) {
             val row=LinearLayout(ctx).apply {
                 orientation=HORIZONTAL
                 gravity=Gravity.CENTER_VERTICAL
@@ -155,7 +157,7 @@ class JkGlobalOverview(private val ctx: Context) : LinearLayout(ctx) {
             row.addView(left,LayoutParams(0,dp(heightDp),1f).apply {
                 rightMargin=dp(4)
             })
-            row.addView(right,LayoutParams(0,dp(heightDp),1f).apply {
+            row.addView(right,LayoutParams(0,if(compactRight) -2 else dp(heightDp),1f).apply {
                 leftMargin=dp(4)
             })
             board.addView(row,LayoutParams(-1,-2).apply {
@@ -163,17 +165,17 @@ class JkGlobalOverview(private val ctx: Context) : LinearLayout(ctx) {
             })
         }
         val ring=SocRing(ctx).apply { this.soc=soc }
-        gridRow(ring,metric("Tension",average("voltage_v","V",2)),134)
+        gridRow(ring,metric("Tension",average("voltage_v","V",2)),116,compactRight=true)
         gridRow(
             metric("Puissance totale",total("power_w","W",0)),
             metric("Courant total",total("current_a","A",1)),
-            84
+            78
         )
         gridRow(
             metric("Alarmes",alarms,alarmed.isNotEmpty()),
             metric("Température max",hottestValue,
                 hottest?.celsius?.let { it>=55.0 } == true,hottestSource),
-            100
+            90
         )
         board.addView(text(if(allLive) "Données fraîches · ${if(haveCap) "SOC pondéré" else "SOC moyen"} · tension moyenne · A/W additionnés."
           else "Mesures incomplètes : un ou plusieurs BMS sont hors ligne.",11f,muted))
