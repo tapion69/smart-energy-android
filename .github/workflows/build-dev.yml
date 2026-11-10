@@ -94,6 +94,8 @@ jobs:
         run: |
           python firmware/jk-esp32/tests/test_ble_manager_architecture.py
           python firmware/jk-esp32/tests/test_settings_cadence.py
+          g++ -std=c++11 -Wall -Wextra -Werror firmware/jk-esp32/tests/test_jk_identity_policy.cpp -o /tmp/test_jk_identity
+          /tmp/test_jk_identity
           g++ -std=c++11 -Wall -Wextra -Werror firmware/jk-esp32/tests/test_ble_manager_policy.cpp -o /tmp/test_ble_manager
           /tmp/test_ble_manager
       - name: Compile firmware
