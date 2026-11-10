@@ -155,5 +155,26 @@ class FlasherTests(unittest.TestCase):
                     Flasher._bundled_vpn_image("unknown")
 
 
+    def test_bundled_voltronic_s3_requires_correct_image(self):
+        with tempfile.TemporaryDirectory() as directory:
+            folder=Path(directory)/"embedded_firmware"
+            folder.mkdir()
+            (folder/"smart-energy-voltronic-S3-FACTORY-0x0.bin").write_bytes(b"factory")
+            (folder/"smart-energy-voltronic-S3-APP-0x10000.bin").write_bytes(b"application")
+            with patch.object(sys,"_MEIPASS",directory,create=True):
+                self.assertIn("FACTORY",
+                    Flasher._bundled_voltronic_image("factory").name)
+                self.assertIn("APP",
+                    Flasher._bundled_voltronic_image("update").name)
+                with self.assertRaises(ValueError):
+                    Flasher._bundled_voltronic_image("unknown")
+
+    def test_flasher_source_vpn_buttons_do_not_overlap(self):
+        from inspect import getsource
+        source=getsource(Flasher._build_vpn)
+        self.assertIn('command=self._flash_vpn).grid(\\n            row=8',source)
+        self.assertIn('command=self._configure_only).grid(\\n            row=9',source)
+
+
 if __name__ == "__main__":
     unittest.main()
