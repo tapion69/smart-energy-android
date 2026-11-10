@@ -137,6 +137,7 @@ class MainActivity : Activity() {
     private lateinit var dashboardDebugStatus: TextView
     private var parameterWriteInFlight=false
     private var settingsRefreshBusy=false
+    private var parameterWriteCooldownUntil=0L
     private lateinit var parameterFeedback: TextView
     private var lastParameterFeedback: String = ""
     @Volatile private var telemetryBusy = false
@@ -1793,6 +1794,16 @@ class MainActivity : Activity() {
     }
 
     private fun editJkParameter(mac: String, param: JSONObject) {
+        // The firmware's 15-second per-BMS write cooldown remains mandatory.
+        // Never bypass it or allow overlapping writes from a stale UI.
+        if(parameterWriteInFlight) {
+            writeFeedback("Une modification est déjà en cours de vérification.")
+            return
+        }
+        if(android.os.SystemClock.elapsedRealtime()<parameterWriteCooldownUntil) {
+            writeFeedback("Temporisation de sécurité du BMS : patiente avant la prochaine modification.")
+            return
+        }
         if(!parameterEditingEnabled) {
             writeFeedback("Active d'abord le mode modifications dans Paramètres.")
             return
@@ -1834,6 +1845,9 @@ class MainActivity : Activity() {
         }
 
         fun sendWrite(newValue: Any) {
+            if(parameterWriteInFlight)return
+            parameterWriteInFlight=true
+            val readerAtStart=activeReaderSlot
             io.execute {
                 try {
                     val arm=JSONObject().put("mac",mac)
@@ -1844,6 +1858,12 @@ class MainActivity : Activity() {
                         .put("confirmation","APPLY_TO_SELECTED_BMS")
                     if(risk>=2) req.put("risk_confirmation","I_ACCEPT_PROTECTION_RISK")
                     httpCall("POST","/api/v1/jk/write",req)
+                    // Mirrors the server's minimum write spacing, adding a
+                    // safety margin. The server independently enforces it.
+                    val writeAcceptedAt=android.os.SystemClock.elapsedRealtime()
+                    runOnUiThread {
+                        parameterWriteCooldownUntil=writeAcceptedAt+16500L
+                    }
                     writeFeedback("Commande envoyée à $label : vérification de la valeur sur le BMS…")
                     var finalState="sent_unconfirmed"
                     for(i in 0 until 12) {
@@ -1855,18 +1875,44 @@ class MainActivity : Activity() {
                         if(finalState !in setOf("queued","sent_unconfirmed")) break
                     }
                     if(finalState=="confirmed") {
-                        writeFeedback("BMS confirmé : $label a été modifié et relu.")
+                        writeFeedback("BMS confirmé : $label a été modifié et relu. "+
+                            "Préparation de la prochaine modification…")
                     } else {
                         writeFeedback("Modification NON confirmée : "+
                             JkWriteHelp.reason(finalState)+
                             ". Contrôle la valeur sur le JK avant de recommencer.")
                     }
-                    lastDetailsFetchedAt=0
+                    // Show the updated write pilot immediately, even if its
+                    // 15-second rate limit means editing is temporarily blocked.
+                    lastDetailsFetchedAt=0L
                     refreshDetails()
+                    if(finalState=="confirmed") {
+                        runOnUiThread {
+                            val remaining=(parameterWriteCooldownUntil -
+                                android.os.SystemClock.elapsedRealtime())
+                                .coerceAtLeast(0L)+600L
+                            uiHandler.postDelayed({
+                                if(!isFinishing && activeReaderSlot==readerAtStart &&
+                                   selectedBmsMac==mac && currentTab==2 &&
+                                   parameterEditingEnabled && lanVerified &&
+                                   !remoteVpnConnection && !remoteGatewayConnection) {
+                                    // One explicit 0x01 settings read after the
+                                    // server cooldown, not 45s BLE polling.
+                                    requestFreshSettingsForEditing()
+                                }
+                            },remaining)
+                        }
+                    }
                 } catch(ex:Exception) {
                     writeFeedback("Modification REFUSÉE : "+
                         JkWriteHelp.reason(ex.message ?: "erreur")+
                         ". Ne réessaie pas avant une nouvelle lecture.")
+                    // A rejected write never auto-retries. Manual refresh stays
+                    // available, with all firmware safety checks unchanged.
+                    lastDetailsFetchedAt=0L
+                    refreshDetails()
+                } finally {
+                    runOnUiThread { parameterWriteInFlight=false }
                 }
             }
         }
