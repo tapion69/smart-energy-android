@@ -157,7 +157,9 @@ class JkAlarmMonitorService : Service() {
             route = JkTransportPolicy.vpnReadPath(slot, "/api/v1/telemetry") ?: return null
             header = "X-Gateway-Token"
         } else {
-            if (preference == "gateway" || vpn) return null
+            // Explicit local choice may coexist with an active Android VPN.
+            // Never fall back silently to LAN when VPN was selected.
+            if (preference == "gateway" || (vpn && preference != "local")) return null
             host = pref(slot, "local_ip")
             code = decrypt(if (slot == prefs.getInt("active_reader_slot", 1))
                 "pairing_code_cipher" else "reader_${slot}_pairing_code_cipher")
