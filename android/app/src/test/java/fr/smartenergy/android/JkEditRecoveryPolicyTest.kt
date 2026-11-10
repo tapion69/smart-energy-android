@@ -12,7 +12,7 @@ class JkEditRecoveryPolicyTest {
     }
 
     @Test fun recoveryReReadsAfterCooldownWithoutRestart() {
-        val ready=JkEditRecoveryPolicy.nextAllowedAt(1_000L)
+        val ready=JkEditRecoveryPolicy.nextAllowedAt(0L)
         assertEquals(17_100L,JkEditRecoveryPolicy.delayBeforeRefresh(ready,0L))
         assertEquals(600L,JkEditRecoveryPolicy.delayBeforeRefresh(ready,ready+3_000L))
     }
