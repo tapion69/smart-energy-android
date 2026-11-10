@@ -4,6 +4,7 @@ on:
     branches: [dev]
     paths:
       - 'firmware/vpn-gateway/**'
+      - 'tools/windows-flasher/**'
       - '.github/workflows/build-vpn-gateway.yml'
   workflow_dispatch:
 
