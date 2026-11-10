@@ -1130,49 +1130,115 @@ class MainActivity : Activity() {
     }
 
     private fun beginBootPairing() {
-        if (Build.VERSION.SDK_INT >= 33 &&
-            checkSelfPermission(Manifest.permission.NEARBY_WIFI_DEVICES) != PackageManager.PERMISSION_GRANTED) {
-            requestPermissions(arrayOf(Manifest.permission.NEARBY_WIFI_DEVICES), 20)
-            state("Autorise « Appareils Wi-Fi proches », puis relance l'association BOOT.")
-            return
-        }
-        if (checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION) != PackageManager.PERMISSION_GRANTED) {
-            requestPermissions(arrayOf(Manifest.permission.ACCESS_FINE_LOCATION), 21)
-            state("Autorise la localisation pour détecter le Wi-Fi temporaire de l'ESP32.")
-            return
-        }
+        // Always show a dialog. Previous versions silently returned on a
+        // missing SSID or Android location permission, while errors appeared
+        // several screens lower and made the BOOT button seem unresponsive.
+        val slot=activeReaderSlot
         val ssid=apName.text.toString().trim()
-        if (!Regex("^SmartJK-Setup-[A-F0-9]{6}$").matches(ssid)) {
-            state("Commence par « Trouver un ESP32 proche » pour sélectionner son réseau SmartJK-Setup.")
+        val expected=Regex("^SmartJK-Setup-[A-Fa-f0-9]{6}$")
+        if(!expected.matches(ssid)) {
+            pairingState("ESP $slot : aucun réseau SmartJK sélectionné. "+
+                "Clique d'abord sur « 1 · Rechercher mon ESP32 ».")
+            AlertDialog.Builder(this)
+                .setTitle("ESP $slot — étape 1 : recherche")
+                .setMessage("Choisis d'abord le réseau Wi-Fi de TON ESP32 "+
+                    "avec « Rechercher mon ESP32 ».\n\n"+
+                    "S'il n'apparaît pas : laisse l'ESP32 allumé, maintiens "+
+                    "BOOT pendant 4 secondes, puis relâche et relance la "+
+                    "recherche. Le réseau temporaire reste ouvert 2 minutes.")
+                .setNegativeButton("Fermer",null)
+                .setPositiveButton("Rechercher mon ESP32") { _,_-> findNearbyEsp32() }
+                .show()
+            return
+        }
+        val owner=JkNearbyWifiPolicy.assignedToAnotherSlot(
+            ssid,slot,assignedSetupSlots())
+        if(owner!=null) {
+            pairingState("Ce réseau appartient déjà à ESP $owner : sélection refusée.")
+            AlertDialog.Builder(this)
+                .setTitle("Lecteur déjà associé")
+                .setMessage("$ssid est enregistré sur ESP $owner. "+
+                    "Ne le réassocie pas sur ESP $slot. Recherche le réseau "+
+                    "distinct de ton nouveau lecteur.")
+                .setPositiveButton("Compris",null).show()
             return
         }
         val form=LinearLayout(this).apply {
             orientation=LinearLayout.VERTICAL
             setPadding(d(18),d(4),d(18),d(4))
         }
-        val newCode=input("Choisis ton code JK (8 à 32 caractères)",true)
+        add(form,label("ESP $slot : $ssid",15f,true))
+        add(form,label("1. Sur cet ESP32 DÉJÀ ALLUMÉ, maintiens BOOT "+
+            "4 secondes et relâche.\n2. Dans cette fenêtre, choisis un code "+
+            "personnel puis renseigne le Wi-Fi maison pour un nouveau lecteur.\n"+
+            "3. Clique « Se connecter » et accepte la demande de connexion "+
+            "Wi-Fi Android.\n4. Lorsque « Code prêt » apparaît, maintiens "+
+            "BOOT une DEUXIÈME fois pendant 2 secondes, relâche, puis "+
+            "utilise « 3 · Après le 2e BOOT : confirmer ».\n"+
+            "La fenêtre temporaire reste ouverte 2 minutes.",13f,color=subdued))
+        val newCode=input("Code personnel ESP $slot (8 à 32 caractères)",true)
         val wifiSsid=input("Wi-Fi maison 2,4 GHz (nouveau lecteur)")
         val wifiPassword=input("Mot de passe Wi-Fi maison",true)
         wifiSsid.setText(homeSsid.text.toString())
-        form.addView(label("Sur l'ESP32 déjà allumé, maintiens BOOT 4 secondes puis relâche. Tu choisiras un nouveau code, sans connaître l'ancien.",13f,color=subdued))
-        add(form,newCode);add(form,wifiSsid);add(form,wifiPassword)
-        add(form,label("Si l'ESP32 connaît déjà ton Wi-Fi, laisse les deux champs Wi-Fi vides. Pour une première installation vierge, saisis les deux.",12f,color=subdued))
-        AlertDialog.Builder(this).setTitle("Association physique BOOT")
-            .setView(form).setNegativeButton("Annuler",null)
-            .setPositiveButton("Se connecter à l'ESP32") {_,_->
+        add(form,newCode,6)
+        add(form,wifiSsid,6)
+        add(form,wifiPassword,6)
+        add(form,label("Sur un ESP32 neuf, renseigne obligatoirement le Wi-Fi "+
+            "maison. Pour un lecteur qui connaît déjà ta box, tu peux laisser "+
+            "les deux champs Wi-Fi vides.",12f,color=subdued))
+        val error=label("",12f,false,Color.rgb(255,170,150))
+        add(form,error,6)
+        val dialog=AlertDialog.Builder(this)
+            .setTitle("Associer ESP $slot avec BOOT")
+            .setView(form)
+            .setNegativeButton("Annuler",null)
+            .setPositiveButton("Se connecter à l'ESP32",null)
+            .create()
+        dialog.setOnShowListener {
+            dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener {
+                if(activeReaderSlot!=slot) {
+                    error.text="Le lecteur sélectionné a changé : relance l'association."
+                    return@setOnClickListener
+                }
                 val code=newCode.text.toString()
                 val home=wifiSsid.text.toString().trim()
                 val pass=wifiPassword.text.toString()
-                if(code.length !in 8..32 || code.any{it.code !in 33..126}) {
-                    state("Choisis un code de 8 à 32 caractères ASCII sans espaces.")
-                } else if(home.isNotBlank() && pass.length !in 8..63) {
-                    state("Le mot de passe Wi-Fi doit contenir de 8 à 63 caractères.")
-                } else if(home.isBlank() && pass.isNotBlank()) {
-                    state("Indique le nom du Wi-Fi ou laisse les deux champs vides.")
-                } else {
-                    connectBootPairing(ssid,code,home,pass)
+                when {
+                    code.length !in 8..32 || code.any { it.code !in 33..126 } -> {
+                        error.text="Choisis un code de 8 à 32 caractères ASCII sans espaces."
+                        return@setOnClickListener
+                    }
+                    home.isNotBlank() && pass.length !in 8..63 -> {
+                        error.text="Le mot de passe Wi-Fi doit contenir de 8 à 63 caractères."
+                        return@setOnClickListener
+                    }
+                    home.isBlank() && pass.isNotBlank() -> {
+                        error.text="Saisis le nom de ton réseau Wi-Fi ou efface les deux champs."
+                        return@setOnClickListener
+                    }
                 }
-            }.show()
+                if(Build.VERSION.SDK_INT >= 33 &&
+                   checkSelfPermission(Manifest.permission.NEARBY_WIFI_DEVICES) !=
+                       PackageManager.PERMISSION_GRANTED) {
+                    error.text="Autorise les appareils Wi-Fi proches, puis reclique "+
+                        "sur « Se connecter »."
+                    requestPermissions(arrayOf(Manifest.permission.NEARBY_WIFI_DEVICES),20)
+                    return@setOnClickListener
+                }
+                if(checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION) !=
+                    PackageManager.PERMISSION_GRANTED) {
+                    error.text="Autorise la localisation Android, puis reclique "+
+                        "sur « Se connecter »."
+                    requestPermissions(arrayOf(Manifest.permission.ACCESS_FINE_LOCATION),21)
+                    return@setOnClickListener
+                }
+                dialog.dismiss()
+                pairingState("ESP $slot : recherche du Wi-Fi temporaire $ssid. "+
+                    "Accepte la demande Android pour continuer.")
+                connectBootPairing(ssid,code,home,pass)
+            }
+        }
+        dialog.show()
     }
 
     private fun connectBootPairing(ssid:String,code:String,home:String,password:String) {
