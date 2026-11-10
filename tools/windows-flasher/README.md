@@ -35,6 +35,7 @@ Chaque onglet dispose d'un bouton `Options avancées` permettant de sélectionne
 
 - L'exécutable `--windowed` créait `sys.stdout=None` et `sys.stderr=None`, ce qui provoquait `'NoneType' object has no attribute 'flush'` dans esptool. Le flasheur initialise désormais correctement ces flux avant le flash.
 - Le port COM n'a plus à être saisi manuellement : liste déroulante et bouton **Actualiser**, avec description USB des ports.
+- Une **barre de progression toujours visible sous le menu COM** suit le flash JK/VPN. Pendant l'écriture, le pourcentage affiché provient des informations réelles d'esptool ; tant que la connexion et la préparation sont en cours, elle s'anime sans inventer de pourcentage. Pour le VPN, l'installation n'est indiquée comme terminée qu'après la confirmation USB `SEVPN_OK_REBOOT` de l'enregistrement NVS. En cas d'échec, la barre reste incomplète et le journal indique l'erreur.
 - La disposition de l'onglet VPN a été corrigée : les boutons radio de sélection ne masquent plus les champs.
 - JK et VPN sont désormais distribués **dans le même EXE**, sans second téléchargement.
 - Aucune commande `erase_flash` n'est exécutée par le programme.
