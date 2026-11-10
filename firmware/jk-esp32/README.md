@@ -198,3 +198,16 @@ La modification ne répare **pas** un code déjà remplacé dans la NVS : ne fla
 - Le firmware expire toute fenêtre au bout de 2 minutes et retourne au Wi-Fi enregistré ou au mode configuration WPA2. La page `/api/v1/info` indique `physical_pairing_mode` sans révéler d'identifiants.
 - La condition de longueur minimale de 16 caractères a été retirée pour les rares paramètres pilotes ; 8–32 caractères valides sont autorisés avec relecture et confirmation utilisateur obligatoires.
 - **Ce prototype utilise un AP provisoirement ouvert et l'API HTTP sans chiffrement d'application. Ne pas exposer sur Internet, ni déclarer le bootstrap sûr contre interception radio/MITM.** Prévoir chiffrement et authentification avant version stable.
+
+
+## 0.3.14-dev — correction des identifiants ESP32 identiques
+
+**Bug confirmé :** les anciennes versions prenaient `ESP.getEfuseMac() & 0xFFFFFF`, soit les trois premiers octets du MAC usine dans l'ordre little-endian Arduino. Ces octets correspondent souvent au **préfixe du fabricant (OUI)** : plusieurs ESP32 classiques d'une même série peuvent donc annoncer `SmartJK-Setup-XXXXXX` et `smartjk-XXXXXX` identiques. Le binaire précompilé n'a aucun SSID personnel intégré : la formule d'identification était erronée.
+
+**Correction :** sur une carte non associée au Wi-Fi, le suffixe vient maintenant de `(ESP.getEfuseMac() >> 24) & 0xFFFFFF`, c'est-à-dire les trois octets distinctifs de l'adresse matérielle. La génération choisie (`idScheme=2`) est **mémorisée dans la NVS**, avant configuration Wi-Fi, pour conserver le même identifiant après les redémarrages.
+
+**Compatibilité :** un lecteur déjà installé et disposant d'un SSID Wi-Fi enregistré garde automatiquement son ancien identifiant (`idScheme=1`) afin de ne pas casser l'association dans l'APK. Il n'est pas nécessaire de reflasher l'ESP32 n°1. L'API locale `/api/v1/info` expose `device_id_scheme` sans publier aucun code personnel.
+
+**Pour corriger le deuxième lecteur**, déjà flashé mais non associé au réseau maison : choisir la nouvelle image JK `0.3.14-dev` **APP-ONLY à 0x10000**, sans aucun `erase_flash`. Après redémarrage, vérifier que le SSID `SmartJK-Setup-XXXXXX` diffère de celui du premier lecteur. Le fichier FACTORY de la nouvelle version convient uniquement à une carte vierge et n'est pas requis pour corriger un simple nom dupliqué. Si les deux cartes ont déjà des paramètres réseau enregistrés, ne pas effacer leur mémoire : diagnostiquer les données NVS et prévoir une migration explicite.
+
+**Contrôle automatisé :** `test_jk_identity_policy.cpp` couvre deux ESP32 avec le même OUI mais des octets distinctifs différents, ainsi que la stabilité des lecteurs anciennement configurés. Les vrais appareils doivent toujours être validés par un test sur les deux cartes.
