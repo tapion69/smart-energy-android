@@ -17,7 +17,7 @@ import org.json.JSONObject
 import java.util.Locale
 
 /**
- * Four-JK overview. No mocked values: every number comes from fresh type-02 BLE data.
+ * Multi-reader overview. No mocked values: every number comes from fresh type-02 BLE data.
  * SOC is capacity-weighted only when all online BMS have verified capacities.
  * Voltage is averaged; current and power are SUMS for independent parallel JK packs.
  * 'Aucune' for alarms requires valid, fresh measurements from every configured BMS.
@@ -71,7 +71,8 @@ class JkGlobalOverview(private val ctx: Context) : LinearLayout(ctx) {
             canvas.drawText("SOC GLOBAL",cx,cy+r*.5f,ink)
         }
     }
-    private fun metric(label: String, value: String, warning: Boolean = false) = LinearLayout(ctx).apply {
+    private fun metric(label: String, value: String, warning: Boolean = false,
+                       source:String="") = LinearLayout(ctx).apply {
         orientation = VERTICAL
         background = GradientDrawable().apply {
             setColor(Color.rgb(29, 45, 65)); cornerRadius=dp(10).toFloat()
@@ -79,6 +80,7 @@ class JkGlobalOverview(private val ctx: Context) : LinearLayout(ctx) {
         setPadding(dp(9),dp(9),dp(9),dp(9))
         addView(text(label,11f,muted))
         addView(text(value,16f,if(warning) red else normal,true))
+        if(source.isNotBlank())addView(text(source,11f,muted))
     }
 
     init { orientation = VERTICAL }
@@ -111,6 +113,27 @@ class JkGlobalOverview(private val ctx: Context) : LinearLayout(ctx) {
                 ?: return "—"
             return String.format(Locale.FRANCE, "%." + dec + "f %s", totalValue, unit)
         }
+        // The hottest valid temperature can come from ANY of the three ESP32
+        // readers, not just the currently selected detail page. Include the
+        // MOS sensor and all available battery probes, but no stale/offline BMS.
+        val temperatureKeys=listOf("temp1_c","temp2_c","temp3_c",
+            "temp4_c","temp5_c","mos_temp_c")
+        val temperatures=live.flatMap { bms ->
+            val values=bms.optJSONObject("values") ?: return@flatMap emptyList<JkTemperatureSample>()
+            val mac=bms.optString("mac")
+            val name=bmsName(mac,entries.indexOf(bms))
+            temperatureKeys.mapNotNull { key ->
+                if(!values.has(key) || values.isNull(key))null else
+                    JkTemperatureSample(name,values.optDouble(key,Double.NaN))
+            }
+        }
+        val hottest=JkTemperatureSummary.hottest(temperatures)
+        val hottestValue=hottest?.let {
+            String.format(Locale.FRANCE,"%.1f °C",it.celsius)
+        } ?: "—"
+        val hottestSource=hottest?.let {
+            it.label + if(allLive) "" else " · BMS en ligne seulement"
+        } ?: ""
         val alarmed=entries.filter {
             it.optBoolean("available") && it.optJSONObject("values")?.optBoolean("alarm_active") == true
         }
@@ -133,6 +156,10 @@ class JkGlobalOverview(private val ctx: Context) : LinearLayout(ctx) {
         )) {
             metrics.addView(metric(label,value,warn),LayoutParams(-1,-2).apply{bottomMargin=dp(5)})
         }
+        metrics.addView(metric(
+            "Température max", hottestValue,
+            hottest?.celsius?.let { it>=55.0 } == true, hottestSource
+        ),LayoutParams(-1,-2).apply { bottomMargin=dp(5) })
         line.addView(metrics,LayoutParams(0,-2,1f))
         board.addView(line)
         board.addView(text(if(allLive) "Données fraîches · ${if(haveCap) "SOC pondéré" else "SOC moyen"} · tension moyenne · A/W additionnés."
