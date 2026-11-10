@@ -1428,24 +1428,26 @@ class MainActivity : Activity() {
     private fun findNearbyEsp32() {
         if (checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION) != PackageManager.PERMISSION_GRANTED) {
             requestPermissions(arrayOf(Manifest.permission.ACCESS_FINE_LOCATION), 41)
-            state("Autorise la localisation pour rechercher les Wi-Fi SmartJK proches.")
+            pairingState("Autorise la localisation pour rechercher les Wi-Fi SmartJK proches, puis relance la recherche.")
             return
         }
         val location = getSystemService(Context.LOCATION_SERVICE) as LocationManager
         if (!location.isLocationEnabled) {
-            state("Active la localisation Android pour rechercher les ESP32 proches (obligation Android).")
+            pairingState("Active la localisation Android pour rechercher les ESP32 proches (obligation Android).")
             return
         }
         if (!wifiManager.isWifiEnabled) {
-            state("Active le Wi-Fi du téléphone avant de rechercher les ESP32.")
+            pairingState("Active le Wi-Fi du téléphone avant de rechercher les ESP32.")
             return
         }
-        state("ESP $activeReaderSlot : recherche des réseaux SmartJK. Chaque ESP32 a un SSID unique.")
+        val scanSlot=activeReaderSlot
+        pairingState("ESP $scanSlot : recherche des réseaux SmartJK. Le lecteur doit être allumé.")
         val scanStarted=try { wifiManager.startScan() } catch (_:SecurityException) {
-            state("Autorisation Wi-Fi insuffisante pour rechercher les ESP32.")
+            pairingState("Autorisation Wi-Fi insuffisante pour rechercher les ESP32.")
             return
         }
         uiHandler.postDelayed({
+            if(activeReaderSlot!=scanSlot)return@postDelayed
             try {
                 // Android may return results from a previous scan when Wi-Fi
                 // throttles scanning. The timestamp is microseconds since boot.
@@ -1458,7 +1460,7 @@ class MainActivity : Activity() {
                     })
                 val assigned=assignedSetupSlots()
                 if(candidates.isEmpty()) {
-                    state("Aucun SmartJK-Setup détecté pour ESP $activeReaderSlot. "+
+                    pairingState("Aucun SmartJK-Setup détecté pour ESP $scanSlot. "+
                           "Laisse seulement le nouvel ESP32 alimenté et regarde dans les Wi-Fi "+
                           "du téléphone. Sur l'ESP32 allumé, BOOT 4 s ouvre un réseau temporaire.")
                     return@postDelayed
@@ -1473,15 +1475,21 @@ class MainActivity : Activity() {
                         JkNearbyWifiPolicy.assignedToAnotherSlot(
                             it.ssid,activeReaderSlot,assigned)
                     }.distinct()
-                    state("Aucun NOUVEL ESP32 identifié pour ESP $activeReaderSlot. "+
+                    pairingState("Aucun NOUVEL ESP32 identifié pour ESP $scanSlot. "+
                           (if(owners.isNotEmpty()) "Seul le lecteur ESP ${owners.joinToString("/")} "+
                               "déjà configuré apparaît. " else "")+
                           (if(!scanStarted) "Android a limité le nouveau scan Wi-Fi. " else "")+
                           "Débranche temporairement ESP 1 et vérifie le réseau SmartJK-Setup "+
                           "du nouveau lecteur dans les paramètres Wi-Fi du téléphone.")
                 } else {
-                    state("${newFresh.size} réseau(x) SmartJK candidat(s) pour ESP $activeReaderSlot. "+
+                    pairingState("${newFresh.size} réseau(x) SmartJK candidat(s) pour ESP $scanSlot. "+
                           "Choisis le nouveau lecteur par son identifiant.")
+                }
+                // A single new, fresh unassigned reader is unambiguous.
+                // Do not make users select ESP 1 again from a list.
+                if(newFresh.size==1) {
+                    useFoundEsp32(newFresh.single().ssid)
+                    return@postDelayed
                 }
                 val options=candidates.map {
                     JkNearbyWifiPolicy.label(it,activeReaderSlot,assigned)
@@ -1495,11 +1503,11 @@ class MainActivity : Activity() {
                         val found=candidates[index]
                         when {
                             !JkNearbyWifiPolicy.isFresh(found) ->
-                                state("Réseau ${found.ssid} issu d'un ancien scan Android. "+
+                                pairingState("Réseau ${found.ssid} issu d'un ancien scan Android. "+
                                       "Actualise le Wi-Fi ou utilise les réglages Wi-Fi du téléphone.")
                             JkNearbyWifiPolicy.assignedToAnotherSlot(
                                 found.ssid,activeReaderSlot,assigned)!=null ->
-                                state("${found.ssid} appartient déjà à ESP "+
+                                pairingState("${found.ssid} appartient déjà à ESP "+
                                       JkNearbyWifiPolicy.assignedToAnotherSlot(
                                           found.ssid,activeReaderSlot,assigned)+
                                       ". Choisis le SSID propre au nouveau lecteur.")
@@ -1509,7 +1517,7 @@ class MainActivity : Activity() {
                     .setNegativeButton("Fermer",null)
                     .show()
             } catch (_:SecurityException) {
-                state("Vérifie les autorisations de localisation et le Wi-Fi Android.")
+                pairingState("Vérifie les autorisations de localisation et le Wi-Fi Android.")
             }
         }, 3500)
     }
@@ -1518,12 +1526,12 @@ class MainActivity : Activity() {
         val owner=JkNearbyWifiPolicy.assignedToAnotherSlot(
             ssid,activeReaderSlot,assignedSetupSlots())
         if(owner!=null) {
-            state("Ce SmartJK est déjà associé à ESP $owner. Impossible de le "+
+            pairingState("Ce SmartJK est déjà associé à ESP $owner. Impossible de le "+
                   "choisir comme ESP $activeReaderSlot sans retirer l'association précédente.")
             return
         }
         apName.setText(ssid.uppercase(Locale.ROOT).replace("SMARTJK-SETUP-","SmartJK-Setup-"))
-        state("ESP $activeReaderSlot sélectionné : $ssid. Pour l'associer, "+
+        pairingState("ESP $activeReaderSlot trouvé : $ssid. Pour l'associer, " +
               "maintiens BOOT pendant 4 s sur CET ESP32 allumé puis utilise "+
               "« Associer avec BOOT ». Un second appui confirme la configuration.")
     }
