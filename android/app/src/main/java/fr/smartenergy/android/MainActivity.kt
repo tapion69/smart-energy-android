@@ -547,9 +547,10 @@ class MainActivity : Activity() {
         pairingStatus=label("ESP $activeReaderSlot sélectionné. "+
             "Recherche son réseau SmartJK-Setup, puis associe-le avec BOOT.",13f,false,mint)
         add(assistant,pairingStatus,8)
-        add(assistant,label("2. Sur cet ESP32 déjà allumé, maintiens BOOT "+
-            "pendant 4 secondes, puis relâche. Le Wi-Fi temporaire "+
-            "d'association reste ouvert environ 2 minutes.",12f,color=subdued))
+        add(assistant,label("2. Ouvre d'abord la fenêtre d'association et "+
+            "remplis le code personnel et le Wi-Fi. Juste avant de te connecter, "+
+            "maintiens BOOT 4 secondes sur cet ESP32 déjà allumé, puis relâche. "+
+            "La connexion temporaire reste ouverte 2 minutes.",12f,color=subdued))
         physicalRecoverBtn=action("2 · Associer ESP $activeReaderSlot avec BOOT") {
             beginBootPairing()
         }
@@ -1169,14 +1170,14 @@ class MainActivity : Activity() {
             setPadding(d(18),d(4),d(18),d(4))
         }
         add(form,label("ESP $slot : $ssid",15f,true))
-        add(form,label("1. Sur cet ESP32 DÉJÀ ALLUMÉ, maintiens BOOT "+
-            "4 secondes et relâche.\n2. Dans cette fenêtre, choisis un code "+
-            "personnel puis renseigne le Wi-Fi maison pour un nouveau lecteur.\n"+
-            "3. Clique « Se connecter » et accepte la demande de connexion "+
-            "Wi-Fi Android.\n4. Lorsque « Code prêt » apparaît, maintiens "+
-            "BOOT une DEUXIÈME fois pendant 2 secondes, relâche, puis "+
-            "utilise « 3 · Après le 2e BOOT : confirmer ».\n"+
-            "La fenêtre temporaire reste ouverte 2 minutes.",13f,color=subdued))
+        add(form,label("1. Renseigne d'abord ton code et le Wi-Fi maison.\n"+
+            "2. Sur cet ESP32 DÉJÀ ALLUMÉ, maintiens BOOT 4 secondes et "+
+            "relâche.\n3. Clique « Se connecter » sans tarder et accepte "+
+            "la demande de connexion Wi-Fi Android.\n4. Lorsque « Code prêt » "+
+            "apparaît, maintiens BOOT une DEUXIÈME fois pendant 2 secondes, "+
+            "relâche, puis utilise « 3 · Après le 2e BOOT : confirmer ».\n"+
+            "Le réseau temporaire reste ouvert 2 minutes : prépare les "+
+            "informations avant le premier BOOT.",13f,color=subdued))
         val newCode=input("Code personnel ESP $slot (8 à 32 caractères)",true)
         val wifiSsid=input("Wi-Fi maison 2,4 GHz (nouveau lecteur)")
         val wifiPassword=input("Mot de passe Wi-Fi maison",true)
