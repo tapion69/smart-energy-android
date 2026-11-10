@@ -1,6 +1,6 @@
 import unittest
 
-from smart_energy_flasher import sdkconfig_contents, valid_lan_ip, valid_serial_port, validate_vpn_config
+from smart_energy_flasher import sdkconfig_contents, valid_lan_ip, valid_serial_port, validate_vpn_config, selected_serial_port, serial_port_label
 
 
 def config():
@@ -54,6 +54,20 @@ class FlasherTests(unittest.TestCase):
         self.assertTrue(valid_serial_port("com12"))
         self.assertFalse(valid_serial_port("ttyUSB0"))
         self.assertFalse(valid_serial_port("COM5 && erase_flash"))
+
+    def test_dropdown_labels_and_safe_port_extraction(self):
+        label = serial_port_label("COM12", "USB-SERIAL CH340")
+        self.assertEqual(label, "COM12 — USB-SERIAL CH340")
+        self.assertEqual(selected_serial_port(label), "COM12")
+        self.assertEqual(selected_serial_port("com8"), "COM8")
+        self.assertEqual(serial_port_label("COM5", "n/a"), "COM5")
+
+    def test_invalid_serial_labels_rejected(self):
+        for item in ("", "ttyUSB0", "COM5 && erase_flash", "COM5 — ",
+                     "COM5 — device\\nrm"):
+            with self.subTest(item=item):
+                with self.assertRaises(ValueError):
+                    selected_serial_port(item)
 
 
 if __name__ == "__main__":
