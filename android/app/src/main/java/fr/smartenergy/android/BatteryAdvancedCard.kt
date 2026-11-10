@@ -149,7 +149,9 @@ class BatteryAdvancedCard(context: Context) : LinearLayout(context) {
 
     fun settings(index:Int, device:JSONObject?, telemetry:JSONObject? = null,
                  allowEdits:Boolean=false,
+                 showDebug:Boolean=false,
                  onModeToggle:(()->Unit)?=null,
+                 onRefresh:(()->Unit)?=null,
                  onEdit: ((JSONObject)->Unit)? = null) {
         val liveValues = telemetry?.optJSONObject("values")
         val statusSignature = listOf(
@@ -158,7 +160,8 @@ class BatteryAdvancedCard(context: Context) : LinearLayout(context) {
             liveValues?.optString("frame_layout"),
             liveValues?.optInt("cell_count")
         ).joinToString()
-        val signature = "s" + index + allowEdits + (device?.toString() ?: "") + statusSignature
+        val signature = "s" + index + allowEdits + showDebug +
+            (device?.toString() ?: "") + statusSignature
         if (lastSignature == signature) return
         lastSignature = signature
         removeAllViews()
@@ -172,26 +175,33 @@ class BatteryAdvancedCard(context: Context) : LinearLayout(context) {
             header.addView(control)
             if(allowEdits) row(header,"Mode modification","ACTIF — confirmation obligatoire à chaque réglage",orange)
         }
-        if (device == null) {
-            row(header, "État", "Paramètres JK non reçus")
+        if (device == null && showDebug) {
+            row(header,"État","Paramètres JK non reçus")
         }
         val pilot=device?.optJSONObject("write_pilot")
-        if(pilot != null) {
-            if (pilot.optBoolean("ready")) {
-                row(header,"Modifications locales","Autorisées après confirmation manuelle")
-            } else {
-                row(header,"Modifications locales","Bloquées")
-                val reason=pilot.optString("reason","")
-                row(header,"Motif",JkWriteHelp.reason(reason))
-                if(reason=="stale_or_missing_settings")
-                    row(header,"Actualisation","Le BMS relit ses réglages toutes les 45 s")
+        if (pilot != null) {
+            val ready=pilot.optBoolean("ready")
+            row(header,"Modifications locales",when {
+                !allowEdits -> "Lecture seule"
+                ready -> "Autorisées après confirmation"
+                else -> "En attente de vérification"
+            })
+            if(showDebug && !ready) {
+                row(header,"Motif",JkWriteHelp.reason(pilot.optString("reason","")))
+                row(header,"Actualisation","Au démarrage, toutes les 30 min et après modification")
             }
+        }
+        if (allowEdits && onRefresh!=null) {
+            val refresh=txt("⟳ Actualiser les réglages",13f,true,mint)
+            refresh.setPadding(dp(6),dp(12),dp(6),dp(8))
+            refresh.setOnClickListener { onRefresh() }
+            header.addView(refresh)
         }
         val s=device?.optJSONObject("settings")
         if(s==null||!s.optBoolean("available")){
-            row(header,"État","Trame paramètres JK non reçue ou périmée")
+            row(header,"État","Réglages indisponibles")
         } else {
-            row(header,"Dernière lecture",s.optInt("age_seconds").toString()+" s")
+            if(showDebug) row(header,"Dernière lecture",s.optInt("age_seconds").toString()+" s")
             val array=s.optJSONArray("items")?:JSONArray()
             val groups=linkedMapOf<String,MutableList<JSONObject>>()
             for(i in 0 until array.length()){
