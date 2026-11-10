@@ -31,38 +31,56 @@ def format_usb_configuration(values: dict[str, str]) -> bytes:
     return data
 
 
-def check_precompiled_image(image: Path, mode: str) -> int:
+def check_precompiled_image(image: Path, mode: str, chip: str = "esp32") -> int:
+    """Validate both flash OFFSET and chip identity before any USB operation.
+
+    ESP32 classic bootloader at 0x1000; ESP32-S3 bootloader at 0x0.
+    APP-ONLY at 0x10000 on both. Never call erase_flash.
+    """
+    if chip not in ("esp32", "esp32s3"):
+        raise ValueError("Choisis ESP32 classique ou ESP32-S3 N16R8.")
     if not image.is_file() or image.suffix.lower() != ".bin":
         raise ValueError("Choisis un firmware VPN précompilé .bin valide.")
     size = image.stat().st_size
-    if size < 16384 or size > 4 * 1024 * 1024:
-        raise ValueError("Taille du firmware VPN inattendue.")
+    if size < 16384 or size > (16 if chip == "esp32s3" else 4) * 1024 * 1024:
+        raise ValueError("Taille du firmware VPN inattendue pour ce modèle.")
+    # IDF image header: magic 0xE9, target chip ID at bytes 12 and 13 (LE).
+    # ESP32=0x0000, ESP32-S3=0x0009. Require boot+app match for factory.
+    expected_id = 9 if chip == "esp32s3" else 0
+    boot_offset = 0 if chip == "esp32s3" else 0x1000
+    offset = 0 if mode == "factory" else 0x10000
+    if mode not in ("factory", "update"):
+        raise ValueError("Mode VPN inconnu.")
     with image.open("rb") as stream:
+        def read_header(where: int) -> None:
+            stream.seek(where)
+            data = stream.read(14)
+            if len(data) != 14 or data[0] != 0xE9:
+                raise ValueError("En-tête de firmware VPN absent.")
+            found_id = int.from_bytes(data[12:14], "little")
+            if found_id != expected_id:
+                raise ValueError(
+                    f"Ce firmware cible une autre puce (image id {found_id}, "
+                    f"ESP attendu {chip}). Aucun flash effectué.")
         if mode == "factory":
-            stream.seek(0x1000)
-            boot_magic = stream.read(1)
-            stream.seek(0x10000)
-            app_magic = stream.read(1)
-            if boot_magic != b"\xe9" or app_magic != b"\xe9":
-                raise ValueError("Image VPN FACTORY attendue (bootloader+app).")
-            return 0
-        if mode == "update":
-            if stream.read(1) != b"\xe9":
-                raise ValueError("Image VPN APP-ONLY attendue.")
-            return 0x10000
-    raise ValueError("Mode VPN inconnu.")
+            read_header(boot_offset)
+            read_header(0x10000)
+        else:
+            read_header(0)
+    return offset
 
 
 def flash_precompiled(port: str, image: Path, mode: str,
-                      log: Callable[[str], None]) -> None:
-    offset = check_precompiled_image(image, mode)
-    log(f"Flash ESP32 VPN classique sur {port}, offset 0x{offset:X}, "
+                      log: Callable[[str], None], chip: str = "esp32") -> None:
+    offset = check_precompiled_image(image, mode, chip=chip)
+    size = "16MB" if chip == "esp32s3" else "4MB"
+    log(f"Flash ESP32 VPN {chip} sur {port}, offset 0x{offset:X}, "
         f"mode {mode}. Aucune compilation locale.")
     from esptool import main as esptool_main
     esptool_main([
-        "--chip", "esp32", "--port", port, "--baud", "460800",
+        "--chip", chip, "--port", port, "--baud", "460800",
         "write_flash", "--flash_mode", "dio", "--flash_freq", "40m",
-        "--flash_size", "4MB", hex(offset), str(image)
+        "--flash_size", size, hex(offset), str(image)
     ])
     log("Firmware précompilé transféré. Configuration physique USB en cours.")
 
