@@ -379,9 +379,15 @@ class Flasher(tk.Tk):
     def _flash_jk(self) -> None:
         try:
             port = self._assert_ready()
-            path = Path(self.jk_image.get())
+            # The signed-off images from our CI are included in the standard
+            # EXE. A manually selected .bin is strictly an expert override.
+            mode=self.jk_mode.get()
+            path = (Path(self.jk_image.get().strip())
+                    if self.jk_image.get().strip()
+                    else self._bundled_jk_image(mode))
             if not path.is_file() or path.suffix.lower() != ".bin":
-                raise ValueError("Choisis un fichier .bin JK existant.")
+                raise ValueError("Firmware JK précompilé absent : "
+                                 "utilise le flasheur officiel complet.")
             if path.stat().st_size < 16384 or path.stat().st_size > 4_194_304:
                 raise ValueError("Taille du firmware non plausible pour cet ESP32.")
             payload = path.read_bytes()
@@ -411,6 +417,23 @@ class Flasher(tk.Tk):
                       "write_flash", "--flash_mode", "dio", "--flash_freq", "40m",
                       "--flash_size", "4MB", offset, str(file)])
         self._log("Flash JK terminé. Redémarre le lecteur, puis vérifie la version dans l'APK.")
+
+    @staticmethod
+    def _bundled_jk_image(mode: str) -> Path:
+        base = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent))
+        names = {
+            "factory": "smart-jk-esp32-factory.bin",
+            "update": "smart-jk-esp32-app-only.bin",
+        }
+        if mode not in names:
+            raise ValueError("Mode JK invalide.")
+        file = base / "embedded_firmware" / names[mode]
+        if not file.is_file():
+            raise ValueError(
+                "Image JK intégrée introuvable. Télécharge l'EXE complet "
+                "SmartEnergyFlasher (JK + VPN) depuis le dernier build."
+            )
+        return file
 
     @staticmethod
     def _bundled_vpn_image(mode: str) -> Path:
