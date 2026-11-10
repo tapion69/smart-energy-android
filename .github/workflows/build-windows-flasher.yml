@@ -1,4 +1,4 @@
-name: Smart Energy Windows Flasher (.exe)
+name: Smart Energy Flasher source regression tests
 
 on:
   push:
@@ -11,34 +11,21 @@ on:
 permissions:
   contents: read
 
+# Only the build-vpn-gateway workflow produces the recommended EXE.
+# Do not publish an old executable missing bundled JK/VPN binaries.
 jobs:
-  windows:
+  windows-tests:
+    name: Windows tests (EXE available from all-in-one workflow)
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-      - name: Install pinned build dependencies
+      - name: Install pinned test dependencies
         shell: pwsh
-        run: python -m pip install "pyinstaller==6.16.0" "esptool==4.9.0" "pyserial==3.5"
-      - name: Run input and security tests
+        run: python -m pip install "pyserial==3.5"
+      - name: Verify flash modes, COM dropdown and frozen app streams
+        shell: pwsh
         working-directory: tools/windows-flasher
-        shell: pwsh
         run: python -m unittest discover -p "test_*.py" -v
-      - name: Build Windows standalone executable (no customer secrets)
-        working-directory: tools/windows-flasher
-        shell: pwsh
-        run: python -m PyInstaller --clean --noconfirm --onefile --windowed --name SmartEnergyFlasher --collect-all esptool --hidden-import serial.tools.list_ports smart_energy_flasher.py
-      - name: Verify executable
-        shell: pwsh
-        run: |
-          $file = "tools/windows-flasher/dist/SmartEnergyFlasher.exe"
-          if (!(Test-Path $file)) { throw "Missing Windows EXE" }
-          if ((Get-Item $file).Length -lt 1000000) { throw "Unexpectedly small EXE" }
-      - name: Upload Smart Energy Windows EXE
-        uses: actions/upload-artifact@v4
-        with:
-          name: SmartEnergyFlasher-Windows-EXE
-          path: tools/windows-flasher/dist/SmartEnergyFlasher.exe
-          retention-days: 30
