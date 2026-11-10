@@ -1,32 +1,46 @@
-# Smart Energy Flasher — installation Windows sans SDK
+# Smart Energy Flasher — un seul EXE Windows, JK + VPN
 
-**Nouvelle version (dev)** : l'utilisateur n'a besoin ni de Git, ni d'ESP-IDF, ni de Python.
+**Version expérimentale :** `SmartEnergyFlasher.exe`, sans installation de Python, Git ou ESP-IDF sur Windows. Les firmwares **JK et VPN sont tous les deux déjà inclus** dans l'EXE.
 
-Pour la passerelle VPN sur **ESP32 classique**, le workflow [Build VPN + Windows](https://github.com/tapion69/smart-energy-android/actions/workflows/build-vpn-gateway.yml) produit un seul fichier **SmartEnergyVPNFlasher.exe** contenant déjà :
-- l'image **FACTORY** (nouvelle carte uniquement, à l'adresse `0x0`) ;
-- l'image **APP-ONLY** (mise à jour à `0x10000`, NVS conservée).
+Télécharger l'artefact **`SmartEnergyFlasher-Windows-AllInOne-JK-VPN`** du dernier build réussi du [workflow tout-en-un](https://github.com/tapion69/smart-energy-android/actions/workflows/build-vpn-gateway.yml). Ne plus télécharger les anciens `SmartEnergyVPNFlasher-Windows-ESP32-Firmware-Included` ou `SmartEnergyFlasher-Windows-EXE` : ils n'ont pas les correctifs décrits ici.
 
-### Première installation d'une nouvelle carte
+## Utilisation
 
-Brancher l'ESP32 avec un câble USB de données, sélectionner son port COM dans l'EXE, ouvrir l'onglet ESP32 VPN, garder « nouvelle passerelle (FACTORY) », remplir les champs Wi-Fi 2,4 GHz, clé d'association Tailscale, token de passerelle, IP/code des ESP32 JK (maximum trois), puis cliquer **Flasher et configurer**. Le programme flashe l'image intégrée, attend `SEVPN_READY_V1`, transmet les données uniquement par USB et vérifie `SEVPN_OK_REBOOT`. Aucun secret n'est inclus dans le firmware générique ni dans l'EXE.
+1. Brancher **un seul ESP32 classique** en USB avec un câble de données.
+2. En haut, sélectionner son port dans le **menu déroulant COM** (l'EXE détecte automatiquement les appareils USB et permet d'actualiser la liste). Un port débranché n'est jamais remplacé silencieusement par un autre.
+3. Choisir l'onglet **ESP32 JK** ou **ESP32 VPN** ; les firmwares officiels précompilés sont sélectionnés automatiquement. Aucun fichier `.bin` n'est à choisir.
+4. Sélectionner **FACTORY** pour un **nouvel ESP32 vierge** ou **APP-ONLY** pour mettre à jour un appareil existant, sans effacer volontairement la NVS.
+5. Sur l'onglet **JK**, cliquer `Flasher le lecteur JK`. Sur l'onglet **VPN**, renseigner les champs **Wi-Fi, clé d'association Tailscale, token de passerelle, IP et codes personnels des ESP JK 1 à 3**, puis `Flasher et configurer`. Le firmware VPN enregistre les paramètres reçus via le port série dans la NVS.
+6. Lire la confirmation dans le journal ; contrôler ensuite sur le vrai appareil que les connexions Wi-Fi, BLE et/ou Tailscale sont effectives.
 
-### Reconfigurer sans flasher
+### Deuxième lecteur JK pour les batteries 3 et 4
 
-Après redémarrage, maintenir BOOT environ 3 secondes au cours des 9 premières secondes d'exécution, **pas** pendant l'alimentation électrique de la carte (sinon entrée en mode bootloader). Puis dans l'EXE, **Configurer via USB sans reflasher** et attendre `SEVPN_OK_REBOOT`. Aucune route Tailscale/HTTP ne permet la reconfiguration.
+- Nouveau lecteur ESP32 classique : onglet **JK**, mode **FACTORY 0x0000**, fichier intégré `smart-jk-esp32-factory.bin`.
+- Ancien lecteur déjà configuré : mode **APP-ONLY 0x10000** ; **ne jamais** choisir FACTORY.
+- Après flash du nouvel ESP : procéder à l'association BOOT et à la configuration des deux BMS dans l'APK. Les mesures des deux lecteurs seront agrégées dans la vue globale.
 
-### Mise à jour
+### Passerelle VPN
 
-Choisir APP-ONLY pour une passerelle VPN **compatible**, sans `erase_flash`. Si l'ancienne configuration était compilée dans le firmware, renseigner les champs et reconfigurer une fois par USB. **Ne pas expérimenter sur une passerelle qui fonctionne déjà sans carte de réserve.** FACTORY n'est pas une mise à jour et peut rendre les anciennes données NVS inaccessibles.
+- L'onglet VPN montre **de vrais champs de saisie** pour le Wi-Fi/Tailscale et les trois lecteurs, organisés en blocs indépendants pour éviter leur disparition sous les boutons.
+- Le firmware précompilé `smart-energy-vpn-USB-FACTORY-ESP32-0x0.bin` ou `smart-energy-vpn-USB-APP-ESP32-0x10000.bin` est intégré à l'EXE.
+- Le token de passerelle est distinct du code JK ; la clé Tailscale doit être encore valable pour l'association.
+- L'option `Configurer via USB sans reflasher` exige l'autorisation physique BOOT sur un firmware universel déjà installé.
+- **Attention à la migration de l'ancien VPN en service :** même si APP-ONLY n'efface pas volontairement la NVS, le partitionnement, les identifiants compilés dans l'ancienne image et l'identité TailTiny peuvent être incompatibles. Faire le test sur un deuxième ESP32 avant de convertir le VPN fonctionnel.
 
-### ESP32 JK
+### Options expertes
 
-L'onglet JK sait flasher son image APP-ONLY `0x10000` ou FACTORY `0x0`. Le firmware JK n'est pas inclus dans l'EXE VPN ; il doit être sélectionné depuis un build officiel et compatible.
+Chaque onglet dispose d'un bouton `Options avancées` permettant de sélectionner un autre fichier `.bin`, mais ce n'est **pas nécessaire** en usage normal. N'utiliser que les fichiers du projet et vérifier leur provenance.
 
-### Limites et sécurité
+## Correctifs du flasheur
 
-- **Prototype : aucune validation physique USB/Tailscale achevée à ce stade** ; compilation et tests logiciels seulement.
-- Les firmwares intégrés ciblent **l'ESP32 classique**, jamais l'ESP32-S3 N16R8 ; une variante distincte sera nécessaire.
-- L'ESP32 doit disposer d'un pont USB-série compatible (CH340, CP210x, FTDI). Un pilote USB peut être nécessaire suivant Windows.
-- L'identité Tailscale et les identifiants sont conservés dans la **NVS non chiffrée** de l'ESP32. Une personne ayant accès au matériel peut potentiellement les extraire. La protection flash, la signature, la rotation/révocation et les tests de récupération sont nécessaires avant diffusion publique.
-- Utiliser le firmware du dépôt officiel ; le flasheur ne valide pas encore cryptographiquement la signature d'un fichier .bin sélectionné manuellement.
-- L'ESP32 VPN sert seulement de relais GET pour trois lecteurs JK du réseau local. Il ne commande jamais les BMS.
+- L'exécutable `--windowed` créait `sys.stdout=None` et `sys.stderr=None`, ce qui provoquait `'NoneType' object has no attribute 'flush'` dans esptool. Le flasheur initialise désormais correctement ces flux avant le flash.
+- Le port COM n'a plus à être saisi manuellement : liste déroulante et bouton **Actualiser**, avec description USB des ports.
+- La disposition de l'onglet VPN a été corrigée : les boutons radio de sélection ne masquent plus les champs.
+- JK et VPN sont désormais distribués **dans le même EXE**, sans second téléchargement.
+- Aucune commande `erase_flash` n'est exécutée par le programme.
+
+## Sécurité et limites
+
+Ces versions **ne sont pas encore validées sur les ESP32 physiques**. Les tests et compilations automatisés ne prouvent pas la réussite de l'association Tailscale ou de l'écriture USB ; vérifier sur une carte de réserve. Les configurations VPN restent actuellement stockées dans une **NVS non chiffrée**, donc sensible à l'accès physique. Ne pas publier de clés Tailscale, codes ou mots de passe dans les journaux ou captures.
+
+**ESP32 classique uniquement** : ne jamais flasher ces images sur ESP32-S3 N16R8.
