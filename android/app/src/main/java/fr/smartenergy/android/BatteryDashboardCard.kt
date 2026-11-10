@@ -371,7 +371,7 @@ class BatteryDashboardCard(context: Context) : LinearLayout(context) {
             paint.strokeCap = Paint.Cap.ROUND
             paint.color = track
             canvas.drawArc(arc, -90f, 360f, false, paint)
-            paint.color = accent
+            paint.color = JkSocPalette.color(soc)
             canvas.drawArc(arc, -90f, 360f * soc / 100f, false, paint)
             paint.style = Paint.Style.FILL
             paint.color = ink
