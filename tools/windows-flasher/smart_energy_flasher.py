@@ -8,6 +8,7 @@ No personal tokens are uploaded to GitHub or stored in the executable.
 from __future__ import annotations
 
 import ipaddress
+from contextlib import contextmanager
 import io
 import json
 import os
@@ -124,6 +125,56 @@ def ensure_esptool_console_streams() -> None:
         sys.stderr = open(os.devnull, "w", encoding="utf-8")
 
 
+class FlashProgressWriter:
+    """Observe real esptool writing percentages, not simulated progress."""
+
+    PERCENT = re.compile(r"(?<!\d)(100|[1-9]?\d)\s*%")
+
+    def __init__(self, target, callback: Callable[[int], None]) -> None:
+        self.target = target
+        self.callback = callback
+        self.pending = ""
+        self.last = -1
+        self.encoding = getattr(target, "encoding", "utf-8") or "utf-8"
+
+    def write(self, content: str) -> int:
+        if not isinstance(content, str):
+            content = str(content)
+        self.target.write(content)
+        # Support esptool carriage-return output and chunked writes.
+        self.pending = (self.pending + content)[-512:]
+        for piece in re.split(r"[\r\n]", self.pending):
+            if "writing" not in piece.lower():
+                continue
+            match = self.PERCENT.search(piece)
+            if match:
+                percent = int(match.group(1))
+                if percent > self.last:
+                    self.last = percent
+                    self.callback(percent)
+        if "\r" in self.pending or "\n" in self.pending:
+            self.pending = re.split(r"[\r\n]", self.pending)[-1][-256:]
+        return len(content)
+
+    def flush(self) -> None:
+        self.target.flush()
+
+    def isatty(self) -> bool:
+        return False
+
+
+@contextmanager
+def monitor_esptool_progress(callback: Callable[[int], None]):
+    """Always restore stdout after the flash, even if it fails."""
+    ensure_esptool_console_streams()
+    previous = sys.stdout
+    sys.stdout = FlashProgressWriter(previous, callback)
+    try:
+        yield
+    finally:
+        sys.stdout = previous
+
+
 class Flasher(tk.Tk):
     def __init__(self) -> None:
         super().__init__()
@@ -133,6 +184,8 @@ class Flasher(tk.Tk):
         self.events: queue.Queue[tuple[str, str]] = queue.Queue()
         self.busy = False
         self.secret_values: list[str] = []
+        self.operation_mode = ""
+        self.progress_percent = 0
         self.port = tk.StringVar()
         self.jk_image = tk.StringVar()
         self.jk_mode = tk.StringVar(value="update")
@@ -198,6 +251,13 @@ class Flasher(tk.Tk):
         tabs.add(vpn, text="ESP32 VPN (3 lecteurs)")
         self._build_jk(jk)
         self._build_vpn(vpn)
+        progress = ttk.LabelFrame(outer, text="Progression du flash / de la configuration", padding=8)
+        progress.pack(fill="x", pady=(4, 8))
+        self.progress_label = ttk.Label(progress, text="Prêt — sélectionne ton ESP32.")
+        self.progress_label.pack(anchor="w", pady=(0, 5))
+        self.progress_bar = ttk.Progressbar(progress, orient="horizontal",
+                                            mode="determinate", maximum=100, value=0)
+        self.progress_bar.pack(fill="x")
         ttk.Label(outer, text="Journal (aucun mot de passe ne doit apparaître) :").pack(anchor="w")
         self.log_widget = tk.Text(outer, height=10, wrap="word", state="disabled")
         self.log_widget.pack(fill="x")
