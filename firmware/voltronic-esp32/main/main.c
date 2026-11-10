@@ -51,7 +51,6 @@ typedef struct {
     bool have_qpigs2;
     char qmod;
     bool have_qpiri;
-    double qpiri_bulk_v, qpiri_float_v;
     uint32_t last_qpigs_ms,last_qpigs2_ms,last_qmod_ms,last_qpiri_ms;
     uint32_t q2_disabled_until_ms, polls_ok, crc_rejects, timeouts, naks;
 } vol_state_t;
@@ -293,11 +292,8 @@ static esp_err_t details_handler(httpd_req_t *r){
     cJSON_AddBoolToObject(root,"qpigs2_available",snap.have_qpigs2);
     cJSON_AddBoolToObject(root,"qpiri_available",snap.have_qpiri);
     cJSON_AddNumberToObject(root,"naks",snap.naks);
-    if(snap.have_qpiri){
-        cJSON *q=cJSON_AddObjectToObject(root,"qpiri");
-        cJSON_AddNumberToObject(q,"bulk_v",snap.qpiri_bulk_v);
-        cJSON_AddNumberToObject(q,"float_v",snap.qpiri_float_v);
-    }
+    // QPIRI frame is detected only; exact positions depend on model/firmware.
+    // Never present ambiguous fields as validated bulk/float settings.
     return send_json(r,root);
 }
 static void start_api(void){
@@ -383,10 +379,8 @@ static void polling_task(void *unused){
         }else if(strcmp(cmd,"QPIRI")==0){
             double fields[40];
             size_t count=vt_fields(bytes,length,fields,40);
-            if(count>=23 && fields[10]>0 && fields[11]>0) {
-                state.qpiri_bulk_v=fields[10];
-                state.qpiri_float_v=fields[11];
-                state.have_qpiri=true;
+            if(count>=20) {
+                state.have_qpiri=true; // Read confirmed, no unverified mapping.
                 state.last_qpiri_ms=esp_log_timestamp();
             }
         }
