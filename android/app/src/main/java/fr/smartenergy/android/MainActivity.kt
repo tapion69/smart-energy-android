@@ -1867,8 +1867,10 @@ class MainActivity : Activity() {
                     }
                     writeFeedback("Commande envoyée à $label : vérification de la valeur sur le BMS…")
                     var finalState="sent_unconfirmed"
-                    for(i in 0 until 12) {
-                        Thread.sleep(1500)
+                    // Poll the ESP32 verification status without re-sending
+                    // any write. Short polls reduce UI latency on fast BMS.
+                    for(i in 0 until 20) {
+                        Thread.sleep(750)
                         val path="/api/v1/jk/write-status?mac="+
                             java.net.URLEncoder.encode(mac,"UTF-8")
                         val status=httpCall("GET",path)
@@ -1897,9 +1899,10 @@ class MainActivity : Activity() {
                                    selectedBmsMac==mac && currentTab==2 &&
                                    parameterEditingEnabled && lanVerified &&
                                    !remoteVpnConnection && !remoteGatewayConnection) {
-                                    // One explicit 0x01 settings read after the
-                                    // server cooldown, not 45s BLE polling.
-                                    requestFreshSettingsForEditing()
+                                    // The write was ALREADY verified by a
+                                    // fresh BMS settings frame. Query only the
+                                    // ESP32 cache now: no extra BLE read needed.
+                                    checkWriteReadinessAfterCooldown(mac,readerAtStart)
                                 }
                             },remaining)
                         }
@@ -2092,6 +2095,63 @@ class MainActivity : Activity() {
     // A read-only BMS settings query is queued only when a user explicitly
     // enables the edit interface. The strict 60-second write freshness guard
     // remains enforced by ESP32; it is never weakened to allow stale writes.
+
+    // The firmware itself rejects a second write for 15s. After that limit
+    // the verified post-write settings frame remains fresh (<60s), so another
+    // 0x96 BLE transaction is unnecessary. Checking the local cached pilot
+    // immediately avoids the long, repeated re-read cycle in v0.3.14.
+    private fun checkWriteReadinessAfterCooldown(mac:String,reader:Int) {
+        if(!parameterEditingEnabled || selectedBmsMac!=mac ||
+           reader!=activeReaderSlot || !lanVerified || setupTransport ||
+           remoteVpnConnection || remoteGatewayConnection)return
+        settingsWorker.execute {
+            try {
+                var latest:JSONObject?=null
+                var ready=false
+                var reason=""
+                for(attempt in 0 until 7) {
+                    val details=httpCall("GET","/api/v1/details")
+                    val devices=details.optJSONArray("devices")
+                    val match=(0 until (devices?.length() ?: 0))
+                        .mapNotNull { devices?.optJSONObject(it) }
+                        .firstOrNull { it.optString("mac")==mac }
+                    val pilot=match?.optJSONObject("write_pilot")
+                    latest=details
+                    ready=pilot?.optBoolean("ready")==true
+                    reason=pilot?.optString("reason","") ?: ""
+                    if(ready || reason=="stale_or_missing_settings" ||
+                       reason=="bms_alarm_active" || reason=="bms_not_live")break
+                    Thread.sleep(450)
+                }
+                val result=latest
+                runOnUiThread {
+                    if(!isFinishing && reader==activeReaderSlot &&
+                       selectedBmsMac==mac && parameterEditingEnabled &&
+                       currentTab==2 && result!=null) {
+                        lastDetails=result
+                        lastDetailsFetchedAt=android.os.SystemClock.elapsedRealtime()
+                        lastTelemetry?.let { showTelemetry(it) }
+                        when {
+                            ready -> writeFeedback("BMS prêt : tu peux modifier un autre paramètre.")
+                            reason=="stale_or_missing_settings" ->
+                                requestFreshSettingsForEditing()
+                            else -> writeFeedback("Nouvelle modification encore bloquée : "+
+                                JkWriteHelp.reason(reason)+".")
+                        }
+                    }
+                }
+            } catch(ex:Exception) {
+                runOnUiThread {
+                    if(reader==activeReaderSlot && selectedBmsMac==mac &&
+                       parameterEditingEnabled && !isFinishing)
+                        writeFeedback("Vérification après modification indisponible : "+
+                            (ex.message ?: "connexion locale à vérifier")+
+                            ". Aucun réglage n'a été renvoyé.")
+                }
+            }
+        }
+    }
+
     private fun requestFreshSettingsForEditing() {
         if(!parameterEditingEnabled || !lanVerified || remoteGatewayConnection ||
            remoteVpnConnection || setupTransport || selectedBmsMac.isBlank())return
