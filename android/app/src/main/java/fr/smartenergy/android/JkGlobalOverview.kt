@@ -144,24 +144,37 @@ class JkGlobalOverview(private val ctx: Context) : LinearLayout(ctx) {
         }
         val board=panel()
         board.addView(text("Vue globale · ${live.size}/${entries.size} BMS en ligne",16f,normal,true))
-        val line=LinearLayout(ctx).apply { orientation=HORIZONTAL;gravity=Gravity.CENTER_VERTICAL }
-        val ring=SocRing(ctx).apply { this.soc = soc }
-        line.addView(ring, LayoutParams(dp(144),dp(165)))
-        val metrics=LinearLayout(ctx).apply { orientation=VERTICAL }
-        for ((label,value,warn) in listOf(
-            Triple("Tension",average("voltage_v","V",2),false),
-            Triple("Puissance totale",total("power_w","W",0),false),
-            Triple("Courant total",total("current_a","A",1),false),
-            Triple("Alarmes",alarms,alarmed.isNotEmpty())
-        )) {
-            metrics.addView(metric(label,value,warn),LayoutParams(-1,-2).apply{bottomMargin=dp(5)})
+        // Equal-width responsive two-column cards, rather than a long
+        // five-metric stack beside a large SOC ring.
+        // Rows: [SOC, Voltage], [Power, Current], [Alarms, Temperature].
+        fun gridRow(left:View,right:View,heightDp:Int) {
+            val row=LinearLayout(ctx).apply {
+                orientation=HORIZONTAL
+                gravity=Gravity.CENTER_VERTICAL
+            }
+            row.addView(left,LayoutParams(0,dp(heightDp),1f).apply {
+                rightMargin=dp(4)
+            })
+            row.addView(right,LayoutParams(0,dp(heightDp),1f).apply {
+                leftMargin=dp(4)
+            })
+            board.addView(row,LayoutParams(-1,-2).apply {
+                topMargin=dp(8)
+            })
         }
-        metrics.addView(metric(
-            "Température max", hottestValue,
-            hottest?.celsius?.let { it>=55.0 } == true, hottestSource
-        ),LayoutParams(-1,-2).apply { bottomMargin=dp(5) })
-        line.addView(metrics,LayoutParams(0,-2,1f))
-        board.addView(line)
+        val ring=SocRing(ctx).apply { this.soc=soc }
+        gridRow(ring,metric("Tension",average("voltage_v","V",2)),134)
+        gridRow(
+            metric("Puissance totale",total("power_w","W",0)),
+            metric("Courant total",total("current_a","A",1)),
+            84
+        )
+        gridRow(
+            metric("Alarmes",alarms,alarmed.isNotEmpty()),
+            metric("Température max",hottestValue,
+                hottest?.celsius?.let { it>=55.0 } == true,hottestSource),
+            100
+        )
         board.addView(text(if(allLive) "Données fraîches · ${if(haveCap) "SOC pondéré" else "SOC moyen"} · tension moyenne · A/W additionnés."
           else "Mesures incomplètes : un ou plusieurs BMS sont hors ligne.",11f,muted))
         if(alarmed.isNotEmpty()){
@@ -175,24 +188,49 @@ class JkGlobalOverview(private val ctx: Context) : LinearLayout(ctx) {
             }
         }
         addView(board,LayoutParams(-1,-2))
-        entries.forEachIndexed { index, bms ->
-            val mac=bms.optString("mac")
-            val v=bms.optJSONObject("values")
-            val card=panel()
-            card.addView(text(bmsName(mac,index)+" · "+ if(bms.optBoolean("available"))"En ligne" else "Hors ligne",
-                15f,if(bms.optBoolean("available"))mint else muted,true))
-            val summary=if(bms.optBoolean("available") && v!=null)
-                "${v.optInt("soc_pct")}%  ·  ${String.format(Locale.FRANCE,"%.2f",v.optDouble("voltage_v"))} V" +
-                  "  ·  ${String.format(Locale.FRANCE,"%.0f",v.optDouble("power_w"))} W" else "Mesures indisponibles"
-            card.addView(text(summary,14f))
-            val alarm=when{
-                !bms.optBoolean("available")->"Alarmes inconnues (hors ligne)"
-                v?.optBoolean("alarm_active")==true->"⚠ Une ou plusieurs alarmes"
-                else -> "Aucune alarme"
+        // The per-BMS overview cards are compact as well, two batteries
+        // per row. Their identity and alarms remain distinct per ESP32.
+        entries.chunked(2).forEachIndexed { rowIndex, pair ->
+            val row=LinearLayout(ctx).apply {
+                orientation=HORIZONTAL
+                gravity=Gravity.TOP
             }
-            card.addView(text(alarm,12f,if(v?.optBoolean("alarm_active")==true)red else muted))
-            card.setOnClickListener{selectBms(mac)}
-            addView(card,LayoutParams(-1,-2).apply{topMargin=dp(10)})
+            pair.forEachIndexed { column, bms ->
+                val index=rowIndex*2+column
+                val mac=bms.optString("mac")
+                val v=bms.optJSONObject("values")
+                val available=bms.optBoolean("available") && v!=null
+                val card=panel()
+                card.setPadding(dp(10),dp(12),dp(10),dp(12))
+                card.addView(text(bmsName(mac,index),13f,
+                    if(available)mint else muted,true))
+                card.addView(text(if(available)"En ligne" else "Hors ligne",
+                    11f,if(available)mint else muted))
+                if(available) {
+                    card.addView(text(
+                        "${v!!.optInt("soc_pct")}% · "+
+                        "${String.format(Locale.FRANCE,"%.2f",v.optDouble("voltage_v"))} V",
+                        13f,normal,true))
+                    card.addView(text(
+                        String.format(Locale.FRANCE,"%.0f W",v.optDouble("power_w")),
+                        12f))
+                } else {
+                    card.addView(text("Mesures indisponibles",11f,muted))
+                }
+                val alarm=when {
+                    !available -> "Alarmes inconnues"
+                    v?.optBoolean("alarm_active")==true -> "⚠ Alarme active"
+                    else -> "Aucune alarme"
+                }
+                card.addView(text(alarm,11f,
+                    if(v?.optBoolean("alarm_active")==true)red else muted))
+                card.setOnClickListener{selectBms(mac)}
+                row.addView(card,LayoutParams(0,-2,1f).apply {
+                    if(column==0)rightMargin=dp(4) else leftMargin=dp(4)
+                })
+            }
+            if(pair.size==1)row.addView(View(ctx),LayoutParams(0,-2,1f))
+            addView(row,LayoutParams(-1,-2).apply { topMargin=dp(8) })
         }
     }
 }
