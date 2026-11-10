@@ -172,8 +172,10 @@ class FlasherTests(unittest.TestCase):
     def test_flasher_source_vpn_buttons_do_not_overlap(self):
         from inspect import getsource
         source=getsource(Flasher._build_vpn)
-        self.assertRegex(source,r"command=self\\._flash_vpn\\)\\.grid\\(\\s*row=8")
-        self.assertRegex(source,r"command=self\\._configure_only\\)\\.grid\\(\\s*row=9")
+        flash=source.index("command=self._flash_vpn).grid(")
+        configure=source.index("command=self._configure_only).grid(")
+        self.assertIn("row=8,",source[flash:flash+90])
+        self.assertIn("row=9,",source[configure:configure+90])
 
 
 if __name__ == "__main__":
