@@ -1,5 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
-<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+          xmlns:tools="http://schemas.android.com/tools">
     <!-- Trial build is installed alongside an existing Smart Energy instance. -->
-    <application android:label="Smart Energy TEST 0.3.22" />
+    <application android:label="Smart Energy TEST 0.3.22"
+                 tools:replace="android:label" />
 </manifest>
