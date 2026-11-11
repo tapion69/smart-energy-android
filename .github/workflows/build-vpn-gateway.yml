@@ -138,6 +138,7 @@ jobs:
           python -m pip install "platformio==6.1.18"
           python firmware/jk-esp32/tests/test_ble_manager_architecture.py
           python firmware/jk-esp32/tests/test_settings_cadence.py
+          python firmware/jk-esp32/tests/test_wifi_recovery_architecture.py
           g++ -std=c++11 -Wall -Wextra -Werror firmware/jk-esp32/tests/test_jk_identity_policy.cpp -o /tmp/test_jk_identity
           /tmp/test_jk_identity
           pio run -d firmware/jk-esp32
