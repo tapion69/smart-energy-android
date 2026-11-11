@@ -6,7 +6,7 @@ import tempfile
 from pathlib import Path
 from unittest.mock import patch
 
-from smart_energy_flasher import sdkconfig_contents, valid_lan_ip, valid_serial_port, validate_vpn_config, selected_serial_port, serial_port_label, ensure_esptool_console_streams, Flasher, FlashProgressWriter, monitor_esptool_progress
+from smart_energy_flasher import sdkconfig_contents, valid_lan_ip, valid_serial_port, validate_vpn_config, selected_serial_port, serial_port_label, ssid_looks_five_ghz_only, ensure_esptool_console_streams, Flasher, FlashProgressWriter, monitor_esptool_progress
 
 
 def config():
@@ -20,6 +20,13 @@ def config():
 
 
 class FlasherTests(unittest.TestCase):
+    def test_warn_for_probable_five_ghz_only_ssid_without_rejecting_2_4(self):
+        self.assertTrue(ssid_looks_five_ghz_only("Livebox-6B6_5GHz"))
+        self.assertTrue(ssid_looks_five_ghz_only("routeur-5ghz"))
+        self.assertFalse(ssid_looks_five_ghz_only("Livebox-6B6"))
+        self.assertFalse(ssid_looks_five_ghz_only("maison_2.4GHz"))
+        self.assertFalse(ssid_looks_five_ghz_only("wifi-5G-mobile"))
+
     def test_lan_only(self):
         self.assertTrue(valid_lan_ip("192.168.1.53"))
         self.assertTrue(valid_lan_ip("172.18.1.2"))
