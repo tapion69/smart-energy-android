@@ -26,6 +26,7 @@
 #include "esp_netif.h"
 #include "esp_http_server.h"
 #include "esp_http_client.h"
+#include "esp_timer.h"
 #include "nvs_flash.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -34,7 +35,7 @@
 #include "gateway_policy.h"
 #include "vpn_provision.h"
 
-#define GATEWAY_VERSION "0.3.0-dev-usb-provision"
+#define GATEWAY_VERSION "0.3.1-dev-relay-diagnostics"
 #define GATEWAY_PORT 18767
 #define MAX_JSON_BYTES 32768
 
@@ -262,6 +263,7 @@ static esp_err_t relay_read(httpd_req_t *req) {
     if (!authorized(req))
         return deny(req, "401 Unauthorized", "{\"error\":\"invalid_gateway_token\"}");
     se_route_t route = se_route_get(req->uri, req->method == HTTP_GET);
+    const int64_t relay_started_us = esp_timer_get_time();
     lan_target_t target;
     if (route == SE_ROUTE_DENIED || route == SE_ROUTE_HEALTH)
         return deny(req, "404 Not Found", "{\"error\":\"not_allowed\"}");
@@ -289,12 +291,18 @@ static esp_err_t relay_read(httpd_req_t *req) {
 
     esp_err_t err = esp_http_client_open(client, 0);
     if (err != ESP_OK) {
+        ESP_LOGW(TAG, "JK relay upstream connect error: route=%d, reason=%s, elapsed_ms=%lld",
+                 (int)route, esp_err_to_name(err),
+                 (long long)((esp_timer_get_time() - relay_started_us) / 1000));
         esp_http_client_cleanup(client);
         return deny(req, "502 Bad Gateway", "{\"error\":\"upstream_unreachable\"}");
     }
     const int64_t len = esp_http_client_fetch_headers(client);
     const int code = esp_http_client_get_status_code(client);
     if (len > MAX_JSON_BYTES || code != 200) {
+        ESP_LOGW(TAG, "JK relay upstream HTTP error: route=%d, status=%d, len=%lld, elapsed_ms=%lld",
+                 (int)route, code, (long long)len,
+                 (long long)((esp_timer_get_time() - relay_started_us) / 1000));
         esp_http_client_close(client);
         esp_http_client_cleanup(client);
         return deny(req, "502 Bad Gateway", "{\"error\":\"upstream_http_failure\"}");
@@ -338,9 +346,13 @@ static esp_err_t relay_read(httpd_req_t *req) {
     // Close the chunked response even if the device went offline midway.
     // The client rejects truncated JSON. Never report a partial result as OK.
     httpd_resp_send_chunk(req, NULL, 0);
+    const long long elapsed_ms = (long long)((esp_timer_get_time() - relay_started_us) / 1000);
     if (!complete || !transfer_ok)
-        ESP_LOGW(TAG, "Partial upstream response, route=%d, bytes=%d",
-                 route, total);
+        ESP_LOGW(TAG, "JK relay incomplete: route=%d bytes=%d complete=%d transport_ok=%d elapsed_ms=%lld",
+                 (int)route, total, (int)complete, (int)transfer_ok, elapsed_ms);
+    else if (elapsed_ms > 2000)
+        ESP_LOGW(TAG, "JK relay slow: route=%d bytes=%d elapsed_ms=%lld",
+                 (int)route, total, elapsed_ms);
     return ESP_OK;
 }
 
