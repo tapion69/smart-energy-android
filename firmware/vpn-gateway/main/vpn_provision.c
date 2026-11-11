@@ -25,25 +25,59 @@ static const char *TAG="SE-VPN-USB";
 static se_vpn_config_t current;
 static char line_buffer[LINE_MAX];
 
-/* Classic ESP32 uses bridge UART0; ESP32-S3 uses native USB Serial/JTAG CDC.
- * Never echo JSON, keys or user secret values to either USB console. */
-static void usb_ack(const char *message) {
+/* S3 boards may have TWO USB physical connectors:
+ * - CH343/CP210x USB-UART bridge -> UART0 on GPIO43/44;
+ * - native USB Serial/JTAG -> GPIO19/20.
+ * Listen on BOTH channels during physical USB provisioning and reply ONLY to
+ * the channel that sent the command. Classic ESP32 retains its prior UART0.
+ * NEVER echo credentials to the serial console or to any diagnostic log. */
+enum { SE_USB_BRIDGE=0, SE_USB_NATIVE=1 };
+static bool serial_bridge_ready=false;
 #if CONFIG_IDF_TARGET_ESP32S3
-    usb_serial_jtag_write_bytes(message, strlen(message), pdMS_TO_TICKS(1000));
-    usb_serial_jtag_write_bytes("\n", 1, pdMS_TO_TICKS(1000));
+static bool serial_native_ready=false;
+#endif
+static char rx_lines[2][LINE_MAX];
+static size_t rx_used[2]={0,0};
+static int serial_port_count(void) {
+#if CONFIG_IDF_TARGET_ESP32S3
+    return 2;
 #else
+    return 1;
+#endif
+}
+static void usb_ack(int port,const char *message) {
+#if CONFIG_IDF_TARGET_ESP32S3
+    if(port==SE_USB_NATIVE) {
+        if(serial_native_ready) {
+            // Do not stall provisioning if the board's native USB connector
+            // has no host; the CH343 connector may be the only cable attached.
+            usb_serial_jtag_write_bytes(message,strlen(message),pdMS_TO_TICKS(20));
+            usb_serial_jtag_write_bytes("\n",1,pdMS_TO_TICKS(20));
+        }
+        return;
+    }
+    if(serial_bridge_ready) {
+        uart_write_bytes(UART_NUM_0,message,strlen(message));
+        uart_write_bytes(UART_NUM_0,"\n",1);
+    }
+#else
+    (void)port;
     puts(message);
     fflush(stdout);
 #endif
 }
-static int usb_read_one(uint8_t *byte) {
+static int usb_read_one(int port,uint8_t *byte) {
 #if CONFIG_IDF_TARGET_ESP32S3
-    return usb_serial_jtag_read_bytes(byte,1,pdMS_TO_TICKS(200));
+    if(port==SE_USB_NATIVE)
+        return serial_native_ready ?
+            usb_serial_jtag_read_bytes(byte,1,pdMS_TO_TICKS(15)) : 0;
+    return serial_bridge_ready ?
+        uart_read_bytes(UART_NUM_0,byte,1,pdMS_TO_TICKS(15)) : 0;
 #else
-    return uart_read_bytes(UART_NUM_0,byte,1,pdMS_TO_TICKS(200));
+    (void)port;
+    return uart_read_bytes(UART_NUM_0,byte,1,pdMS_TO_TICKS(100));
 #endif
 }
-
 
 static bool text_field(const cJSON *obj,const char *name,
                        char *dst,size_t size,bool required,size_t min_len) {
@@ -102,64 +136,82 @@ static bool save_config(const char *raw) {
     return err==ESP_OK;
 }
 static void serial_prepare(void) {
-    // Classic ESP32: bridge UART0. S3 N16R8: native USB Serial/JTAG CDC.
-    // Setup is allowed only over physical cable, never over HTTP/Tailscale.
+    // Do not use either USB transport for OTA, LAN or user access. Physical
+    // cable only. Separate sources prevent interleaving partial JSON lines.
 #if CONFIG_IDF_TARGET_ESP32S3
-    usb_serial_jtag_driver_config_t cfg = {
+    const uart_config_t cfg={
+        .baud_rate=115200,
+        .data_bits=UART_DATA_8_BITS,
+        .parity=UART_PARITY_DISABLE,
+        .stop_bits=UART_STOP_BITS_1,
+        .flow_ctrl=UART_HW_FLOWCTRL_DISABLE
+    };
+    esp_err_t err=uart_param_config(UART_NUM_0,&cfg);
+    if(err==ESP_OK)
+        err=uart_set_pin(UART_NUM_0,GPIO_NUM_43,GPIO_NUM_44,
+                         UART_PIN_NO_CHANGE,UART_PIN_NO_CHANGE);
+    if(err==ESP_OK)
+        err=uart_driver_install(UART_NUM_0,2048,256,0,NULL,0);
+    serial_bridge_ready=err==ESP_OK || err==ESP_ERR_INVALID_STATE;
+    if(!serial_bridge_ready)
+        ESP_LOGE(TAG,"CH343 UART0 unavailable: %s",esp_err_to_name(err));
+    const usb_serial_jtag_driver_config_t usb_cfg={
         .rx_buffer_size=2048,
         .tx_buffer_size=2048,
     };
-    esp_err_t err=usb_serial_jtag_driver_install(&cfg);
+    err=usb_serial_jtag_driver_install(&usb_cfg);
+    serial_native_ready=err==ESP_OK || err==ESP_ERR_INVALID_STATE;
+    if(!serial_native_ready)
+        ESP_LOGE(TAG,"Native USB unavailable: %s",esp_err_to_name(err));
 #else
     esp_err_t err=uart_driver_install(UART_NUM_0,2048,0,0,NULL,0);
+    serial_bridge_ready=err==ESP_OK || err==ESP_ERR_INVALID_STATE;
+    if(!serial_bridge_ready)
+        ESP_LOGE(TAG,"USB UART unavailable: %s",esp_err_to_name(err));
 #endif
-    if(err!=ESP_OK && err!=ESP_ERR_INVALID_STATE)
-        ESP_LOGE(TAG,"USB serial unavailable: %s",esp_err_to_name(err));
 }
 static void provisioning_loop(void) {
     serial_prepare();
     ESP_LOGW(TAG,"No network service started: USB provisioning only");
-    usb_ack("SEVPN_READY_V1");
-    size_t used=0;
+    for(int port=0;port<serial_port_count();port++)
+        usb_ack(port,"SEVPN_READY_V1");
     uint32_t last_ready=esp_log_timestamp();
     while(true) {
-        uint8_t byte=0;
-        int n=usb_read_one(&byte);
-        if(n<=0) {
-            if((uint32_t)(esp_log_timestamp()-last_ready)>2000) {
-                usb_ack("SEVPN_READY_V1");
-                last_ready=esp_log_timestamp();
+        for(int port=0;port<serial_port_count();port++) {
+            uint8_t byte=0;
+            if(usb_read_one(port,&byte)<=0)continue;
+            char *buffer=rx_lines[port];
+            size_t *used=&rx_used[port];
+            if(byte=='\r')continue;
+            if(byte=='\n') {
+                buffer[*used]=0;
+                if(strcmp(buffer,"SEVPN_PING")==0) {
+                    usb_ack(port,"SEVPN_READY_V1");
+                    memset(buffer,0,LINE_MAX);*used=0;
+                    continue;
+                }
+                const char prefix[]="SEVPN_CONFIG ";
+                if(*used>sizeof(prefix)-1 &&
+                   memcmp(buffer,prefix,sizeof(prefix)-1)==0 &&
+                   save_config(buffer+sizeof(prefix)-1)) {
+                    usb_ack(port,"SEVPN_OK_REBOOT");
+                    memset(buffer,0,LINE_MAX);
+                    vTaskDelay(pdMS_TO_TICKS(1200));
+                    esp_restart();
+                }
+                usb_ack(port,"SEVPN_ERR_INVALID");
+                memset(buffer,0,LINE_MAX);*used=0;continue;
             }
-            continue;
-        }
-        if(byte=='\r')continue;
-        if(byte=='\n') {
-            line_buffer[used]=0;
-            if(strcmp(line_buffer,"SEVPN_PING")==0) {
-                usb_ack("SEVPN_READY_V1");
-                used=0;
-                continue;
+            if(byte<32 || byte>126 || *used>=LINE_MAX-2) {
+                memset(buffer,0,LINE_MAX);*used=0;continue;
             }
-            const char prefix[]="SEVPN_CONFIG ";
-            if(used>sizeof(prefix)-1 &&
-               memcmp(line_buffer,prefix,sizeof(prefix)-1)==0 &&
-               save_config(line_buffer+sizeof(prefix)-1)) {
-                // ACK contains no secrets and is sent before controlled reboot.
-                usb_ack("SEVPN_OK_REBOOT");
-                memset(line_buffer,0,sizeof line_buffer);
-                vTaskDelay(pdMS_TO_TICKS(1200));
-                esp_restart();
-            }
-            // Do not print input lines, validation details, or any credentials.
-            usb_ack("SEVPN_ERR_INVALID");
-            memset(line_buffer,0,sizeof line_buffer);
-            used=0;continue;
+            buffer[(*used)++]=(char)byte;
         }
-        if(byte<32 || byte>126 || used>=LINE_MAX-2) {
-            memset(line_buffer,0,sizeof line_buffer);
-            used=0;continue;
+        if((uint32_t)(esp_log_timestamp()-last_ready)>2000) {
+            for(int port=0;port<serial_port_count();port++)
+                usb_ack(port,"SEVPN_READY_V1");
+            last_ready=esp_log_timestamp();
         }
-        line_buffer[used++]=(char)byte;
     }
 }
 static bool physical_reconfigure_requested(void) {
