@@ -693,9 +693,6 @@ class Flasher(tk.Tk):
         try:
             from vpn_usb import check_precompiled_image
             port = self._assert_ready()
-            values = self._vpn_values()
-            if not self._confirm_wifi_band(values["wifi_ssid"]):
-                return
             mode = self.vpn_mode.get()
             chip = self.vpn_chip.get()
             if self.vpn_image.get().strip():
@@ -703,14 +700,34 @@ class Flasher(tk.Tk):
             else:
                 file = self._bundled_vpn_image(mode, chip)
             check_precompiled_image(file, mode, chip=chip)
+
+            # An existing VPN device already has a valid NVS identity and
+            # configuration. Never overwrite those secrets just to update
+            # its application firmware. Explicitly opt in to reprovisioning.
+            keep_existing = mode == "update" and messagebox.askyesno(
+                "Mise à jour VPN — conserver les réglages ?",
+                "Conserver la configuration Wi-Fi, l'identité Tailscale et "
+                "les codes JK déjà enregistrés ?\n\n"
+                "Oui (recommandé) : APP-ONLY, sans réassociation USB, "
+                "sans clé Tailscale à saisir.\n"
+                "Non : mettre à jour ET reconfigurer avec les champs du formulaire."
+            )
+            values = None
+            if not keep_existing:
+                values = self._vpn_values()
+                if not self._confirm_wifi_band(values["wifi_ssid"]):
+                    return
+
             if not messagebox.askyesno(
                 "Confirmer le flash ESP32 VPN",
                 f"Matériel sélectionné : {chip}. Vérifie la bonne carte, pas un lecteur JK.\n"
                 + ("FACTORY remplace le partitionnement et risque de rendre les "
                    "anciennes données inaccessibles.\n" if mode == "factory" else
                    "APP-ONLY conserve le partitionnement/NVS existants.\n")
-                + "Après flash, le programme enverra les champs du formulaire "
-                  "par le câble USB uniquement. Continuer ?"
+                + ("Aucune donnée Wi-Fi/Tailscale/JK ne sera réécrite. "
+                   "Seul le firmware sera mis à jour. Continuer ?"
+                   if keep_existing else
+                   "Après flash, les paramètres seront transmis par USB. Continuer ?")
             ):
                 return
             self._run_async(lambda: self._do_vpn(port, file, mode, values, chip), mode="vpn")
@@ -718,12 +735,18 @@ class Flasher(tk.Tk):
             messagebox.showerror("Flash VPN", str(exc))
 
     def _do_vpn(self, port: str, image: Path, mode: str,
-                values: dict[str, str], chip: str = "esp32") -> None:
+                values: dict[str, str] | None, chip: str = "esp32") -> None:
         ensure_esptool_console_streams()
         from vpn_usb import flash_precompiled, provision_over_serial
         self._progress_stage("Connexion à l'ESP32 VPN et écriture du firmware…")
         with monitor_esptool_progress(self._flash_percent):
             flash_precompiled(port, image, mode, self._log, chip=chip)
+        if values is None:
+            if mode != "update":
+                raise ValueError("La configuration USB est obligatoire en mode FACTORY.")
+            self._progress_step(98, "APP-ONLY installé : NVS conservée, aucune réassociation USB.")
+            self._log("Mise à jour sans reconfiguration terminée. Redémarre et vérifie la liaison VPN.")
+            return
         self._progress_step(80, "Firmware VPN écrit : attente USB (CH343/UART ou USB natif)…")
         provision_over_serial(
             port, values, self._log,
