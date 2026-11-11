@@ -3003,7 +3003,8 @@ class MainActivity : Activity() {
     private fun warmReaderSnapshots(requested:List<Int> = (1..3).toList()) {
         if(setupTransport)return
         val now=android.os.SystemClock.elapsedRealtime()
-        if(requested.size>1 && now-lastWarmStartAt<10_000L)return
+        if(requested.size>1 && lastWarmStartAt>0L &&
+            now-lastWarmStartAt<10_000L)return
         if(requested.size>1)lastWarmStartAt=now
         for(slot in requested.distinct()) {
             if(slot in warmReadersPending)continue
