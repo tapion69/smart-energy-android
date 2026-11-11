@@ -22,9 +22,6 @@ jobs:
         with:
           distribution: temurin
           java-version: '17'
-      - name: Build Android debug APK and unit tests
-        working-directory: android
-        run: ./gradlew --no-daemon testDebugUnitTest assembleDebug
       - name: Load permanent APK signing key (GitHub secrets)
         id: signing
         shell: bash
@@ -47,6 +44,12 @@ jobs:
           echo "SMART_ENERGY_ANDROID_KEY_ALIAS=$SE_KEY_ALIAS" >> "$GITHUB_ENV"
           echo "SMART_ENERGY_ANDROID_KEY_PASSWORD=$SE_KEY_PASSWORD" >> "$GITHUB_ENV"
           echo "configured=true" >> "$GITHUB_OUTPUT"
+      # Reuse the permanent signing identity for *debug* too, if configured.
+      # GitHub runners otherwise create a fresh debug keystore each run and
+      # Android refuses in-place updates of the same test package ID.
+      - name: Build Android debug APK and unit tests
+        working-directory: android
+        run: ./gradlew --no-daemon testDebugUnitTest assembleDebug
       - name: Build permanently signed APK (only when secrets configured)
         if: steps.signing.outputs.configured == 'true'
         working-directory: android
