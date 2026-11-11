@@ -45,19 +45,47 @@ static httpd_handle_t http_server = NULL;
 static EventGroupHandle_t wifi_events;
 static const int WIFI_READY = BIT0;
 static volatile bool wifi_ready = false;
+static volatile uint16_t wifi_last_disconnect_reason = 0;
+static volatile unsigned wifi_retry_count = 0;
+
+/* Reasons are intentionally generic: log no passwords, SSIDs, tokens, MACs,
+ * or captured 802.11 frames. Only standard ESP-IDF Wi-Fi reason codes. */
+static const char *wifi_failure_hint(uint16_t reason) {
+    switch(reason) {
+        case WIFI_REASON_NO_AP_FOUND: return "AP_NOT_FOUND";
+        case WIFI_REASON_AUTH_FAIL: return "AUTH_REJECTED";
+        case WIFI_REASON_ASSOC_FAIL: return "ASSOCIATION_REJECTED";
+        case WIFI_REASON_HANDSHAKE_TIMEOUT: return "WPA_HANDSHAKE_TIMEOUT";
+        case WIFI_REASON_4WAY_HANDSHAKE_TIMEOUT: return "WPA_4WAY_TIMEOUT";
+        default: return "OTHER_WIFI_DISCONNECT";
+    }
+}
 
 static void on_wifi_event(void *arg, esp_event_base_t base,
                           int32_t id, void *data) {
     (void)arg;
-    (void)data;
     if (base == WIFI_EVENT && id == WIFI_EVENT_STA_START) {
         esp_wifi_connect();
     } else if (base == WIFI_EVENT && id == WIFI_EVENT_STA_DISCONNECTED) {
+        const wifi_event_sta_disconnected_t *event =
+            (const wifi_event_sta_disconnected_t *)data;
+        const uint16_t reason = event ? event->reason : 0;
+        wifi_last_disconnect_reason = reason;
+        ++wifi_retry_count;
         wifi_ready = false;
         xEventGroupClearBits(wifi_events, WIFI_READY);
-        esp_wifi_connect();
+        // Throttle the human-readable report, not the reconnect attempt.
+        // Diagnostic codes never contain credentials, unlike full WiFi logs.
+        if(wifi_retry_count <= 6 || wifi_retry_count % 10 == 0)
+            ESP_LOGW(TAG, "WiFi retry %u: reason=%u (%s). No credentials logged.",
+                     wifi_retry_count, (unsigned)reason, wifi_failure_hint(reason));
+        esp_err_t retry=esp_wifi_connect();
+        if(retry!=ESP_OK)
+            ESP_LOGW(TAG,"WiFi retry request error=%s",esp_err_to_name(retry));
     } else if (base == IP_EVENT && id == IP_EVENT_STA_GOT_IP) {
         wifi_ready = true;
+        wifi_last_disconnect_reason = 0;
+        wifi_retry_count = 0;
         xEventGroupSetBits(wifi_events, WIFI_READY);
         ESP_LOGI(TAG, "Home WiFi connected");
     }
@@ -369,7 +397,9 @@ void app_main(void) {
     const EventBits_t result = xEventGroupWaitBits(wifi_events, WIFI_READY,
                 pdFALSE, pdTRUE, pdMS_TO_TICKS(60000));
     if (!(result & WIFI_READY)) {
-        ESP_LOGE(TAG, "WiFi unavailable. Verify 2.4 GHz SSID and password.");
+        ESP_LOGE(TAG, "WiFi unavailable after 60 s: last_reason=%u (%s), retries=%u. Verify AP security, 2.4 GHz association and saved credentials.",
+                 (unsigned)wifi_last_disconnect_reason,
+                 wifi_failure_hint(wifi_last_disconnect_reason), wifi_retry_count);
         return;
     }
     uint8_t mac[6] = {0};
