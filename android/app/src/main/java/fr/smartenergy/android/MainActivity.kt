@@ -175,49 +175,63 @@ class MainActivity : Activity() {
     private lateinit var alarmSettingsState: TextView
     private val telemetryTicker = object : Runnable {
         override fun run() {
-            if (!lanVerified && !lanConnectionPending && !setupTransport) {
-                val now=android.os.SystemClock.elapsedRealtime()
+            // This tick runs on the UI thread. Watch Tailscale every 2.5 s,
+            // including while a route is healthy: the former code only
+            // connected automatically on startup and never returned from
+            // the S3 VPN to the local reader without the manual button.
+            val now=android.os.SystemClock.elapsedRealtime()
+            if (!setupTransport && !lanConnectionPending) {
                 val route=selectedRoute()
-                when(route) {
-                    JkTransportPolicy.Route.GATEWAY_VPN -> {
-                        if(now-lastRemoteAttempt>=30000L) {
-                            lastRemoteAttempt=now
-                            connectGatewayRemote()
+                if (lanVerified) {
+                    when(route) {
+                        JkTransportPolicy.Route.GATEWAY_VPN -> {
+                            if (!remoteGatewayConnection) {
+                                lastRemoteAttempt=now
+                                connectGatewayRemote()
+                            }
                         }
-                    }
-                    JkTransportPolicy.Route.LOCAL_WIFI -> {
-                        val savedIp=prefs.getString("local_ip","") ?: ""
-                        if(!remoteGatewayConnection && now-lastLocalAttempt>=20000L) {
-                            lastLocalAttempt=now
-                            localHost=savedIp
-                            lanIp.setText(savedIp)
-                            connectHomeLan(false)
+                        JkTransportPolicy.Route.LOCAL_WIFI -> {
+                            if (remoteGatewayConnection || remoteVpnConnection) {
+                                val ip=prefs.getString("local_ip","") ?: ""
+                                if (allowedLocalIp(ip)) {
+                                    lanIp.setText(ip)
+                                    lastLocalAttempt=now
+                                    connectHomeLan(false)
+                                } else {
+                                    lanVerified=false
+                                    telemetryStatus.text="Wi-Fi local indisponible : lecteur non associé."
+                                }
+                            }
                         }
-                    }
-                    JkTransportPolicy.Route.CONFIGURE_VPN,
-                    JkTransportPolicy.Route.NO_CONNECTION -> {
-                        // Never try the stale 192.168.x.x IP when a VPN is on
-                        // or the user has selected ESP32 VPN explicitly.
+                        JkTransportPolicy.Route.CONFIGURE_VPN,
+                        JkTransportPolicy.Route.NO_CONNECTION -> {
+                            // Never silently use a saved LAN IP while a VPN
+                            // is active but gateway credentials are missing.
+                            lanVerified=false
+                            if (route==JkTransportPolicy.Route.CONFIGURE_VPN)
+                                telemetryStatus.text="VPN actif : configure « Accès extérieur — ESP32 VPN »."
+                        }
                     }
                 }
-            }
-            // Tailscale just became active while we were using LAN: pause
-            // local polling until the user configures or selects the VPN.
-            if(lanVerified && !remoteGatewayConnection && !remoteVpnConnection &&
-               !setupTransport &&
-               selectedRoute()==JkTransportPolicy.Route.CONFIGURE_VPN &&
-               vpnConnected()) {
-                lanVerified=false
-                telemetryStatus.text="VPN actif : configure « Accès extérieur — ESP32 VPN »." +
-                    " Le réseau local ne sera plus sollicité automatiquement."
-            }
-            if (lanVerified && !remoteGatewayConnection && !remoteVpnConnection &&
-                !setupTransport && selectedRoute()==JkTransportPolicy.Route.GATEWAY_VPN &&
-                !lanConnectionPending) {
-                val now=android.os.SystemClock.elapsedRealtime()
-                if(now-lastRemoteAttempt>=30000L) {
-                    lastRemoteAttempt=now
-                    connectGatewayRemote()
+                if (!lanVerified && !lanConnectionPending) {
+                    when(route) {
+                        JkTransportPolicy.Route.GATEWAY_VPN -> {
+                            if (now-lastRemoteAttempt>=30000L) {
+                                lastRemoteAttempt=now
+                                connectGatewayRemote()
+                            }
+                        }
+                        JkTransportPolicy.Route.LOCAL_WIFI -> {
+                            val savedIp=prefs.getString("local_ip","") ?: ""
+                            if (now-lastLocalAttempt>=20000L) {
+                                lastLocalAttempt=now
+                                localHost=savedIp
+                                lanIp.setText(savedIp)
+                                connectHomeLan(false)
+                            }
+                        }
+                        else -> { /* No unsafe LAN fallback while VPN is active. */ }
+                    }
                 }
             }
             if (lanVerified || (setupTransport && apNetwork != null)) {
@@ -695,7 +709,10 @@ class MainActivity : Activity() {
         lanIp.setText(prefs.getString("local_ip", "") ?: "")
         add(lan, lanIp)
         lanConnectBtn = action("Se connecter à ma passerelle") {
-            prefs.edit().putString("connection_preference","local").apply()
+            // Manual local is an explicit override for JK setup/writes.
+            remoteCheck.isChecked=false
+            prefs.edit().putString("connection_preference","local")
+                .putBoolean("remote_gateway_enabled",false).apply()
             connectHomeLan()
         }
         add(lan, lanConnectBtn)
@@ -719,24 +736,35 @@ class MainActivity : Activity() {
         add(remote, gatewayTokenEdit)
         add(remote, label("Saisis CONFIG_SE_GATEWAY_TOKEN, pas ton code JK et pas la clé tskey-auth Tailscale. Le code JK choisi dans l'application doit correspondre à CONFIG_SE_JK_READ_CODE compilé dans l'ESP32 VPN. Aucun port à ouvrir.", 12f, color = subdued))
         add(remote, action("Enregistrer et tester mon ESP32 VPN") {
-            prefs.edit().putString("connection_preference","gateway").apply()
+            // After successful setup, prefer the S3 whenever Tailscale runs.
+            // Returning to home Wi-Fi without Tailscale is automatic.
+            remoteCheck.isChecked=true
+            prefs.edit().putString("connection_preference","auto")
+                .putBoolean("remote_gateway_enabled",true).apply()
             connectGatewayRemote()
         }, 10)
         remoteCheck = CheckBox(this).apply {
-            text = "Connexion VPN automatique lorsque Tailscale est actif"
+            text = "Automatique : Tailscale actif → VPN, sinon → Wi-Fi local"
             setTextColor(normal)
             isChecked = prefs.getBoolean("remote_gateway_enabled", false)
             setOnCheckedChangeListener { _, checked ->
-                prefs.edit().putBoolean("remote_gateway_enabled", checked).apply()
+                prefs.edit()
+                    .putBoolean("remote_gateway_enabled", checked)
+                    .putString("connection_preference",
+                        if (checked) "auto"
+                        else if (remoteGatewayConnection) "gateway" else "local")
+                    .apply()
                 remoteStatus.text = if (checked)
-                    "Connexion automatique activée pour le prochain démarrage."
-                    else "Connexion VPN automatique désactivée."
+                    "Mode automatique actif : VPN avec Tailscale, Wi-Fi local sans Tailscale."
+                    else "Mode automatique désactivé : sélection manuelle conservée."
             }
         }
         add(remote, remoteCheck)
-        add(remote, label("Pour la première association du JK et les changements de réglage, utilise toujours le Wi-Fi local. Le VPN reste en lecture seule.", 12f, color = subdued))
+        add(remote, label("Une fois le VPN associé, la connexion revient seule aux ESP32 locaux quand Tailscale est coupé. Pour associer un JK ou modifier ses réglages, désactive le mode automatique et utilise le Wi-Fi local. Le VPN reste en lecture seule.", 12f, color = subdued))
         add(remote, action("Revenir à ma connexion Wi-Fi locale") {
-            prefs.edit().putString("connection_preference","local").apply()
+            remoteCheck.isChecked=false
+            prefs.edit().putString("connection_preference","local")
+                .putBoolean("remote_gateway_enabled",false).apply()
             connectHomeLan(false)
         })
         add(remote, label("Option existante : si tu utilises un routeur VPN de sous-réseau plutôt qu'un deuxième ESP32, l'ancien mode reste disponible ci-dessous.", 12f, color = subdued))
