@@ -2,7 +2,7 @@
 
 **État : expérimental.** Le firmware est précompilé une seule fois, sans secrets d'installation. Un programme Windows indépendant envoie ensuite le Wi-Fi, la clé Tailscale et les lecteurs JK par **USB physique**, et l'ESP32 garde ces valeurs dans sa partition NVS.
 
-**Deux variantes sont désormais précompilées : ESP32 classique (4 Mo) et ESP32-S3 N16R8 (16 Mo flash / 8 Mo PSRAM).** Le firmware S3 utilise le même protocole de configuration `SEVPN_READY_V1`/`SEVPN_CONFIG` mais son **USB Serial/JTAG natif**, pas l'UART0 sur pont USB du modèle classique. **Les images S3 ne sont pas encore validées sur carte réelle** ; l'ancien ESP32 VPN en service doit rester intact.
+**Deux variantes sont désormais précompilées : ESP32 classique (4 Mo) et ESP32-S3 N16R8 (16 Mo flash / 8 Mo PSRAM).** Le firmware S3 est désormais compatible avec **les deux types de connexion USB** : l'USB Serial/JTAG natif et les ports USB-UART CH343/CP210x reliés à UART0 (GPIO43/44). C'est le même protocole `SEVPN_READY_V1`/`SEVPN_CONFIG` sur les deux ports, jamais via Internet. **Ces images S3 n'ont pas encore été validées sur carte réelle** ; l'ancien ESP32 VPN en service doit rester intact.
 
 ## Architecture
 
@@ -54,3 +54,12 @@ Dans le nouveau `SmartEnergyFlasher.exe`, choisir explicitement **ESP32-S3 N16R8
 **Première validation sur matériel :** port USB de données reconnu Windows, envoi `SEVPN_READY_V1`, configuration physique avec confirmation `SEVPN_OK_REBOOT`, Wi-Fi connecté, identité Tailscale créée et GET `/api/v1/health` depuis le tailnet. Tester ensuite la lecture JK1/JK2/JK3. Aucune validation réelle ne peut être déclarée avant ces tests.
 
 Ce firmware reste expérimental : NVS non chiffrée, sécurité physique nécessaire, pas de serveur public ni de redirection de ports Internet.
+
+## Correctif USB ESP32-S3 du 11 novembre 2026
+
+Le flasheur d'origine pouvait écrire le firmware par une interface **CH343 USB-to-UART** (COM Windows), puis échouer à la configuration : l'application S3 répondait uniquement sur son USB Serial/JTAG natif. Le firmware corrigé ouvre **UART0 GPIO43/44 à 115200 bauds et USB Serial/JTAG natif**, et répond sur le canal physique qui a envoyé `SEVPN_PING` / `SEVPN_CONFIG`. Pas de Wi-Fi, VPN ni serveur exposé pendant le provisionnement ; aucun secret renvoyé dans les journaux.
+
+- Si le S3 a déjà reçu **notre image Factory VPN** et le flasheur est resté à 80 % en erreur USB, conserver les partitions et **flasher la nouvelle APP-ONLY S3 à 0x10000** (pas Factory), puis compléter la configuration. Si le S3 possède une prise USB native séparée, essayer également `Configurer via USB sans reflasher` sur cette prise avec l'ancien firmware.
+- Remplacer tout SSID `*_5GHz` par celui du **réseau 2,4 GHz**. Le S3 n'a pas de radio Wi-Fi 5 GHz ; un libellé de réseau ne prouve pas toujours sa bande réelle, d'où un avertissement plutôt qu'un blocage dans le programme Windows.
+- Aucun `erase_flash` automatique ni changement de configuration JK/BMS. Ne pas reflasher l'ESP VPN classique qui fonctionne.
+- La validation réussie exige le retour USB `SEVPN_OK_REBOOT` et ensuite la connexion Wi-Fi/Tailscale : une compilation seule n'en est pas la preuve.
