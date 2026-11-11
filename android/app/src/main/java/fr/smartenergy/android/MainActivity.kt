@@ -148,10 +148,17 @@ class MainActivity : Activity() {
     @Volatile private var telemetryBusy = false
     private var debugEnabled=false
     private val fleetWorker=Executors.newSingleThreadExecutor()
+    // Each reader exposes an HTTP snapshot already maintained by its BLE firmware.
+    // Warm these snapshots in parallel; NO additional BLE scans or transactions.
+    private val readerWarmWorker=Executors.newFixedThreadPool(3)
+    private val warmReadersPending=mutableSetOf<Int>() // accessed only from UI
+    private var lastWarmStartAt=0L
     private val settingsWorker=Executors.newSingleThreadExecutor()
     private val inverterWorker=Executors.newSingleThreadExecutor()
     @Volatile private var fleetBusy=false
     private val fleetCache=mutableMapOf<Int,Pair<Long,JSONObject>>() // UI-thread only
+    // Guards against a late HTTP reply from ESP1 being displayed after tapping ESP2.
+    private var readerSelectionEpoch=0L
     private var nextFleetSlot=1
     private lateinit var fleetPanel:LinearLayout
     private lateinit var fleetOverview:JkGlobalOverview
@@ -214,6 +221,13 @@ class MainActivity : Activity() {
                 }
             }
             if (lanVerified || (setupTransport && apNetwork != null)) {
+                // Expired cached data must never stay visually "en ligne".
+                val cached=fleetCache[activeReaderSlot]
+                if(lastTelemetry!=null && cached!=null &&
+                    !JkFastReaderPolicy.isFresh(
+                        cached.first,android.os.SystemClock.elapsedRealtime())) {
+                    showTelemetry(lastTelemetry!!)
+                }
                 refreshTelemetry()
                 // The /details API returns a cache. Do not fetch it every 30 s.
                 // The ESP32 itself now reads BMS settings every 30 min, plus
@@ -1423,7 +1437,7 @@ class MainActivity : Activity() {
                     remoteStatus.text = "ESP32 VPN connecté en lecture seule."
                     wifiBtn.isEnabled = false
                     state("Accès distant sécurisé confirmé · JK associé reconnu.")
-                    showTelemetry(telemetry)
+                    showTelemetry(telemetry,newRead=true)
                 }
             } finally {
                 lanConnectionPending = false
@@ -2200,19 +2214,25 @@ class MainActivity : Activity() {
     private fun refreshTelemetry() {
         if (telemetryBusy) return
         if (!lanVerified && !(setupTransport && apNetwork != null)) {
-            telemetryStatus.text = "Connecte d'abord ton ESP32. Aucune mesure disponible."
+            telemetryStatus.text = "Connexion en cours · dernière lecture affichée si disponible."
             return
         }
         telemetryBusy = true
+        val requestSlot=activeReaderSlot
+        val requestEpoch=readerSelectionEpoch
         io.execute {
             try {
                 val reply = httpCall("GET", "/api/v1/telemetry")
-                runOnUiThread { showTelemetry(reply) }
+                runOnUiThread {
+                    if(requestSlot==activeReaderSlot && requestEpoch==readerSelectionEpoch)
+                        showTelemetry(reply,newRead=true)
+                }
             } catch (ex: Exception) {
                 if ((remoteVpnConnection || remoteGatewayConnection) && !vpnConnected()) lanVerified = false
                 runOnUiThread {
-                    telemetryStatus.text = "Lecture JK impossible : " +
-                        (ex.message ?: ex.javaClass.simpleName)
+                    if(requestSlot==activeReaderSlot && requestEpoch==readerSelectionEpoch)
+                        telemetryStatus.text = "Lecture JK impossible : " +
+                            (ex.message ?: ex.javaClass.simpleName)
                 }
             } finally {
                 telemetryBusy = false
@@ -2561,6 +2581,7 @@ class MainActivity : Activity() {
         }
         editor.putInt("active_reader_slot",target).commit()
         activeReaderSlot=target
+        readerSelectionEpoch++
         lanVerified=false
         remoteGatewayConnection=false
         remoteVpnConnection=false
@@ -2572,7 +2593,11 @@ class MainActivity : Activity() {
         chosen.clear()
         lastScannedBms=emptyList()
         scanPanel.removeAllViews()
-        selectedBmsMac=""
+        val focus=pendingBmsNavigationMac.takeIf {
+            fleetOwnerByMac[it]==target
+        }.orEmpty()
+        pendingBmsNavigationMac=""
+        selectedBmsMac=focus
         parameterEditingEnabled=false
         lastTelemetry=null
         lastDetails=null
@@ -2581,7 +2606,10 @@ class MainActivity : Activity() {
         mountedTab=-1
         telemetryPanel.removeAllViews()
         status.text="ESP32 JK $target sélectionné. Connecte cette passerelle."
-        telemetryStatus.text="En attente des mesures de l'ESP32 JK $target."
+        telemetryStatus.text="ESP $target · récupération des dernières données…"
+        // Render the existing 15-second memory cache immediately instead of
+        // waiting for the /info → /bms → /telemetry handshake.
+        fleetCache[target]?.let { showTelemetry(it.second) }
         lanIp.setText(localHost)
         apName.setText(prefs.getString("setup_ssid","") ?: "")
         setupCode.text.clear()
@@ -2593,11 +2621,10 @@ class MainActivity : Activity() {
                 else -> state("ESP32 $target : configure ou choisis le mode de connexion.")
             }
         }
-        val pending=pendingBmsNavigationMac
-        if(pending.isNotBlank() && fleetOwnerByMac[pending]==target) {
-            pendingBmsNavigationMac=""
-            selectBms(pending)
-        } else renderFleetOverview()
+        // Give the selected reader an independent authenticated GET while the
+        // existing slow identity handshake continues. No extra BLE operation.
+        warmReaderSnapshots(listOf(target))
+        renderFleetOverview()
     }
 
     private fun displayBmsName(mac:String,default:String):String {
@@ -2898,67 +2925,153 @@ class MainActivity : Activity() {
         }catch (_:Exception){""}
     }
 
+    private data class FastReaderRequest(
+        val slot:Int,
+        val url:String,
+        val header:String,
+        val credential:String,
+        val pairedMacs:List<String>,
+        val startedAtMs:Long
+    )
+
+    /** Collect a per-reader credential snapshot *on the UI thread*, before any
+     * switch mutates the legacy active-reader preference keys. */
+    private fun makeFastReaderRequest(slot:Int):FastReaderRequest? {
+        if(slot !in 1..3 || setupTransport)return null
+        val macs=JkBmsRegistry.normalized(registeredMacs(slot))
+        if(macs.isEmpty())return null
+        val vpn=vpnConnected()
+        val preference=prefs.getString("connection_preference","auto") ?: "auto"
+        val localIp=if(slot==activeReaderSlot)
+            prefs.getString("local_ip","") ?: ""
+            else prefs.getString(slotKey(slot,"local_ip"),"") ?: ""
+        val localCode=slotPairingCode(slot)
+        val localOk=allowedLocalIp(localIp) && localCode.length in 8..32
+        val gatewayIp=prefs.getString("remote_gateway_ip","") ?: ""
+        val gatewayToken=storedGatewayToken()
+        val gatewayOk=allowedTailnetIp(gatewayIp) && validGatewayToken(gatewayToken)
+        val route=JkTransportPolicy.select(vpn,preference,
+            prefs.getBoolean("remote_gateway_enabled",false),gatewayOk,localOk)
+        val endpoint:String
+        val header:String
+        val credential:String
+        when(route) {
+            JkTransportPolicy.Route.GATEWAY_VPN -> {
+                if(!vpn || !gatewayOk)return null
+                val path=JkTransportPolicy.vpnReadPath(slot,"/api/v1/telemetry")
+                    ?: return null
+                endpoint="http://$gatewayIp:18767$path"
+                header="X-Gateway-Token"
+                credential=gatewayToken
+            }
+            JkTransportPolicy.Route.LOCAL_WIFI -> {
+                if(!localOk)return null
+                endpoint="http://$localIp/api/v1/telemetry"
+                header="X-Setup-Code"
+                credential=localCode
+            }
+            else -> return null
+        }
+        return FastReaderRequest(slot,endpoint,header,credential,macs,
+            android.os.SystemClock.elapsedRealtime())
+    }
+
+    /** Authentication, device identity and fresh-data rules stay identical to
+     * the regular reader. No settings endpoint, no BLE request, no write. */
+    private fun fastReadOnce(request:FastReaderRequest):JSONObject? {
+        val conn=URL(request.url).openConnection() as HttpURLConnection
+        return try {
+            conn.instanceFollowRedirects=false
+            conn.connectTimeout=1800
+            conn.readTimeout=2800
+            conn.requestMethod="GET"
+            conn.setRequestProperty(request.header,request.credential)
+            if(conn.responseCode!=200)return null
+            val json=JSONObject(conn.inputStream.bufferedReader().use { it.readText() })
+            if(json.optString("source")!="jk02-ffe1-read-only")return null
+            val devices=json.optJSONArray("devices") ?: return null
+            val returned=(0 until devices.length()).mapNotNull { index ->
+                devices.optJSONObject(index)?.optString("mac")?.takeIf { it.isNotBlank() }
+            }
+            if(!JkFastReaderPolicy.recognized(request.pairedMacs,returned))return null
+            json
+        } finally { conn.disconnect() }
+    }
+
+    /** Parallel GETs eliminate the cold-start delay caused by the /info and
+     * /bms handshake. No historical samples are saved to disk. */
+    private fun warmReaderSnapshots(requested:List<Int> = (1..3).toList()) {
+        if(setupTransport)return
+        val now=android.os.SystemClock.elapsedRealtime()
+        if(requested.size>1 && now-lastWarmStartAt<10_000L)return
+        if(requested.size>1)lastWarmStartAt=now
+        for(slot in requested.distinct()) {
+            if(slot in warmReadersPending)continue
+            val request=makeFastReaderRequest(slot) ?:continue
+            warmReadersPending.add(slot)
+            readerWarmWorker.execute {
+                val result=try { fastReadOnce(request) } catch(_:Exception){null}
+                runOnUiThread {
+                    warmReadersPending.remove(slot)
+                    if(isFinishing || isDestroyed || setupTransport || result==null)return@runOnUiThread
+                    // Do not show a reply from a profile replaced during pairing.
+                    if(JkBmsRegistry.normalized(registeredMacs(slot))!=request.pairedMacs)return@runOnUiThread
+                    val newer=fleetCache[slot]?.first
+                    if(newer!=null && newer>request.startedAtMs)return@runOnUiThread
+                    fleetCache[slot]=android.os.SystemClock.elapsedRealtime() to result
+                    if(slot==activeReaderSlot) {
+                        showTelemetry(result,newRead=true)
+                        if(lanConnectionPending)
+                            telemetryStatus.text="Mesures JK disponibles · vérification de l'ESP32 en cours."
+                    } else renderFleetOverview()
+                }
+            }
+        }
+    }
+
     private fun pollOtherFleetReader() {
-        if(fleetBusy || setupTransport || lanConnectionPending) return
-        // The active reader already has a dedicated 2.5s refresh.
+        if(fleetBusy || setupTransport)return
         val slots=(1..3).filter { it!=activeReaderSlot &&
-            (registeredMacs(it).isNotEmpty() ||
-             prefs.getString(slotKey(it,"device_id"),"")?.isNotBlank()==true) }
+            it !in warmReadersPending && registeredMacs(it).isNotEmpty() }
         if(slots.isEmpty())return
         val slot=slots[nextFleetSlot++ % slots.size]
+        val request=makeFastReaderRequest(slot) ?:return
         fleetBusy=true
         fleetWorker.execute {
-            val result=try { fleetReadOnce(slot) } catch (_:Exception) { null }
+            val result=try {fastReadOnce(request)}catch(_:Exception){null}
             runOnUiThread {
-                // Old successful data is deliberately allowed to age out.
-                if(result!=null)
-                    fleetCache[slot]=android.os.SystemClock.elapsedRealtime() to result
-                renderFleetOverview()
+                // A slow reply must not change the currently displayed BMS.
+                if(!isFinishing && !isDestroyed && result!=null &&
+                    JkBmsRegistry.normalized(registeredMacs(slot))==request.pairedMacs) {
+                    val newer=fleetCache[slot]?.first
+                    if(newer==null || newer<=request.startedAtMs) {
+                        fleetCache[slot]=android.os.SystemClock.elapsedRealtime() to result
+                        renderFleetOverview()
+                    }
+                }
                 fleetBusy=false
             }
         }
     }
 
-    private fun fleetReadOnce(slot:Int):JSONObject? {
-        // Do not let an in-flight request use a profile that became active
-        // while the user was switching readers. The foreground owns that slot.
-        if(slot==activeReaderSlot) return null
-        val vpnActive=vpnConnected()
-        val forceVpn=prefs.getString("connection_preference","auto")=="gateway"
-        // Never silently substitute an old LAN address when VPN was selected.
-        if(forceVpn && !vpnActive)return null
-        val connection:HttpURLConnection
-        if(vpnActive) {
-            val host=prefs.getString("remote_gateway_ip","") ?: ""
-            val token=storedGatewayToken()
-            if(!allowedTailnetIp(host) || !validGatewayToken(token))return null
-            val route=JkTransportPolicy.vpnReadPath(slot,"/api/v1/telemetry")
-                ?:return null
-            connection=URL("http://$host:18767$route").openConnection() as HttpURLConnection
-            connection.setRequestProperty("X-Gateway-Token",token)
-        } else {
-            val host=prefs.getString(slotKey(slot,"local_ip"),"") ?: ""
-            val code=slotPairingCode(slot)
-            if(!allowedLocalIp(host) || code.isBlank())return null
-            connection=URL("http://$host/api/v1/telemetry").openConnection()
-                as HttpURLConnection
-            connection.setRequestProperty("X-Setup-Code",code)
-        }
-        return try {
-            connection.connectTimeout=2800
-            connection.readTimeout=4000
-            connection.requestMethod="GET"
-            if(connection.responseCode!=200) return null
-            val result=JSONObject(connection.inputStream.bufferedReader().use { it.readText() })
-            if(result.optString("source")!="jk02-ffe1-read-only" ||
-               result.optJSONArray("devices")==null) null else result
-        } finally {connection.disconnect()}
-    }
-
-    private fun showTelemetry(response: JSONObject) {
+    private fun showTelemetry(rawResponse: JSONObject,newRead:Boolean=false) {
         if(::dashboardDebugStatus.isInitialized)dashboardDebugStatus.text=status.text
-        lastTelemetry = response
-        fleetCache[activeReaderSlot]=android.os.SystemClock.elapsedRealtime() to response
+        lastTelemetry=rawResponse
+        val now=android.os.SystemClock.elapsedRealtime()
+        if(newRead)fleetCache[activeReaderSlot]=now to rawResponse
+        val cache=fleetCache[activeReaderSlot]
+        val cacheAge=if(cache!=null)now-cache.first else Long.MAX_VALUE
+        val fresh=cache!=null && JkFastReaderPolicy.isFresh(cache.first,now)
+        // The last read may be shown instantly; after 15 seconds hide values
+        // and alarms until a real GET succeeds. No stale value is "live".
+        val response=if(fresh)rawResponse else JSONObject(rawResponse.toString()).apply {
+            optJSONArray("devices")?.let { list ->
+                for(i in 0 until list.length())list.optJSONObject(i)?.apply {
+                    put("available",false)
+                    remove("values")
+                }
+            }
+        }
         val devices = response.optJSONArray("devices")
         if (devices == null || devices.length() == 0) {
             selectedBmsMac=""
@@ -3088,14 +3201,24 @@ class MainActivity : Activity() {
                 }
         val diagnostics=offlineDiagnostics + linkDiagnostics +
             listOf(wifiNote,heapNote).filter { it.isNotBlank() }
+        val ageLabel=when {
+            newRead -> ""
+            fresh -> " · dernière lecture il y a ${(cacheAge/1000).coerceAtLeast(0)} s (actualisation…)"
+            else -> " · mesures périmées, reconnexion…"
+        }
         telemetryStatus.text = "$fleetAvailableCount/$fleetConfiguredCount BMS en ligne (tous lecteurs) · ESP $activeReaderSlot : $liveCount/${devices.length()} · $sectionTitle" +
-            if (!debugEnabled || diagnostics.isEmpty()) "" else "\n" + diagnostics.joinToString("\n")
+            ageLabel + if (!debugEnabled || diagnostics.isEmpty()) "" else "\n" + diagnostics.joinToString("\n")
     }
 
     override fun onResume() {
         super.onResume()
+        // Already-seen values appear immediately, never re-stamped as fresh.
+        lastTelemetry?.let { showTelemetry(it) }
         uiHandler.removeCallbacks(telemetryTicker)
-        uiHandler.postDelayed(telemetryTicker, 500)
+        // Read all paired ESP32 HTTP snapshots immediately, without waiting
+        // for /info + /bms from the foreground connection.
+        warmReaderSnapshots()
+        uiHandler.postDelayed(telemetryTicker, 200)
     }
     override fun onPause() {
         uiHandler.removeCallbacks(telemetryTicker)
@@ -3112,6 +3235,7 @@ class MainActivity : Activity() {
         releaseConnection()
         io.shutdownNow()
         fleetWorker.shutdownNow()
+        readerWarmWorker.shutdownNow()
         settingsWorker.shutdownNow()
         inverterWorker.shutdownNow()
         super.onDestroy()
