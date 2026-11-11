@@ -42,6 +42,12 @@ def valid_lan_ip(value: str) -> bool:
         return False
 
 
+def ssid_looks_five_ghz_only(ssid: str) -> bool:
+    """SSID is only a hint: warn, don't reject shared-band names."""
+    return bool(re.search(r"(?:^|[_\\-\\s])5\\s*ghz(?:$|[_\\-\\s])",
+                          ssid, flags=re.IGNORECASE))
+
+
 def validate_vpn_config(values: dict[str, str]) -> None:
     if not values["wifi_ssid"] or len(values["wifi_ssid"].encode("utf-8")) > 32:
         raise ValueError("SSID Wi-Fi invalide : 1 à 32 octets.")
@@ -671,11 +677,25 @@ class Flasher(tk.Tk):
         ]
         return values
 
+    def _confirm_wifi_band(self, ssid: str) -> bool:
+        if not ssid_looks_five_ghz_only(ssid):
+            return True
+        return messagebox.askyesno(
+            "Vérifie le Wi-Fi 2,4 GHz",
+            "Le nom du réseau sélectionné ressemble à un SSID 5 GHz. "
+            "Un ESP32-S3 ne peut se connecter qu'au Wi-Fi 2,4 GHz.\\n\\n"
+            "Choisis de préférence le réseau 2,4 GHz dans le formulaire. "
+            "Si tu sais que ce SSID diffuse aussi en 2,4 GHz, "
+            "veux-tu continuer quand même ?"
+        )
+
     def _flash_vpn(self) -> None:
         try:
             from vpn_usb import check_precompiled_image
             port = self._assert_ready()
             values = self._vpn_values()
+            if not self._confirm_wifi_band(values["wifi_ssid"]):
+                return
             mode = self.vpn_mode.get()
             chip = self.vpn_chip.get()
             if self.vpn_image.get().strip():
@@ -704,7 +724,7 @@ class Flasher(tk.Tk):
         self._progress_stage("Connexion à l'ESP32 VPN et écriture du firmware…")
         with monitor_esptool_progress(self._flash_percent):
             flash_precompiled(port, image, mode, self._log, chip=chip)
-        self._progress_step(80, "Firmware VPN écrit : attente de la liaison USB…")
+        self._progress_step(80, "Firmware VPN écrit : attente USB (CH343/UART ou USB natif)…")
         provision_over_serial(
             port, values, self._log,
             on_ready=lambda: self._progress_step(
@@ -715,6 +735,8 @@ class Flasher(tk.Tk):
         try:
             port = self._assert_ready()
             values = self._vpn_values()
+            if not self._confirm_wifi_band(values["wifi_ssid"]):
+                return
             if not messagebox.askyesno(
                 "Configuration physique",
                 "Pour une passerelle déjà configurée : redémarre-la, "
