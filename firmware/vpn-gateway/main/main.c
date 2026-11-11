@@ -414,7 +414,12 @@ void app_main(void) {
         .enable_derp = true,
         .enable_stun = true,
         .enable_disco = true,
-        .max_peers = 32,
+        .max_peers =
+#if CONFIG_IDF_TARGET_ESP32S3
+            32,
+#else
+            4,
+#endif
     };
     vpn = tailtiny_init(&cfg);
     if (!vpn) {
