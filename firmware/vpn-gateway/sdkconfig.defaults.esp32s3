@@ -11,3 +11,5 @@ CONFIG_SPIRAM_USE_MALLOC=y
 CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y
 # Native USB Serial/JTAG is used for provisioning on S3; no external UART bridge.
 CONFIG_USB_SERIAL_JTAG_ENABLED=y
+# S3 with 8 MB PSRAM can fit the full current tailnet (17 peers).
+CONFIG_ML_MAX_PEERS=32
