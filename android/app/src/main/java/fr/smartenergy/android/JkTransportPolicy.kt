@@ -1,8 +1,10 @@
 package fr.smartenergy.android
 
 /**
- * Pure, testable transport selection. A detected VPN must never trigger a
- * silent LAN fallback. An explicit local choice is the only exception.
+ * Pure, testable transport selection. In automatic mode, Tailscale presence
+ * selects the secure VPN gateway; when it is absent, a previously paired
+ * local reader is restored without user interaction. No LAN fallback is
+ * permitted when a VPN is active (except explicit manual-local mode).
  */
 object JkTransportPolicy {
     enum class Route { GATEWAY_VPN, LOCAL_WIFI, CONFIGURE_VPN, NO_CONNECTION }
@@ -29,14 +31,23 @@ object JkTransportPolicy {
         gatewayReady: Boolean,
         localReady: Boolean
     ): Route {
-        if (vpnActive && gatewayReady && vpnAutoEnabled) return Route.GATEWAY_VPN
-        if (preference == "local") {
-            return if (localReady) Route.LOCAL_WIFI else Route.NO_CONNECTION
+        // Automatic mode follows Tailscale, not the last manually used route.
+        // VPN up -> use the authenticated S3 gateway; VPN down -> use the
+        // previously paired local JK reader without requiring a new tap.
+        // Never fall back to local silently while *any* VPN is active.
+        if (vpnAutoEnabled) {
+            return if (vpnActive) {
+                if (gatewayReady) Route.GATEWAY_VPN else Route.CONFIGURE_VPN
+            } else {
+                if (localReady) Route.LOCAL_WIFI else Route.NO_CONNECTION
+            }
         }
-        if (vpnActive || preference == "gateway") {
+        // With automatic mode disabled, preserve explicit user choices.
+        if (preference == "local")
+            return if (localReady) Route.LOCAL_WIFI else Route.NO_CONNECTION
+        if (vpnActive || preference == "gateway")
             return if (vpnActive && gatewayReady && preference == "gateway")
                 Route.GATEWAY_VPN else Route.CONFIGURE_VPN
-        }
         return if (localReady) Route.LOCAL_WIFI else Route.NO_CONNECTION
     }
 }
