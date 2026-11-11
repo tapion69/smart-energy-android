@@ -28,7 +28,7 @@
 #include "cJSON.h"
 #include "voltronic_protocol.h"
 
-#define VT_VERSION "0.1.0-dev-s3-read-only"
+#define VT_VERSION "0.1.1-dev-s3-read-only"
 #define VT_UART UART_NUM_1
 #define VT_TX GPIO_NUM_17
 #define VT_RX GPIO_NUM_16
@@ -110,17 +110,49 @@ static bool save_config(const char *text) {
     memset(&candidate,0,sizeof(candidate));
     return result==ESP_OK;
 }
-static void usb_message(const char *message) {
-    usb_serial_jtag_write_bytes(message,strlen(message),pdMS_TO_TICKS(800));
-    usb_serial_jtag_write_bytes("\n",1,pdMS_TO_TICKS(800));
+/* ESP32-S3 dev boards may expose CH343 USB-UART on GPIO43/44 instead of
+ * native USB Serial/JTAG. Accept either physical provisioning interface;
+ * never print passwords or codes, and never expose remote configuration. */
+enum { VUSB_BRIDGE=0, VUSB_NATIVE=1 };
+static bool bridge_ready=false,native_ready=false;
+static char usb_lines[2][300];
+static size_t usb_lengths[2]={0,0};
+static void usb_message(int port,const char *message) {
+    if(port==VUSB_NATIVE) {
+        if(native_ready) {
+            usb_serial_jtag_write_bytes(message,strlen(message),pdMS_TO_TICKS(20));
+            usb_serial_jtag_write_bytes("\n",1,pdMS_TO_TICKS(20));
+        }
+    } else if(bridge_ready) {
+        uart_write_bytes(UART_NUM_0,message,strlen(message));
+        uart_write_bytes(UART_NUM_0,"\n",1);
+    }
+}
+static int usb_recv(int port,uint8_t *b) {
+    if(port==VUSB_NATIVE)
+        return native_ready ? usb_serial_jtag_read_bytes(b,1,pdMS_TO_TICKS(15)) : 0;
+    return bridge_ready ? uart_read_bytes(UART_NUM_0,b,1,pdMS_TO_TICKS(15)) : 0;
 }
 static void usb_begin(void) {
-    usb_serial_jtag_driver_config_t serial={
+    const uart_config_t uart={
+        .baud_rate=115200,
+        .data_bits=UART_DATA_8_BITS,.parity=UART_PARITY_DISABLE,
+        .stop_bits=UART_STOP_BITS_1,.flow_ctrl=UART_HW_FLOWCTRL_DISABLE
+    };
+    esp_err_t err=uart_param_config(UART_NUM_0,&uart);
+    if(err==ESP_OK)err=uart_set_pin(UART_NUM_0,GPIO_NUM_43,GPIO_NUM_44,
+                                    UART_PIN_NO_CHANGE,UART_PIN_NO_CHANGE);
+    if(err==ESP_OK)err=uart_driver_install(UART_NUM_0,1024,256,0,NULL,0);
+    bridge_ready=err==ESP_OK || err==ESP_ERR_INVALID_STATE;
+    if(!bridge_ready)
+        ESP_LOGE(TAG,"USB-UART bridge init failed %s",esp_err_to_name(err));
+    const usb_serial_jtag_driver_config_t native={
         .rx_buffer_size=1024,.tx_buffer_size=1024
     };
-    esp_err_t err=usb_serial_jtag_driver_install(&serial);
-    if(err!=ESP_OK && err!=ESP_ERR_INVALID_STATE)
-        ESP_LOGE(TAG,"USB init failed %s",esp_err_to_name(err));
+    err=usb_serial_jtag_driver_install(&native);
+    native_ready=err==ESP_OK || err==ESP_ERR_INVALID_STATE;
+    if(!native_ready)
+        ESP_LOGE(TAG,"Native USB init failed %s",esp_err_to_name(err));
 }
 static bool boot_reprovision(void) {
     gpio_config_t b={
@@ -138,39 +170,44 @@ static bool boot_reprovision(void) {
     return false;
 }
 static void usb_provision(void) {
-    char line[300]={0};size_t used=0;
-    usb_message("SEVOLT_READY_V1");
+    usb_message(VUSB_BRIDGE,"SEVOLT_READY_V1");
+    usb_message(VUSB_NATIVE,"SEVOLT_READY_V1");
     uint32_t last=esp_log_timestamp();
-    for(;;){
-        uint8_t b=0;
-        int read=usb_serial_jtag_read_bytes(&b,1,pdMS_TO_TICKS(250));
-        if(read<=0){
-            if((uint32_t)(esp_log_timestamp()-last)>2000){
-                usb_message("SEVOLT_READY_V1");last=esp_log_timestamp();
+    for(;;) {
+        for(int port=VUSB_BRIDGE;port<=VUSB_NATIVE;port++) {
+            uint8_t b=0;
+            if(usb_recv(port,&b)<=0)continue;
+            char *line=usb_lines[port];
+            size_t *used=&usb_lengths[port];
+            if(b=='\r')continue;
+            if(b=='\n') {
+                line[*used]=0;
+                if(strcmp(line,"SEVOLT_PING")==0) {
+                    usb_message(port,"SEVOLT_READY_V1");
+                    memset(line,0,300);*used=0;continue;
+                }
+                const char prefix[]="SEVOLT_CONFIG ";
+                if(*used>sizeof(prefix)-1 &&
+                    memcmp(line,prefix,sizeof(prefix)-1)==0 &&
+                    save_config(line+sizeof(prefix)-1)) {
+                    usb_message(port,"SEVOLT_OK_REBOOT");
+                    memset(line,0,300);
+                    vTaskDelay(pdMS_TO_TICKS(1200));
+                    esp_restart();
+                }
+                usb_message(port,"SEVOLT_ERR_INVALID");
+                memset(line,0,300);*used=0;continue;
             }
-            continue;
-        }
-        if(b=='\r')continue;
-        if(b=='\n') {
-            line[used]=0;
-            if(strcmp(line,"SEVOLT_PING")==0){
-                usb_message("SEVOLT_READY_V1");used=0;continue;
+            if(b<32 || b>126 || *used>=298) {
+                memset(line,0,300);*used=0;continue;
             }
-            const char prefix[]="SEVOLT_CONFIG ";
-            if(used>sizeof(prefix)-1 && memcmp(line,prefix,sizeof(prefix)-1)==0 &&
-                save_config(line+sizeof(prefix)-1)){
-                usb_message("SEVOLT_OK_REBOOT");
-                memset(line,0,sizeof(line));
-                vTaskDelay(pdMS_TO_TICKS(1200));
-                esp_restart();
-            }
-            usb_message("SEVOLT_ERR_INVALID");
-            memset(line,0,sizeof(line));used=0;continue;
+            line[(*used)++]=(char)b;
         }
-        if(b<32 || b>126 || used>=sizeof(line)-2){
-            memset(line,0,sizeof(line));used=0;continue;
+        if((uint32_t)(esp_log_timestamp()-last)>2000) {
+            usb_message(VUSB_BRIDGE,"SEVOLT_READY_V1");
+            usb_message(VUSB_NATIVE,"SEVOLT_READY_V1");
+            last=esp_log_timestamp();
         }
-        line[used++]=(char)b;
     }
 }
 
