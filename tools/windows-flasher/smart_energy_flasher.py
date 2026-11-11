@@ -43,9 +43,9 @@ def valid_lan_ip(value: str) -> bool:
 
 
 def ssid_looks_five_ghz_only(ssid: str) -> bool:
-    """SSID is only a hint: warn, don't reject shared-band names."""
-    return bool(re.search(r"(?:^|[_\\-\\s])5\\s*ghz(?:$|[_\\-\\s])",
-                          ssid, flags=re.IGNORECASE))
+    """SSID text is a hint, not proof of radio band. Warn, don't reject."""
+    name = ssid.strip().casefold()
+    return name == "5ghz" or name.endswith(("_5ghz", "-5ghz", " 5ghz"))
 
 
 def validate_vpn_config(values: dict[str, str]) -> None:
