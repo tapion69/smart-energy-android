@@ -414,7 +414,7 @@ void app_main(void) {
         .enable_derp = true,
         .enable_stun = true,
         .enable_disco = true,
-        .max_peers = 4,
+        .max_peers = 32,
     };
     vpn = tailtiny_init(&cfg);
     if (!vpn) {
