@@ -44,6 +44,10 @@ bool recoveryHoldTriggered = false;
 bool setupHoldTriggered = false;
 uint32_t wifiAttemptAt = 0;
 bool everConnected = false;
+// A reader that has already joined the home network during this boot must
+// retry as STA rather than disappearing into setup AP after a short outage.
+bool hasJoinedHomeWifi = false;
+uint32_t wifiLastDiagAt = 0;
 String wifiIssue = "";
 volatile uint8_t disconnectReason = 0;
 volatile uint32_t wifiDropCount = 0; // since ESP boot, no persistent storage
@@ -216,6 +220,8 @@ void onInfo() {
   doc["wifi_connected"] = WiFi.status() == WL_CONNECTED;
   doc["wifi_status_code"] = (int)WiFi.status();
   doc["wifi_disconnect_count"] = wifiDropCount;
+  doc["wifi_rssi_dbm"] = WiFi.status() == WL_CONNECTED ? WiFi.RSSI() : 0;
+  doc["wifi_joined_this_boot"] = hasJoinedHomeWifi;
   doc["free_heap_bytes"] = ESP.getFreeHeap();
   doc["min_free_heap_bytes"] = ESP.getMinFreeHeap();
   doc["wifi_saved"] = prefs.getString("ssid", "").length() > 0;
@@ -743,7 +749,14 @@ void loop() {
       wifiIssue = "";
       Serial.printf("[WiFi] Connected: %s\n", WiFi.localIP().toString().c_str());
     }
+    hasJoinedHomeWifi = true;
     wifiAttemptAt = 0;
+    if ((uint32_t)(millis() - wifiLastDiagAt) >= 30000) {
+      wifiLastDiagAt = millis();
+      Serial.printf("[WiFi] Link quality: rssi=%d dBm, drops=%lu, free_heap=%u\n",
+                    WiFi.RSSI(), (unsigned long)wifiDropCount,
+                    (unsigned)ESP.getFreeHeap());
+    }
     if (!mdnsRunning) {
       mdnsRunning = MDNS.begin(hostName.c_str());
       if (mdnsRunning) MDNS.addService("http", "tcp", 80);
@@ -758,11 +771,22 @@ void loop() {
       Serial.println("[WiFi] Link lost; retrying before returning to setup.");
     }
     if ((uint32_t)(millis() - wifiAttemptAt) >= WIFI_JOIN_TIMEOUT_MS) {
-      wifiIssue = everConnected ? "link_lost_timeout" : "join_timeout";
-      Serial.printf("[WiFi] Failed after %lu seconds: status=%d reason=%u. Reopening setup AP.\n",
-                    (unsigned long)(WIFI_JOIN_TIMEOUT_MS / 1000), (int)WiFi.status(),
-                    (unsigned)disconnectReason);
-      startSetup(true); // Retry saved Wi-Fi later; leave NVS and BLE selection intact.
+      if (hasJoinedHomeWifi) {
+        // Do not strand previously paired readers for 120 s in setup AP
+        // during ordinary RF interference or a temporary router outage.
+        // Retain NVS, BLE sessions, IP configuration and STA mode.
+        wifiIssue = "home_wifi_retrying";
+        Serial.printf("[WiFi] Previously joined: retry STA, status=%d reason=%u drops=%lu (no setup AP)\n",
+                      (int)WiFi.status(), (unsigned)disconnectReason,
+                      (unsigned long)wifiDropCount);
+        WiFi.reconnect();
+        wifiAttemptAt = millis();
+      } else {
+        wifiIssue = "join_timeout";
+        Serial.printf("[WiFi] Initial join timeout: status=%d reason=%u. Opening setup AP.\n",
+                      (int)WiFi.status(), (unsigned)disconnectReason);
+        startSetup(true); // First-setup recovery remains available.
+      }
     }
   }
   // When the router was temporarily unavailable, do NOT strand the reader
