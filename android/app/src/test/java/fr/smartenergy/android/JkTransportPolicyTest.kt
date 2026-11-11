@@ -17,9 +17,25 @@ class JkTransportPolicyTest {
         assertEquals(Route.GATEWAY_VPN,
             JkTransportPolicy.select(true,"gateway",false,true,true))
     }
-    @Test fun keepSelectedVpnWithoutConnectionRatherThanFallBack() {
-        assertEquals(Route.CONFIGURE_VPN,
+    @Test fun autoReturnsToLocalWhenTailscaleTurnsOffEvenAfterManualGatewaySelection() {
+        assertEquals(Route.LOCAL_WIFI,
             JkTransportPolicy.select(false,"gateway",true,true,true))
+    }
+    @Test fun autoDoesNotTryLanWhenTailscaleActiveButGatewayUnavailable() {
+        assertEquals(Route.CONFIGURE_VPN,
+            JkTransportPolicy.select(true,"local",true,false,true))
+    }
+    @Test fun autoWithoutWifiOrPairedReaderDoesNotClaimLocalConnection() {
+        assertEquals(Route.NO_CONNECTION,
+            JkTransportPolicy.select(false,"gateway",true,true,false))
+    }
+    @Test fun explicitManualGatewayWithoutAutoStillRequiresVpn() {
+        assertEquals(Route.CONFIGURE_VPN,
+            JkTransportPolicy.select(false,"gateway",false,true,true))
+    }
+    @Test fun manualLocalWithAutoDisabledAllowsJKSettings() {
+        assertEquals(Route.LOCAL_WIFI,
+            JkTransportPolicy.select(true,"local",false,true,true))
     }
     @Test fun manualLocalIsStillPossibleWithVpnActive() {
         assertEquals(Route.LOCAL_WIFI,
