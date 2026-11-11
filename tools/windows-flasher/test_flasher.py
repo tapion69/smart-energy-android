@@ -176,6 +176,23 @@ class FlasherTests(unittest.TestCase):
                 with self.assertRaises(ValueError):
                     Flasher._bundled_voltronic_image("unknown")
 
+    def test_vpn_app_only_preserves_nvs_without_usb_reprovision(self):
+        # Updating an already-associated gateway must not require a used
+        # one-time Tailscale auth key or overwrite JK/Wi-Fi credentials.
+        f = Flasher.__new__(Flasher)
+        with patch("smart_energy_flasher.ensure_esptool_console_streams"), \\
+             patch("smart_energy_flasher.monitor_esptool_progress"), \\
+             patch("vpn_usb.flash_precompiled") as flash, \\
+             patch("vpn_usb.provision_over_serial") as provision, \\
+             patch.object(Flasher, "_progress_stage"), \\
+             patch.object(Flasher, "_progress_step") as stage, \\
+             patch.object(Flasher, "_log"):
+            f._do_vpn("COM11", Path("test.bin"), "update", None, "esp32s3")
+            flash.assert_called_once()
+            provision.assert_not_called()
+            self.assertTrue(any("NVS conservée" in str(x)
+                                for x in stage.call_args_list))
+
     def test_flasher_source_vpn_buttons_do_not_overlap(self):
         from inspect import getsource
         source=getsource(Flasher._build_vpn)
