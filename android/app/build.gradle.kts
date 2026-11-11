@@ -35,9 +35,13 @@ android {
     }
     buildTypes {
         debug {
-            // Separate experimental install; never require uninstalling the
-            // stable Smart Energy APK or erasing its Keystore pairing.
-            applicationIdSuffix = ".vpntrial321"
+            // The GitHub runner's default debug key is ephemeral. A new trial
+            // package ID avoids INSTALL_FAILED_UPDATE_INCOMPATIBLE and leaves
+            // older debug installations (and their Keystore data) untouched.
+            // Once GitHub signing secrets are configured, keep this package
+            // ID and reuse the stable signer for subsequent upgrades.
+            applicationIdSuffix = ".vpntrial322"
+            if (hasStableSigning) signingConfig = signingConfigs.getByName("stable")
         }
         release {
             isMinifyEnabled = false
