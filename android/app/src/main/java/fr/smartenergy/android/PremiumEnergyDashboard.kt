@@ -70,6 +70,21 @@ class PremiumEnergyDashboard(context: Context) : WebView(context) {
         }
     }
 
+    /** Scroll the native page; the WebView itself expands to its content height. */
+    fun scrollNativeToSection(section:String, scroller:android.widget.ScrollView) {
+        if(section!="inverters-card" && section!="flows-card")return
+        evaluateJavascript(
+            "(function(){var e=document.getElementById('$section');" +
+            "return e?Math.round(e.getBoundingClientRect().top+window.scrollY):-1;})()"
+        ) { value ->
+            val cssY=value.trim('"').toIntOrNull() ?: -1
+            if(cssY>=0) {
+                val nativeY=top+(cssY*resources.displayMetrics.density).toInt()
+                scroller.smoothScrollTo(0,nativeY)
+            }
+        }
+    }
+
     private fun updateToDocumentHeight() {
         if (!pageReady || width <= 0) return
         evaluateJavascript(
