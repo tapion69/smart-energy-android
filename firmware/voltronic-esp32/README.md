@@ -1,57 +1,74 @@
-# Smart Energy Voltronic — ESP32-S3 N16R8 (prototype lecture seule)
+# Smart Energy Voltronic — ESP32-S3 N16R8 (v0.2.0, lecture seule)
 
-**État : code et compilation expérimentaux, aucune validation sur un vrai onduleur pour l'instant.**
-Ce module indépendant **n'embarque ni Node-RED, ni MQTT, ni le dashboard HA**.
-Le dépôt source JK BMS reste intact. Aucune commande d'écriture Voltronic n'est générée.
+**État : moteur série et binaire compilables en CI. Validation sur un véritable onduleur Axpert Ultra encore nécessaire.**
 
-## Matériel de départ
+Ce firmware ESP32-S3 N16R8 a été refondu en prenant comme référence le flow **Smart Voltronic Node-RED** actuellement accessible dans `tapion69/smart_voltronic`, branche `develop`, fichier `smart-voltronic/flows.json`. La référence est le moteur de communication déjà éprouvé par l'utilisateur, pas un protocole imaginaire. **Le flow HA complet n'a pas été copié** : MQTT, les automatisations, la configuration Home Assistant et toutes les écritures/SET onduleur sont volontairement exclus de cette passerelle Android **strictement en lecture seule**.
 
-- ESP32-S3 N16R8 (16 Mo flash, 8 Mo PSRAM), alimenté par USB 5 V indépendant ;
-- transceiver **MAX3232 compatible 3,3 V** entre UART TTL 3,3 V et RS232 ;
-- ESP **UART1 TX GPIO17**, **UART1 RX GPIO16**, baud **2400**, **8N1**, flow-control désactivé ;
-- côté onduleur, câble DB9/RJ45 selon le **brochage du port COM exact**. L'éventuelle prise RJ45 n'est pas de l'Ethernet et ne doit pas être branchée sur un routeur ;
-- prévoir isolation galvanique avant une installation permanente si nécessaire.
+## Câblage physique
 
-ATTENTION : ne jamais relier directement une sortie RS232 (-12/+12 V possibles) à un GPIO 3,3 V. Ne pas utiliser les ports BMS/CAN ou puissance. Vérifier les masses, le sens RX/TX et le brochage dans le manuel matériel.
+- ESP32-S3 N16R8 + transceiver **MAX3232 3,3 V**, alim USB S3 indépendante ;
+- UART1 TX **GPIO17** → entrée **RX** du convertisseur TTL ;
+- UART1 RX **GPIO16** ← sortie **TX** du convertisseur TTL ;
+- GND → GND ; 3V3 → VCC ;
+- DB9 RS232 → câble DB9/RJ45 spécifiquement compatible avec le port COM Voltronic de l'onduleur (pas un câble Ethernet).
+- Paramètres série : **2400 bauds, 8 bits, sans parité, 1 bit stop, sans contrôle de flux**, comme le flow d'origine.
 
-## Pipeline choisi à partir du flow Smart Voltronic
+**Attention** : vérifier le croisement TX/RX et le brochage DB9 avant toute connexion. Un câble RS232 précédemment fonctionnel avec un autre convertisseur ne garantit pas automatiquement le même sens de broches avec le MAX3232. Ne jamais brancher le RS232 directement sur les GPIO 3,3 V.
 
-Le flow Node-RED d'origine `flows(20261002-154611).json` contenait **322 nœuds** ; seuls les invariants éprouvés ont été repris. La référence publique actuelle est `tapion69/smart_voltronic/smart-voltronic/flows.json`, mais elle ne doit **pas** être copiée intégralement dans le S3.
+## Audit / portage depuis Node-RED
 
-- CRC16/XMODEM sur la commande ASCII, CRC haute puis basse, octets 0x28/0x0D/0x0A incrémentés, suivi du CR ;
-- une **seule commande à la fois**, association stricte réponse/requête, validation de CRC sur la réponse, timeout et contrôles de plages ;
-- **autorisé en V1** : `QPIGS` (mesures), `QPIGS2` (MPPT2 lorsqu'il existe), `QMOD` (mode), `QPIRI` (paramètres lus) ; `QPIWS` est dans la liste blanche protocole mais son décodage/ordonnancement n'est pas encore inclus ;
-- **interdit** : toute commande de changement POP, PCP, PBCV, PBFT, PBDV, charge, MOS, SOC ou protection. Aucun endpoint HTTP n'envoie de commande série ;
-- `QPIGS` tenté ~2,5 s ; `QPIGS2` ~4 s avec pause d'1 h sur NAK/incompatibilité ; `QMOD` ~12 s ; `QPIRI` ~5 min ;
-- pas de compteurs énergie, apprentissage automatique, MPPT2 Modbus, ratios non validés, valeurs inférées ou historique dans cette première version.
+| Composant Node-RED | ESP32-S3 0.2.0 | Limite |
+|---|---|---|
+| `helpers.buildVoltronicCommand` | CRC16/XMODEM octets high/low bruts + CR | commandes SET impossibles, liste blanche |
+| `construire commande` | commande associée à sa réponse | aucun payload d'identité publié |
+| `parser` | accumulateur UART par octets, trames finissant par CR, contrôle CRC | rejette et compte les trames incorrectes au lieu de les décoder silencieusement |
+| `Queue Pump / Queue Enqueue` | un seul échange série à la fois, ordonnancement équitable | pas de commandes manuelles via HTTP |
+| `requetes` | QPIGS, QPIGS2, QMOD, QPIRI, QDOP, QPIWS, QET/QLT, QMN, QID, QVFW/QVFW3 et compteurs datés | optionnel/NAK = retry ; date UTC après NTP |
+| `normalize state` | valeurs QPIGS, QPIGS2, QMOD, paramètres QPIRI/QDOP, compteurs d'énergie | pas de mapping inventé, pas de pseudo-mesures réseau |
+| HA discovery, MQTT, SET/VERIFY | **non portés** | hors périmètre d'une passerelle Android en lecture seule |
 
-La structure conservatrice `vt_qpigs_t` vient des champs vérifiés du module et expose AC, PV1, batterie, courant global calculé, SOC et charge. Le champ grid_power n'est exposé que si réellement fourni en index 24, **pas estimé comme valeur certaine**. Tous les champs JSON sont accompagnés de disponibilité/fraîcheur.
+- QPIGS 2,5 s, QPIGS2 4 s, QMOD 12 s, QPIRI/QDOP/QPIWS 5 min ; autres informations périodiques.
+- QPIGS2 suspendu 1 h après NAK / réponse incompatible, puis retenté.
+- Le S3 conserve son fonctionnement et ses requêtes de mesures même sans accès NTP ; seuls QED/QEM/QEY/QLD/QLM/QLY demandent l'horloge UTC synchronisée. Les unités d'énergie sont des valeurs retournées par l'onduleur ; vérifier avec le flow HA avant toute facturation.
+- `pv1_power_native_w` n'est renseigné que si un champ parmi les positions candidates du flow est cohérent avec `V × I`. Sinon, ne pas affirmer qu'il est mesuré. `grid_power_native_w` n'est exposé que si le champ 25 est réellement présent et valide.
+- Les mesures demeurent conservatrices. Les avertissements `QPIWS` sont exposés comme bits bruts non interprétés afin de ne pas confondre un réseau volontairement coupé et une panne.
 
-## Configuration sur USB natif S3
+## API Wi-Fi
 
-La première mise en route attend une configuration physique sur USB Serial/JTAG ; **aucun accès Wi-Fi ou HTTP n'est ouvert avant cela**. Le protocole de provisionnement (pas un mot de passe partagé) est :
+Port **18081**, GET uniquement avec en-tête `X-Setup-Code: <code choisi au flash>` :
 
-- Signal `SEVOLT_READY_V1`, ou envoyer `SEVOLT_PING\n`.
-- Envoyer une ligne JSON précédée de `SEVOLT_CONFIG ` avec les champs `wifi_ssid`, `wifi_password` et `read_code` (code personnel 8–32 caractères).
-- Sur réponse `SEVOLT_OK_REBOOT`, la configuration est sauvegardée en NVS puis la carte redémarre.
-- Pour modifier une configuration existante, maintenir BOOT (GPIO0) environ 3 secondes **après** redémarrage, dans une fenêtre de 9 secondes. L'outil USB est à ajouter au flasheur Windows une fois le premier firmware validé.
+- `/api/v1/info` → `source=voltronic-rs232-read-only`, version, transport, capacités ;
+- `/api/v1/telemetry` → `available`, `age_ms`, `values` si QPIGS récent, et compteurs ;
+- `/api/v1/details` → mode QMOD, disponibilité QPIGS2, paramètres QPIRI/QDOP validés, énergie brute, QPIWS ;
+- **`/api/v1/diagnostics`** → commandes envoyées, octets reçus, trames complètes, `crc_rejects`, `partial_frames`, `no_rx_timeouts`, `parse_rejects` et dernier échantillon.
 
-**Ne pas publier les secrets de Wi-Fi ni le code de lecture en GitHub, dans les journaux ou les captures.** La NVS de ce prototype n'est pas chiffrée et peut être extraite par une personne ayant accès physiquement à la carte.
+**Pour la panne « `available=false`, `polls_ok=0`, `timeouts=111` » :**
+1. La bonne réponse `/api/v1/info` (HTTP 200 après code) confirme que Wi-Fi et provisionnement fonctionnent.
+2. Relire `/api/v1/diagnostics` après plusieurs secondes.
+3. Si `rx_bytes_total=0` avec `no_rx_timeouts` qui augmente : vérifier MAX3232 / RX/TX / câble DB9/RJ45 / port COM.
+4. Si `rx_bytes_total>0` avec `partial_frames` ou `crc_rejects` : examiner trames incomplètes, CRC et variante de protocole. **Ne pas publier de dump brut, de code ni d'identifiant d'onduleur.**
+5. Les `timeouts` seuls ne prouvent pas qu'aucun octet n'est reçu.
 
-## API LAN (port 18081)
+Sous PowerShell, sans afficher ni publier le code :
 
-Chaque requête doit inclure `X-Setup-Code: <code personnel>`. Réponses strictement en GET :
+```powershell
+$code = Read-Host "Code de lecture Voltronic"
+Invoke-RestMethod -Uri "http://192.168.1.63:18081/api/v1/info" -Headers @{"X-Setup-Code"=$code}
+Invoke-RestMethod -Uri "http://192.168.1.63:18081/api/v1/diagnostics" -Headers @{"X-Setup-Code"=$code}
+Invoke-RestMethod -Uri "http://192.168.1.63:18081/api/v1/telemetry" -Headers @{"X-Setup-Code"=$code}
+Remove-Variable code
+```
 
-- `GET /api/v1/info` — `source=voltronic-rs232-read-only`, version, modèle ESP, `read_only:true`
-- `GET /api/v1/telemetry` — `source=voltronic-qpigs-read-only`, `available`, `age_ms`, mesures fraîches si datées de 10 s maximum
-- `GET /api/v1/details` — code de mode QMOD, disponibilité QPIGS2, bulk/float lus depuis QPIRI
+## Flasher Windows précompilé : préserver la configuration existante
 
-Aucune IP publique n'est nécessaire ; on utilise le Wi-Fi local. Le relais VPN n'est **pas encore raccordé** à ce nouveau lecteur. L'APK propose en configuration un **test de détection** de l'API ; l'affichage intégré du tableau de bord viendra après test des trames réelles.
+Le workflow `.github/workflows/build-vpn-gateway.yml` inclut un job **Voltronic S3** et génère un unique **SmartEnergyFlasher.exe** avec firmware JK, VPN et Voltronic précompilés.
 
-## Tests et compilation
+Dans l'onglet **Voltronic S3** :
 
-- Hôte : `gcc -std=gnu11 -Wall -Wextra -Werror firmware/voltronic-esp32/tests/test_protocol.c -o /tmp/test-voltronic -lm && /tmp/test-voltronic`
-- Compilation S3 automatique dans [GitHub Actions](https://github.com/tapion69/smart-energy-android/actions/workflows/build-voltronic-s3.yml), ESP-IDF v5.3.2, cible esp32s3.
-- Artefacts précompilés distincts : `smart-energy-voltronic-S3-FACTORY-0x0.bin` (nouvelle carte seulement) et `smart-energy-voltronic-S3-APP-0x10000.bin` (mise à jour après validation des partitions/NVS).
+- **APP-ONLY (recommandé si S3 Voltronic déjà configuré)** : image `smart-energy-voltronic-S3-APP-0x10000.bin` à l'adresse `0x10000` ; pas de provisionnement USB, **préserve Wi-Fi + code en NVS**. Ne jamais utiliser APP-ONLY pour remplacer un firmware d'un autre projet (JK/VPN).
+- **FACTORY (S3 neuf uniquement)** : image `smart-energy-voltronic-S3-FACTORY-0x0.bin` à l'adresse `0x0` ; configure ensuite Wi-Fi et code de lecture 8–32 caractères via USB physique. Peut effacer les données présentes ; ne pas choisir pour un S3 déjà associé.
+- Ne pas reconfigurer/effacer le S3 VPN Tailscale, ni les lecteurs JK BMS.
 
-**Aucune mesure réelle ni stabilité matérielle ne sont garanties par une compilation GitHub réussie.**
+Source : `firmware/voltronic-esp32/main/main.c` et `voltronic_protocol.h`. Tests natifs : `tests/test_protocol.c`. CI : `build-voltronic-s3.yml` + `build-vpn-gateway.yml`.
+
+**Une compilation réussie n'est pas une preuve de fonctionnement RS232 sur matériel réel. La validation se fera avec les trames et diagnostics du vrai onduleur, en comparaison avec le flow HA.**
