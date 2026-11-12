@@ -155,6 +155,11 @@ class MainActivity : Activity() {
     private var lastWarmStartAt=0L
     private val settingsWorker=Executors.newSingleThreadExecutor()
     private val inverterWorker=Executors.newSingleThreadExecutor()
+    private lateinit var premiumDashboard: PremiumEnergyDashboard
+    private var premiumJk = JSONObject()
+    private var premiumInverter = JSONObject().put("configured",false)
+    @Volatile private var voltronicReadBusy=false
+    private var lastVoltronicReadAt=0L
     @Volatile private var fleetBusy=false
     private val fleetCache=mutableMapOf<Int,Pair<Long,JSONObject>>() // UI-thread only
     // Guards against a late HTTP reply from ESP1 being displayed after tapping ESP2.
@@ -254,6 +259,7 @@ class MainActivity : Activity() {
                 // unlock, explicitly via Refresh, and after each write.
             }
             pollOtherFleetReader()
+            pollPremiumVoltronic(now)
             uiHandler.postDelayed(this, 2500)
         }
     }
@@ -577,21 +583,24 @@ class MainActivity : Activity() {
         brand.addView(label("SMART ENERGY", 17f, true, mint),
             LinearLayout.LayoutParams(-2, -2).apply { leftMargin = d(8) })
         add(root, brand, 2)
+        val homePage=LinearLayout(this).apply { orientation=LinearLayout.VERTICAL }
         val dashboardPage=LinearLayout(this).apply { orientation=LinearLayout.VERTICAL }
         val configurationPage=LinearLayout(this).apply { orientation=LinearLayout.VERTICAL }
         val settingsPage=LinearLayout(this).apply { orientation=LinearLayout.VERTICAL }
         fun showPage(page:Int) {
-            dashboardPage.visibility=if(page==0)View.VISIBLE else View.GONE
-            configurationPage.visibility=if(page==1)View.VISIBLE else View.GONE
-            settingsPage.visibility=if(page==2)View.VISIBLE else View.GONE
+            homePage.visibility=if(page==0)View.VISIBLE else View.GONE
+            dashboardPage.visibility=if(page==1)View.VISIBLE else View.GONE
+            configurationPage.visibility=if(page==2)View.VISIBLE else View.GONE
+            settingsPage.visibility=if(page==3)View.VISIBLE else View.GONE
             parameterEditingEnabled=false
             mountedTab=-1
-            if(page==0) lastTelemetry?.let { showTelemetry(it) }
+            if(page==0 || page==1) lastTelemetry?.let { showTelemetry(it) }
+            if(page==0) publishPremiumDashboard()
             scroll.post { scroll.scrollTo(0,0) }
         }
         val navigation=LinearLayout(this).apply { orientation=LinearLayout.HORIZONTAL }
-        for((title,page) in listOf("Tableau de bord" to 0,
-            "Configuration" to 1,"Réglages" to 2)) {
+        for((title,page) in listOf("Accueil" to 0,"Batteries" to 1,
+            "Configuration" to 2,"Réglages" to 3)) {
             val item=action(title) { showPage(page) }
             item.textSize=11f
             navigation.addView(item,LinearLayout.LayoutParams(0,d(48),1f).apply {
@@ -599,14 +608,20 @@ class MainActivity : Activity() {
             })
         }
         add(root,navigation,14)
+        root.addView(homePage)
         root.addView(dashboardPage)
         root.addView(configurationPage)
         root.addView(settingsPage)
         val startInConfig=storedCode().isBlank()
-        dashboardPage.visibility=if(startInConfig) View.GONE else View.VISIBLE
+        homePage.visibility=if(startInConfig) View.GONE else View.VISIBLE
+        dashboardPage.visibility=View.GONE
         configurationPage.visibility=if(startInConfig) View.VISIBLE else View.GONE
         settingsPage.visibility=View.GONE
-        add(dashboardPage, label("Tableau de bord JK", 25f, true), 12)
+        premiumDashboard=PremiumEnergyDashboard(this)
+        homePage.addView(premiumDashboard,LinearLayout.LayoutParams(-1,d(940)).apply {
+            topMargin=d(7)
+        })
+        add(dashboardPage, label("Batteries JK · Détails et paramètres", 23f, true), 12)
         // Connection/setup feedback remains accessible in Configuration.
         // Its mirror on the dashboard is shown ONLY in Debug mode.
         status = label("Connexion à la passerelle…", 13f, false, subdued)
@@ -886,17 +901,21 @@ class MainActivity : Activity() {
             }else {
                 prefs.edit().putString("inverter_probe_ip",ip)
                     .putString("inverter_probe_type",type)
-                    .putInt("inverter_probe_port",port).apply()
+                    .putInt("inverter_probe_port",port)
+                    .putBoolean("inverter_probe_validated",false).apply()
                 inverterStatus.text="Lecture réseau en cours (aucune écriture)…"
                 inverterWorker.execute {
                     val result=try {
                         if(type=="sunspec"){
                             val found=SunSpecReadOnly.discover(ip,port,unit!!)
+                            prefs.edit().putBoolean("inverter_probe_validated",true).apply()
                             "SunSpec détecté : base ${found.baseRegister}, "+
                                 "${found.models.size} modèle(s) (IDs : "+
                                 found.models.joinToString(",") { it.modelId.toString() }+")."
                         }else{
                             val found=VoltronicReadOnlyClient.probe(ip,code,port)
+                            saveAuxiliaryCode("premium_voltronic_code_cipher",code)
+                            prefs.edit().putBoolean("inverter_probe_validated",true).apply()
                             "Lecteur Voltronic reconnu : "+
                                 found.optString("version","version inconnue")+
                                 " · mode lecture seule confirmé."
@@ -905,7 +924,11 @@ class MainActivity : Activity() {
                         "Aucune lecture compatible : "+
                             (ex.message?.take(120) ?: ex.javaClass.simpleName)
                     }
-                    runOnUiThread { inverterStatus.text=result }
+                    runOnUiThread {
+                        inverterStatus.text=result
+                        lastVoltronicReadAt=0L
+                        pollPremiumVoltronic(android.os.SystemClock.elapsedRealtime())
+                    }
                 }
             }
         },8)
@@ -2918,6 +2941,7 @@ class MainActivity : Activity() {
         }
         fleetConfiguredCount=all.length()
         fleetAvailableCount=(0 until all.length()).count { all.optJSONObject(it)?.optBoolean("available")==true }
+        updatePremiumJk(all)
         val tabs=JkBmsTabOrder.sorted((0 until all.length()).mapNotNull { index ->
             val bms=all.optJSONObject(index) ?: return@mapNotNull null
             val mac=bms.optString("mac")
@@ -3237,6 +3261,172 @@ class MainActivity : Activity() {
         }
         telemetryStatus.text = "$fleetAvailableCount/$fleetConfiguredCount BMS en ligne (tous lecteurs) · ESP $activeReaderSlot : $liveCount/${devices.length()} · $sectionTitle" +
             ageLabel + if (!debugEnabled || diagnostics.isEmpty()) "" else "\n" + diagnostics.joinToString("\n")
+    }
+
+
+    // The new energy home reads the already-cached JK samples. It does not
+    // trigger extra BLE scans or alter any configuration of existing readers.
+    private fun updatePremiumJk(all:JSONArray) {
+        val devices=(0 until all.length()).mapNotNull { all.optJSONObject(it) }
+        val live=devices.filter { it.optBoolean("available") &&
+            it.optJSONObject("values")!=null }
+        val complete=devices.isNotEmpty() && live.size==devices.size
+        val readings=live.mapNotNull { it.optJSONObject("values") }
+        val soc:Double?=if(complete && readings.all {
+            it.has("soc_pct") && it.optDouble("soc_pct",Double.NaN).isFinite() &&
+                it.optDouble("soc_pct") in 0.0..100.0
+        }) {
+            val caps=readings.map { it.optDouble("nominal_capacity_ah",0.0) }
+            if(caps.all { it.isFinite() && it>0 }) {
+                val sum=caps.sum()
+                readings.indices.sumOf { readings[it].optDouble("soc_pct")*caps[it] }/sum
+            } else readings.map { it.optDouble("soc_pct") }.average()
+        } else null
+        val power:Double?=if(complete && readings.all {
+            it.has("power_w") && it.optDouble("power_w",Double.NaN).isFinite()
+        }) readings.sumOf { it.optDouble("power_w") } else null
+        val display=JSONArray()
+        devices.forEachIndexed { index,item ->
+            val v=if(item.optBoolean("available"))item.optJSONObject("values") else null
+            val mac=item.optString("mac")
+            val entry=JSONObject().put("name",displayBmsName(mac,"Batt-"+(index+1)))
+                .put("available",v!=null)
+            if(v!=null) {
+                if(v.has("soc_pct") && v.optDouble("soc_pct",Double.NaN).isFinite())
+                    entry.put("soc",v.optDouble("soc_pct"))
+                if(v.has("voltage_v") && v.optDouble("voltage_v",Double.NaN).isFinite())
+                    entry.put("voltage",v.optDouble("voltage_v"))
+            }
+            display.put(entry)
+        }
+        premiumJk=JSONObject()
+            .put("total",devices.size)
+            .put("online",live.size)
+            .put("complete",complete)
+            .put("devices",display)
+            .put("soc",soc ?: JSONObject.NULL)
+            .put("powerW",power ?: JSONObject.NULL)
+        publishPremiumDashboard()
+    }
+
+    private fun saveAuxiliaryCode(key:String,plaintext:String) {
+        require(plaintext.length in 8..32)
+        val cipher=Cipher.getInstance("AES/GCM/NoPadding")
+        cipher.init(Cipher.ENCRYPT_MODE,encryptionKey())
+        val encrypted=cipher.iv+cipher.doFinal(plaintext.toByteArray(Charsets.UTF_8))
+        prefs.edit().putString(key,Base64.encodeToString(encrypted,Base64.NO_WRAP)).apply()
+    }
+
+    private fun auxiliaryCode(key:String):String {
+        val encoded=prefs.getString(key,"") ?: ""
+        if(encoded.isBlank())return ""
+        return try {
+            val combined=Base64.decode(encoded,Base64.NO_WRAP)
+            if(combined.size<29) "" else {
+                val cipher=Cipher.getInstance("AES/GCM/NoPadding")
+                cipher.init(Cipher.DECRYPT_MODE,encryptionKey(),
+                    GCMParameterSpec(128,combined.copyOfRange(0,12)))
+                String(cipher.doFinal(combined.copyOfRange(12,combined.size)),Charsets.UTF_8)
+            }
+        }catch(_:Exception){""}
+    }
+
+    private fun premiumVoltronicSnapshot(raw:JSONObject):JSONObject {
+        val obj=JSONObject().put("configured",true).put("name","Voltronic / Axpert")
+        val values=raw.optJSONObject("values")
+        val age=raw.optLong("age_ms",-1L)
+        val fresh=raw.optBoolean("available") &&
+            age in 0L..10000L && values!=null
+        obj.put("fresh",fresh)
+        if(!fresh || values==null)return obj.put("pvDetail","Mesures non disponibles")
+        fun value(key:String):Double? {
+            if(!values.has(key)||values.isNull(key))return null
+            return values.optDouble(key,Double.NaN).takeIf { it.isFinite() }
+        }
+        value("output_w")?.takeIf { it>=0 && it<=30000 }?.let { obj.put("loadW",it) }
+        val pv1Voltage=value("pv1_voltage_v")
+        val pv1Current=value("pv1_current_a")
+        val pv2Power=value("pv2_power_w")
+        val pv1Power=if(pv1Voltage!=null && pv1Current!=null &&
+            pv1Voltage in 0.0..900.0 && pv1Current in 0.0..100.0)
+            pv1Voltage*pv1Current else null
+        if(pv1Power!=null && pv2Power!=null &&
+            pv2Power in 0.0..30000.0) {
+            obj.put("pvPowerW",pv1Power+pv2Power)
+            obj.put("pvDetail","PV1 estimé + PV2 mesuré")
+        } else {
+            obj.put("pvDetail",
+                if(pv1Power!=null)"PV1 seul · PV2 indisponible" else
+                    "Production PV indisponible")
+        }
+        value("grid_power_native_w")?.takeIf { kotlin.math.abs(it)<30000 }?.let {
+            obj.put("gridPowerW",it)
+            obj.put("gridDetail","Puissance native · sens à valider")
+        }
+        // No grid arrows until the native sign convention is measured.
+        obj.put("gridDirectionVerified",false)
+        return obj
+    }
+
+    private fun publishPremiumDashboard() {
+        if(!::premiumDashboard.isInitialized)return
+        val route=when {
+            remoteGatewayConnection && lanVerified -> "VPN Tailscale"
+            vpnConnected() -> "VPN · connexion en cours"
+            lanVerified -> "Wi-Fi local"
+            else -> "Hors ligne"
+        }
+        val payload=JSONObject()
+            .put("jk",premiumJk)
+            .put("inverter",premiumInverter)
+            .put("route",route)
+            .put("updated",java.text.SimpleDateFormat(
+                "'Actualisé à' HH:mm:ss",Locale.FRANCE).format(java.util.Date()))
+        premiumDashboard.showSnapshot(payload)
+    }
+
+    private fun pollPremiumVoltronic(now:Long) {
+        val type=prefs.getString("inverter_probe_type","") ?: ""
+        val valid=prefs.getBoolean("inverter_probe_validated",false)
+        if(!valid || type!="voltronic") {
+            premiumInverter=JSONObject()
+                .put("configured",valid && type=="sunspec")
+                .put("name",if(type=="sunspec")"SunSpec · découverte seule" else "Onduleur")
+                .put("fresh",false)
+            if(now-lastVoltronicReadAt>20000L) {
+                lastVoltronicReadAt=now
+                publishPremiumDashboard()
+            }
+            return
+        }
+        if(voltronicReadBusy || now-lastVoltronicReadAt<7000L)return
+        lastVoltronicReadAt=now
+        val host=prefs.getString("inverter_probe_ip","") ?: ""
+        val port=prefs.getInt("inverter_probe_port",18081)
+        val code=auxiliaryCode("premium_voltronic_code_cipher")
+        if(!SunSpecReadOnly.isPrivateIPv4(host) || code.length !in 8..32 ||
+            vpnConnected()) {
+            premiumInverter=JSONObject().put("configured",true)
+                .put("name","Voltronic / Axpert").put("fresh",false)
+                .put("pvDetail",if(vpnConnected())"VPN Voltronic non encore relayé"
+                     else "Lecteur non associé")
+            publishPremiumDashboard()
+            return
+        }
+        voltronicReadBusy=true
+        inverterWorker.execute {
+            val reading=try {
+                premiumVoltronicSnapshot(VoltronicReadOnlyClient.telemetry(host,code,port))
+            }catch(_:Exception) {
+                JSONObject().put("configured",true).put("name","Voltronic / Axpert")
+                    .put("fresh",false).put("pvDetail","Lecteur momentanément indisponible")
+            }
+            runOnUiThread {
+                premiumInverter=reading
+                voltronicReadBusy=false
+                publishPremiumDashboard()
+            }
+        }
     }
 
     override fun onResume() {
