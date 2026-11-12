@@ -628,6 +628,8 @@ class MainActivity : Activity() {
         premiumDashboard=PremiumEnergyDashboard(this)
         premiumDashboard.onNavigate={ destination ->
             when(destination) {
+                "section:inverters-card" -> premiumDashboard.scrollNativeToSection("inverters-card",scroll)
+                "section:flows-card" -> premiumDashboard.scrollNativeToSection("flows-card",scroll)
                 "home" -> showPage(0)
                 "batteries" -> showPage(1)
                 "settings" -> showPage(3)
