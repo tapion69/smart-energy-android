@@ -2,6 +2,7 @@ package fr.smartenergy.android
 
 import android.content.Context
 import android.graphics.Color
+import android.webkit.JavascriptInterface
 import android.webkit.WebResourceRequest
 import android.webkit.WebSettings
 import android.webkit.WebView
@@ -14,7 +15,13 @@ import org.json.JSONObject
  * Navigation, credentials, and device writes remain in native Android screens.
  */
 class PremiumEnergyDashboard(context: Context) : WebView(context) {
+    var onNavigate: ((String) -> Unit)? = null
     private var pageReady = false
+    private val bridge=object {
+        @JavascriptInterface fun navigate(destination:String) {
+            post { onNavigate?.invoke(destination) }
+        }
+    }
     private var latestPayload = "{}"
     private var lastMeasuredWidth = 0
 
@@ -23,6 +30,7 @@ class PremiumEnergyDashboard(context: Context) : WebView(context) {
         isVerticalScrollBarEnabled = false
         overScrollMode = OVER_SCROLL_NEVER
         settings.javaScriptEnabled = true
+        addJavascriptInterface(bridge, "SmartEnergyApp")
         settings.domStorageEnabled = false
         settings.allowFileAccess = true // bundled android_asset only
         settings.allowContentAccess = false
