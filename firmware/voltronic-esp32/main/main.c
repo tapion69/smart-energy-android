@@ -51,6 +51,10 @@ typedef struct {
     bool have_qpigs, have_qpigs2, have_qpiri, have_qdop, have_qpiws;
     bool have_pv_energy_total, have_load_energy_total;
     double pv_energy_total_raw_wh, load_energy_total_raw_wh;
+    double energy_raw_wh[2][4]; /* solar/load x total/day/month/year */
+    bool energy_valid[2][4];
+    double qpiri_fields[48], qdop_fields[48];
+    uint8_t qpiri_count, qdop_count;
     char qmod, warning_bits[128];
     uint32_t last_qpigs_ms,last_qpigs2_ms,last_qmod_ms,last_qpiri_ms;
     uint32_t last_qdop_ms,last_qpiws_ms,last_valid_ms;
@@ -352,6 +356,42 @@ static esp_err_t details_handler(httpd_req_t *r){
     cJSON_AddBoolToObject(root,"qpiws_available",snap.have_qpiws);
     if(snap.have_qpiws)
         cJSON_AddStringToObject(root,"warning_bits",snap.warning_bits);
+    cJSON *params=cJSON_AddObjectToObject(root,"parameters");
+    if(snap.have_qpiri) {
+        cJSON *q=cJSON_AddObjectToObject(params,"qpiri");
+        struct {const char *name;int index;} mapping[]={
+            {"battery_recharge_voltage_v",8},{"battery_under_voltage_v",9},
+            {"battery_bulk_voltage_v",10},{"battery_float_voltage_v",11},
+            {"battery_type_code",12},{"max_ac_charging_current_a",13},
+            {"max_charging_current_a",14},{"output_source_priority_code",16},
+            {"charger_source_priority_code",17},{"battery_re_discharge_voltage_v",22},
+            {"max_discharging_current_a",27}
+        };
+        for(size_t j=0;j<sizeof(mapping)/sizeof(mapping[0]);j++)
+            if(snap.qpiri_count>(uint8_t)mapping[j].index)
+                cJSON_AddNumberToObject(q,mapping[j].name,
+                    snap.qpiri_fields[mapping[j].index]);
+    }
+    if(snap.have_qdop) {
+        cJSON *q=cJSON_AddObjectToObject(params,"qdop");
+        const char *keys[]={
+            "battery_recharge_capacity_pct",
+            "battery_redischarge_capacity_pct",
+            "battery_under_capacity_pct"
+        };
+        for(size_t j=0;j<3;j++)
+            if(snap.qdop_count>(uint8_t)(j+8))
+                cJSON_AddNumberToObject(q,keys[j],snap.qdop_fields[j+8]);
+    }
+    cJSON *energy=cJSON_AddObjectToObject(root,"energy_wh");
+    const char *srcs[]={"pv","load"},*periods[]={"total","day_utc","month_utc","year_utc"};
+    for(int src=0;src<2;src++) {
+        cJSON *values=cJSON_AddObjectToObject(energy,srcs[src]);
+        for(int period=0;period<4;period++)
+            if(snap.energy_valid[src][period])
+                cJSON_AddNumberToObject(values,periods[period],
+                                        snap.energy_raw_wh[src][period]);
+    }
     cJSON_AddBoolToObject(root,"pv_energy_total_available",snap.have_pv_energy_total);
     if(snap.have_pv_energy_total)
         cJSON_AddNumberToObject(root,"pv_energy_total_raw_wh",snap.pv_energy_total_raw_wh);
@@ -557,13 +597,16 @@ static void interpret_reply(const char *cmd,const vt_exchange_t *rx,uint32_t now
             state.qmod=c;state.last_qmod_ms=now;state.polls_ok++;
         } else state.parse_rejects++;
     } else if(strcmp(cmd,"QPIRI")==0 || strcmp(cmd,"QDOP")==0) {
-        /* Parameter positions are model dependent. Do NOT publish numbers
-           with guessed labels. Mark only that a valid frame was received. */
         double numbers[48]={0};
-        if(vt_fields(rx->frame,rx->len,numbers,48)>=10) {
+        size_t count=vt_fields(rx->frame,rx->len,numbers,48);
+        if(count>=11) {
             if(strcmp(cmd,"QPIRI")==0) {
+                memcpy(state.qpiri_fields,numbers,count*sizeof(double));
+                state.qpiri_count=(uint8_t)count;
                 state.have_qpiri=true;state.last_qpiri_ms=now;
             } else {
+                memcpy(state.qdop_fields,numbers,count*sizeof(double));
+                state.qdop_count=(uint8_t)count;
                 state.have_qdop=true;state.last_qdop_ms=now;
             }
             state.polls_ok++;
@@ -575,13 +618,19 @@ static void interpret_reply(const char *cmd,const vt_exchange_t *rx,uint32_t now
             state.have_qpiws=true;state.last_qpiws_ms=now;
             state.polls_ok++;
         } else state.parse_rejects++;
-    } else if(strcmp(cmd,"QET")==0 || strcmp(cmd,"QLT")==0) {
-        double value;
+    } else if((cmd[0]=='Q') && (cmd[1]=='E'||cmd[1]=='L') &&
+              (cmd[2]=='T'||cmd[2]=='D'||cmd[2]=='M'||cmd[2]=='Y')) {
+        double value=0;
         if(vt_parse_energy(rx->frame,rx->len,&value)) {
-            if(strcmp(cmd,"QET")==0) {
+            int source=cmd[1]=='E'?0:1;
+            int period=cmd[2]=='T'?0:cmd[2]=='D'?1:cmd[2]=='M'?2:3;
+            state.energy_raw_wh[source][period]=value;
+            state.energy_valid[source][period]=true;
+            if(cmd[1]=='E' && cmd[2]=='T') {
                 state.pv_energy_total_raw_wh=value;
                 state.have_pv_energy_total=true;
-            } else {
+            }
+            if(cmd[1]=='L' && cmd[2]=='T') {
                 state.load_energy_total_raw_wh=value;
                 state.have_load_energy_total=true;
             }
