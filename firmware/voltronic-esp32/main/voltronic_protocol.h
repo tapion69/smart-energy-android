@@ -205,7 +205,7 @@ static inline bool vt_parse_qpigs(const uint8_t *frame,size_t n,vt_qpigs_t *out)
     m.battery_discharge_a=f[15];
     m.output_current_a=(f[2]>1)?f[5]/f[2]:0;
     m.battery_net_current_a=f[9]-f[15];
-    if(count>24&&f[24]>=0&&f[24]<=30000) {
+    if(count>24&&f[24]>=-30000&&f[24]<=30000) {
         m.grid_power_native_available=true;m.grid_power_native_w=f[24];
     }
     /* Matching native PV1 field, if present: Node-RED learns from candidates
