@@ -176,6 +176,38 @@ class FlasherTests(unittest.TestCase):
                 with self.assertRaises(ValueError):
                     Flasher._bundled_voltronic_image("unknown")
 
+    def test_voltronic_app_only_preserves_nvs_without_usb_reprovision(self):
+        # S3 already has working Wi-Fi and read code: never overwrite either.
+        f = Flasher.__new__(Flasher)
+        with (
+            patch("smart_energy_flasher.ensure_esptool_console_streams"),
+            patch("smart_energy_flasher.monitor_esptool_progress"),
+            patch("vpn_usb.flash_precompiled") as flash,
+            patch("voltronic_usb.provision_voltronic") as provision,
+            patch.object(Flasher,"_progress_stage"),
+            patch.object(Flasher,"_progress_step") as stage,
+            patch.object(Flasher,"_log"),
+        ):
+            f._do_voltronic("COM11",Path("voltronic.bin"),"update",None)
+            flash.assert_called_once()
+            provision.assert_not_called()
+            self.assertTrue(any("NVS conservée" in str(c)
+                                for c in stage.call_args_list))
+
+    def test_voltronic_factory_requires_usb_values(self):
+        f=Flasher.__new__(Flasher)
+        with (
+            patch("smart_energy_flasher.ensure_esptool_console_streams"),
+            patch("smart_energy_flasher.monitor_esptool_progress"),
+            patch("vpn_usb.flash_precompiled"),
+            patch("voltronic_usb.provision_voltronic") as provision,
+            patch.object(Flasher,"_progress_stage"),
+            patch.object(Flasher,"_progress_step"),
+        ):
+            with self.assertRaises(ValueError):
+                f._do_voltronic("COM11",Path("voltronic.bin"),"factory",None)
+            provision.assert_not_called()
+
     def test_vpn_app_only_preserves_nvs_without_usb_reprovision(self):
         # Updating an already-associated gateway must not require a used
         # one-time Tailscale auth key or overwrite JK/Wi-Fi credentials.
