@@ -64,6 +64,14 @@ body{background:radial-gradient(ellipse at 45% -12%,#10415d 0,transparent 44%),#
 .disclaimer{font-size:10px;color:#83aab9;padding:10px 4px 2px}
 @media(max-width:550px){.more-grid{grid-template-columns:1fr;gap:9px}.health-line{font-size:11px}}
 
+
+.demo-switch{position:absolute;top:39px;right:10px;z-index:5;border:1px solid #64b4e1;border-radius:20px;background:#062639e8;color:#d6f6ff;font-size:11px;font-weight:800;padding:6px 10px;box-shadow:0 0 10px #249af750}
+.demo-warning{background:linear-gradient(110deg,#44341c,#282234);border:1px solid #ffd462;color:#ffe6ad;border-radius:10px;padding:10px 12px;font-size:11px;font-weight:800;letter-spacing:.2px;margin-bottom:9px;text-align:center}
+.demo-warning[hidden]{display:none}
+.preview-demo .demo-switch{background:#f5c261;color:#132334;border-color:#ffeabd}
+.preview-demo .connection-badge{color:#ffd486;border-color:#e6a34d}
+@media(max-width:550px){.demo-switch{top:37px;font-size:10px;padding:6px 9px}}
+
 </style></head><body><main class="shell">
 <header class="premium-header"><div class="premium-brand">
 <div class="premium-logo"><svg viewBox="0 0 58 54" width="48" height="48" aria-hidden="true"><circle cx="42" cy="12" r="10" fill="#ffe35e"/><path d="M4 26L25 6L50 26" fill="none" stroke="#35f7e4" stroke-width="4.5" stroke-linecap="round" stroke-linejoin="round"/><path d="M10 25V49H43V25" fill="#06243a" stroke="#3bffe2" stroke-width="3.5" stroke-linejoin="round"/><path d="M22 28L18 39H28L22 48L25 36H17" fill="#ffe15e"/></svg></div>
@@ -75,13 +83,13 @@ body{background:radial-gradient(ellipse at 45% -12%,#10415d 0,transparent 44%),#
 <button type="button" data-nav="batteries">▣ Batteries</button>
 <button type="button" data-scroll="flows-card">⇄ Énergie</button>
 <button type="button" data-nav="settings">⚙ Réglages</button></nav>
-<div class="summary">
+<div id="demoWarning" class="demo-warning" hidden>MODE DÉMONSTRATION — toutes les mesures ci-dessous sont fictives.</div><div class="summary">
 <div class="stat pv"><div class="sttitle"><span class="sym">☀</span> Production PV</div><div id="pv" class="big">— W</div><div id="pvInfo" class="little">En attente onduleur</div></div>
 <div class="stat"><div class="sttitle"><span class="sym">⌂</span> Consommation</div><div id="load" class="big">— W</div><div class="little">Sortie AC</div></div>
 <div class="stat bat"><div class="sttitle"><span class="sym">▣</span> Batteries (SOC)</div><div id="soc" class="big">— %</div><div id="batterySummary" class="little">JK BMS en attente</div></div>
 <div class="stat"><div class="sttitle"><span class="sym">♧</span> Réseau électrique</div><div id="grid" class="big">— W</div><div id="gridInfo" class="little">Puissance non connue</div></div>
 </div>
-<div class="scene"><div class="scene-heading">⚡ FLUX D'ÉNERGIE</div><div id="routeChip" class="scene-state">LOCAL / VPN</div>
+<div class="scene"><div class="scene-heading">⚡ FLUX D'ÉNERGIE</div><div id="routeChip" class="scene-state">LOCAL / VPN</div><button type="button" class="demo-switch" id="demoToggle">Voir une démo</button>
 <svg viewBox="0 0 820 395" preserveAspectRatio="xMidYMid meet" xmlns="http://www.w3.org/2000/svg" aria-label="Maison solaire, réseau, onduleur et batteries reliés par des flux d'énergie">
 <defs>
 <linearGradient id="sky" x1="0" y1="0" x2="0" y2="1"><stop stop-color="#142b59"/><stop offset=".57" stop-color="#f2926e"/><stop offset="1" stop-color="#19465d"/></linearGradient>
@@ -167,7 +175,7 @@ document.querySelectorAll('[data-scroll]').forEach(function(btn){btn.addEventLis
  var target=document.getElementById(btn.getAttribute('data-scroll'));
  if(target)target.scrollIntoView({behavior:'smooth',block:'start'});
 });});
-window.updateSmartEnergy=function(data){
+function renderEnergy(data){
  if(!data || typeof data!=='object')return;
  var jk=data.jk||{};var inv=data.inverter||{};var soc=safeNumber(jk.soc);
  var p=safeNumber(inv.pvPowerW),load=safeNumber(inv.loadW),grid=safeNumber(inv.gridPowerW);
@@ -194,9 +202,16 @@ window.updateSmartEnergy=function(data){
  devices.slice(0,8).forEach(function(d){deviceRow(list,'bms-icon',String(d.name||'Batterie'),d.available?fmt(safeNumber(d.soc),'%')+' · '+fmt(safeNumber(d.voltage),'V',2):'Mesures indisponibles',d.available?'● En ligne':'○ Hors ligne')});
  set('bmsCount',(jk.online||0)+'/'+(jk.total||0));
  var invList=el('inverters');invList.replaceChildren();
- if(inv.configured){deviceRow(invList,'device-icon',inv.name||'Onduleur Voltronic',ready?fmt(load,'W')+' sortie AC · '+fmt(p,'W')+' PV':'Mesures indisponibles',ready?'● Lecture fraîche':'○ En attente / hors ligne')}
- else invList.appendChild(create('div','spaced','Aucun onduleur configuré. Section Onduleurs dans Configuration.'));
- set('invCount',inv.configured?(ready?'1/1':'0/1'):'0/0');
+ if(Array.isArray(inv.devices)&&inv.devices.length){
+  inv.devices.forEach(function(d){deviceRow(invList,'device-icon',d.name||'Onduleur',d.fresh?fmt(safeNumber(d.loadW),'W')+' AC · '+fmt(safeNumber(d.pvPowerW),'W')+' PV':'Mesures indisponibles',d.fresh?'● En ligne':'○ Hors ligne');});
+  set('invCount',inv.devices.filter(function(d){return d.fresh}).length+'/'+inv.devices.length);
+ }else if(inv.configured){
+  deviceRow(invList,'device-icon',inv.name||'Onduleur Voltronic',ready?fmt(load,'W')+' sortie AC · '+fmt(p,'W')+' PV':'Mesures indisponibles',ready?'● Lecture fraîche':'○ En attente / hors ligne');
+  set('invCount',ready?'1/1':'0/1');
+ }else{
+  invList.appendChild(create('div','spaced','Aucun onduleur configuré. Section Onduleurs dans Configuration.'));
+  set('invCount','0/0');
+ }
  set('healthInv',inv.configured?(ready?'Mesures reçues':'En attente'):'Non configuré');
  set('healthBms',(jk.online||0)+' / '+(jk.total||0)+' BMS');
  set('healthConn',data.route||'Non connecté');
@@ -204,6 +219,31 @@ window.updateSmartEnergy=function(data){
  set('health',jk.complete===true?'JK : mesures fraîches':(jk.total>0?'JK : données partielles':'JK : non configuré'));
  set('updated',data.updated||'En attente');
 };
-window.updateSmartEnergy({route:'Local / VPN',jk:{devices:[],total:0,online:0},inverter:{configured:false}});
+var lastReal={route:'Local / VPN',jk:{devices:[],total:0,online:0},inverter:{configured:false}};
+var demoOn=false;
+var sample={
+ route:'DÉMONSTRATION',
+ jk:{soc:62,powerW:1420,complete:true,online:4,total:4,devices:[
+  {name:'Batt-1',available:true,soc:62,voltage:52.06},
+  {name:'Batt-2',available:true,soc:63,voltage:52.07},
+  {name:'Batt-3',available:true,soc:61,voltage:52.05},
+  {name:'Batt-4',available:true,soc:62,voltage:52.06}
+ ]},
+ inverter:{configured:true,fresh:true,name:'Voltronic + SunSpec',pvPowerW:3260,
+   loadW:1840,gridPowerW:0,gridDirection:'none',gridDirectionVerified:true,
+   pvDetail:'PV1 1 820 W · PV2 1 440 W',gridDetail:'Réseau neutre',
+   devices:[{name:'Onduleur 1 · Voltronic',fresh:true,loadW:920,pvPowerW:1740},
+            {name:'Onduleur 2 · SunSpec',fresh:true,loadW:920,pvPowerW:1520}]},
+ updated:'Démo · données fictives'
+};
+window.updateSmartEnergy=function(data){lastReal=data;if(!demoOn)renderEnergy(data);};
+el('demoToggle').addEventListener('click',function(){
+ demoOn=!demoOn;
+ document.body.classList.toggle('preview-demo',demoOn);
+ el('demoWarning').hidden=!demoOn;
+ el('demoToggle').textContent=demoOn?'Retour aux mesures réelles':'Voir une démo';
+ renderEnergy(demoOn?sample:lastReal);
+});
+window.updateSmartEnergy(lastReal);
 })();
 </script></body></html>
