@@ -31,7 +31,7 @@ Ce firmware ESP32-S3 N16R8 a été refondu en prenant comme référence le flow 
 - QPIGS2 suspendu 1 h après NAK / réponse incompatible, puis retenté.
 - Le S3 conserve son fonctionnement et ses requêtes de mesures même sans accès NTP ; seuls QED/QEM/QEY/QLD/QLM/QLY demandent l'horloge UTC synchronisée. Les unités d'énergie sont des valeurs retournées par l'onduleur ; vérifier avec le flow HA avant toute facturation.
 - `pv1_power_native_w` n'est renseigné que si un champ parmi les positions candidates du flow est cohérent avec `V × I`. Sinon, ne pas affirmer qu'il est mesuré. `grid_power_native_w` n'est exposé que si le champ 25 est réellement présent et valide.
-- Les mesures demeurent conservatrices. Les avertissements `QPIWS` sont exposés comme bits bruts non interprétés afin de ne pas confondre un réseau volontairement coupé et une panne.
+- Les mesures demeurent conservatrices. Les avertissements `QPIWS` conservent les bits bruts et sont également décodés d'après la table `normalize state` du flow ; `Line fail` reste un **avertissement** (le réseau peut être volontairement coupé), pas automatiquement un défaut critique.
 
 ## API Wi-Fi
 
@@ -39,7 +39,7 @@ Port **18081**, GET uniquement avec en-tête `X-Setup-Code: <code choisi au flas
 
 - `/api/v1/info` → `source=voltronic-rs232-read-only`, version, transport, capacités ;
 - `/api/v1/telemetry` → `available`, `age_ms`, `values` si QPIGS récent, et compteurs ;
-- `/api/v1/details` → mode QMOD, disponibilité QPIGS2, paramètres QPIRI/QDOP validés, énergie brute, QPIWS ;
+- `/api/v1/details` → mode QMOD, disponibilité QPIGS2, paramètres QPIRI/QDOP validés, énergie brute, QPIWS (bits + alertes classées) ;
 - **`/api/v1/diagnostics`** → commandes envoyées, octets reçus, trames complètes, `crc_rejects`, `partial_frames`, `no_rx_timeouts`, `parse_rejects` et dernier échantillon.
 
 **Pour la panne « `available=false`, `polls_ok=0`, `timeouts=111` » :**
