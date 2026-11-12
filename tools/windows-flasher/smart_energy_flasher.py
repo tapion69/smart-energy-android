@@ -202,7 +202,7 @@ class Flasher(tk.Tk):
         self.vpn_image = tk.StringVar()
         self.vpn_mode = tk.StringVar(value="update")
         self.vpn_chip = tk.StringVar(value="esp32")  # Explicit chip; never guess from COM port.
-        self.volt_mode = tk.StringVar(value="factory")
+        self.volt_mode = tk.StringVar(value="update")
         self.volt_image = tk.StringVar()
         self.volt_fields: dict[str, tk.StringVar] = {}
         self.fields: dict[str, tk.StringVar] = {}
@@ -458,15 +458,18 @@ class Flasher(tk.Tk):
     def _build_voltronic(self, root: ttk.Frame) -> None:
         ttk.Label(root,
             text="ESP32-S3 N16R8 uniquement · lecteur Voltronic RS232 2400 bauds. "
-                 "Première version lecture seule. Pas de paramètre onduleur modifié.",
+                 "Firmware 0.2.0 : RX/CRC et requêtes éprouvées, lecture seule.",
             wraplength=690).grid(row=0,column=0,columnspan=3,sticky="w",padx=8,pady=8)
         modes=ttk.LabelFrame(root,text="Type de flash Voltronic S3",padding=8)
         modes.grid(row=1,column=0,columnspan=3,sticky="ew",padx=8,pady=8)
         ttk.Radiobutton(modes,text="Nouvel ESP32-S3 — FACTORY à 0x0",
                         variable=self.volt_mode,value="factory").pack(anchor="w")
-        ttk.Radiobutton(modes,text="Mise à jour ESP32-S3 compatible — APP-ONLY à 0x10000",
+        ttk.Radiobutton(modes,text="Mise à jour Voltronic S3 — APP-ONLY : conserver Wi-Fi et code",
                         variable=self.volt_mode,value="update").pack(anchor="w")
-        params=ttk.LabelFrame(root,text="Configuration USB du lecteur Voltronic",padding=8)
+        ttk.Label(root,text="APP-ONLY : conserve Wi-Fi, code de lecture et NVS, "
+                  "sans reconfiguration USB. FACTORY : S3 neuf uniquement.",
+                  wraplength=690).grid(row=8,column=0,columnspan=3,sticky="w",padx=8,pady=4)
+        params=ttk.LabelFrame(root,text="Configuration USB (première installation)",padding=8)
         params.grid(row=2,column=0,columnspan=3,sticky="ew",padx=8,pady=8)
         params.columnconfigure(1,weight=1)
         for i,(description,key,secret) in enumerate([
@@ -528,8 +531,8 @@ class Flasher(tk.Tk):
         try:
             from vpn_usb import check_precompiled_image
             port=self._assert_ready()
-            values=self._voltronic_values()
             mode=self.volt_mode.get()
+            values=self._voltronic_values() if mode=="factory" else None
             image=(Path(self.volt_image.get().strip())
                    if self.volt_image.get().strip()
                    else self._bundled_voltronic_image(mode))
@@ -537,7 +540,8 @@ class Flasher(tk.Tk):
             if not messagebox.askyesno("Flash Voltronic S3",
                 "Vérifie la puce ESP32-S3 N16R8 et le port COM.\n"
                 "FACTORY : CARTE VIERGE uniquement ; peut remplacer les partitions.\n"
-                "Jamais sur un ESP32 JK ou VPN déjà associé. Continuer ?"):
+                "APP-ONLY conserve Wi-Fi/code sans réassociation USB.\n"
+                 "Jamais sur un ESP32 JK ou VPN déjà associé. Continuer ?"):
                 return
             self._run_async(
                 lambda:self._do_voltronic(port,image,mode,values),
@@ -546,13 +550,19 @@ class Flasher(tk.Tk):
             messagebox.showerror("Voltronic S3",str(exc))
 
     def _do_voltronic(self,port:str,image:Path,mode:str,
-                      values:dict[str,str])->None:
+                      values:dict[str,str]|None)->None:
         from vpn_usb import flash_precompiled
         from voltronic_usb import provision_voltronic
         ensure_esptool_console_streams()
         self._progress_stage("Écriture du firmware Voltronic S3…")
         with monitor_esptool_progress(self._flash_percent):
             flash_precompiled(port,image,mode,self._log,chip="esp32s3")
+        if mode=="update":
+            self._progress_step(98,
+                "APP-ONLY installé : NVS conservée, Wi-Fi et code inchangés.")
+            return
+        if values is None:
+            raise ValueError("Configuration USB requise pour FACTORY.")
         self._progress_step(80,"Firmware S3 chargé, configuration USB…")
         provision_voltronic(port,values,self._log)
         self._progress_step(98,"Voltronic S3 : confirmation USB reçue.")
