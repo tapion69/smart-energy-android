@@ -565,7 +565,7 @@ class MainActivity : Activity() {
         val scroll = ScrollView(this).apply { setBackgroundColor(this@MainActivity.background) }
         val root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(d(16), d(24), d(16), d(30))
+            setPadding(d(8), d(12), d(8), d(24))
         }
         scroll.addView(root)
         setContentView(scroll)
@@ -587,7 +587,10 @@ class MainActivity : Activity() {
         val dashboardPage=LinearLayout(this).apply { orientation=LinearLayout.VERTICAL }
         val configurationPage=LinearLayout(this).apply { orientation=LinearLayout.VERTICAL }
         val settingsPage=LinearLayout(this).apply { orientation=LinearLayout.VERTICAL }
+        var mainNavigation: LinearLayout?=null
         fun showPage(page:Int) {
+            brand.visibility=if(page==0)View.GONE else View.VISIBLE
+            mainNavigation?.visibility=if(page==0)View.GONE else View.VISIBLE
             homePage.visibility=if(page==0)View.VISIBLE else View.GONE
             dashboardPage.visibility=if(page==1)View.VISIBLE else View.GONE
             configurationPage.visibility=if(page==2)View.VISIBLE else View.GONE
@@ -599,6 +602,7 @@ class MainActivity : Activity() {
             scroll.post { scroll.scrollTo(0,0) }
         }
         val navigation=LinearLayout(this).apply { orientation=LinearLayout.HORIZONTAL }
+        mainNavigation=navigation
         for((title,page) in listOf("Accueil" to 0,"Batteries" to 1,
             "Configuration" to 2,"Réglages" to 3)) {
             val item=action(title) { showPage(page) }
@@ -619,7 +623,18 @@ class MainActivity : Activity() {
         dashboardPage.visibility=View.GONE
         configurationPage.visibility=if(startInConfig) View.VISIBLE else View.GONE
         settingsPage.visibility=View.GONE
+        brand.visibility=if(startInConfig)View.VISIBLE else View.GONE
+        navigation.visibility=if(startInConfig)View.VISIBLE else View.GONE
         premiumDashboard=PremiumEnergyDashboard(this)
+        premiumDashboard.onNavigate={ destination ->
+            when(destination) {
+                "home" -> showPage(0)
+                "batteries" -> showPage(1)
+                "settings" -> showPage(3)
+                "inverters" -> showPage(2)
+                else -> showPage(0)
+            }
+        }
         homePage.addView(premiumDashboard,LinearLayout.LayoutParams(-1,d(940)).apply {
             topMargin=d(7)
         })
