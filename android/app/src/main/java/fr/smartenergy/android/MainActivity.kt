@@ -612,7 +612,9 @@ class MainActivity : Activity() {
         root.addView(dashboardPage)
         root.addView(configurationPage)
         root.addView(settingsPage)
-        val startInConfig=storedCode().isBlank()
+        // The energy cockpit also works when only an inverter is installed.
+        // A first-time JK user can open Configuration from the same navigation.
+        val startInConfig=false
         homePage.visibility=if(startInConfig) View.GONE else View.VISIBLE
         dashboardPage.visibility=View.GONE
         configurationPage.visibility=if(startInConfig) View.VISIBLE else View.GONE
