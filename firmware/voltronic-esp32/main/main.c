@@ -343,6 +343,39 @@ static esp_err_t telemetry_handler(httpd_req_t *r){
     }
     return send_json(r,root);
 }
+/* Warning/fault bit mapping follows Smart Voltronic normalize state QPIWS.
+ * "Line fail" is a warning, not automatically an inverter fault: off-grid
+ * installations may deliberately disconnect utility input. */
+static void add_qpiws_alerts(cJSON *root,const char *bits) {
+    cJSON *faults=cJSON_AddArrayToObject(root,"faults");
+    cJSON *warnings=cJSON_AddArrayToObject(root,"warnings");
+    bool critical=bits && strlen(bits)>1 && bits[1]=='1';
+    struct {uint8_t bit;const char *name;uint8_t severity;} labels[]={
+        {0,"PV loss",0},{1,"Inverter fault",1},
+        {2,"Bus over",1},{3,"Bus under",1},{4,"Bus soft fail",1},
+        {5,"Line fail",0},{6,"OPV short",1},
+        {7,"Inverter voltage low",1},{8,"Inverter voltage high",1},
+        {9,"Over temperature",2},{10,"Fan locked",2},
+        {11,"Battery voltage high",2},{12,"Battery low alarm",0},
+        {14,"Battery shutdown",0},{15,"Battery derating",0},
+        {16,"Over load",2},{17,"EEPROM fault",0},
+        {18,"Inverter over current",1},{19,"Inverter soft fail",1},
+        {20,"Self test fail",1},{21,"OP DC voltage over",1},
+        {23,"Current sensor fail",1},{33,"Low PV energy",0},
+        {34,"High AC input",0},{35,"Battery equalization",0}
+    };
+    size_t len=bits?strlen(bits):0;
+    for(size_t i=0;i<sizeof(labels)/sizeof(labels[0]);i++) {
+        size_t idx=labels[i].bit;
+        if(idx>=len||bits[idx]!='1')continue;
+        bool fault=(labels[i].severity==1 ||
+                    (labels[i].severity==2 && critical));
+        cJSON_AddItemToArray(fault?faults:warnings,
+                             cJSON_CreateString(labels[i].name));
+    }
+    cJSON_AddBoolToObject(root,"has_fault",cJSON_GetArraySize(faults)>0);
+    cJSON_AddBoolToObject(root,"has_warning",cJSON_GetArraySize(warnings)>0);
+}
 static esp_err_t details_handler(httpd_req_t *r){
     if(!authorized(r))return deny(r);
     vol_state_t snap;
@@ -354,8 +387,10 @@ static esp_err_t details_handler(httpd_req_t *r){
     cJSON_AddBoolToObject(root,"qpiri_available",snap.have_qpiri);
     cJSON_AddBoolToObject(root,"qdop_available",snap.have_qdop);
     cJSON_AddBoolToObject(root,"qpiws_available",snap.have_qpiws);
-    if(snap.have_qpiws)
+    if(snap.have_qpiws) {
         cJSON_AddStringToObject(root,"warning_bits",snap.warning_bits);
+        add_qpiws_alerts(root,snap.warning_bits);
+    }
     cJSON *params=cJSON_AddObjectToObject(root,"parameters");
     if(snap.have_qpiri) {
         cJSON *q=cJSON_AddObjectToObject(params,"qpiri");
