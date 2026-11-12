@@ -72,6 +72,22 @@ body{background:radial-gradient(ellipse at 45% -12%,#10415d 0,transparent 44%),#
 .preview-demo .connection-badge{color:#ffd486;border-color:#e6a34d}
 @media(max-width:550px){.demo-switch{top:37px;font-size:10px;padding:6px 9px}}
 
+
+#bmsDevices{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:7px;margin-top:9px}
+#inverters{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:7px;margin-top:9px}
+#bmsDevices .device-row,#inverters .device-row{border:1px solid #3b91ad;background:linear-gradient(120deg,#174259,#0a2843);border-radius:11px;padding:8px 7px;margin:0;min-width:0;box-shadow:inset 0 0 12px #1ceee714}
+#bmsDevices .device-row:only-child,#inverters .device-row:only-child,#bmsDevices .spaced,#inverters .spaced{grid-column:1/-1}
+#bmsDevices .devname,#inverters .devname{font-size:12px;color:#e5f9ff}
+#bmsDevices .devreading,#inverters .devreading{font-size:10px}
+#bmsDevices .devstate,#inverters .devstate{font-size:9px}
+.preview-demo .chart-cover{display:none}
+.preview-demo .chart-placeholder{background:#0b2338}
+@media(max-width:550px){
+ #bmsDevices .device-row,#inverters .device-row{gap:6px;padding:8px 5px}
+ #bmsDevices .devname,#inverters .devname{font-size:11px}
+ #bmsDevices .devreading,#inverters .devreading{font-size:9px}
+ .scene{height:300px}
+}
 </style></head><body><main class="shell">
 <header class="premium-header"><div class="premium-brand">
 <div class="premium-logo"><svg viewBox="0 0 58 54" width="48" height="48" aria-hidden="true"><circle cx="42" cy="12" r="10" fill="#ffe35e"/><path d="M4 26L25 6L50 26" fill="none" stroke="#35f7e4" stroke-width="4.5" stroke-linecap="round" stroke-linejoin="round"/><path d="M10 25V49H43V25" fill="#06243a" stroke="#3bffe2" stroke-width="3.5" stroke-linejoin="round"/><path d="M22 28L18 39H28L22 48L25 36H17" fill="#ffe15e"/></svg></div>
@@ -141,9 +157,14 @@ body{background:radial-gradient(ellipse at 45% -12%,#10415d 0,transparent 44%),#
 <div class="glass chart-panel">
 <div class="card-header">⌁ Production &amp; consommation <span class="count">Historique</span></div>
 <div class="chart-placeholder">
-<svg viewBox="0 0 530 132" preserveAspectRatio="none" aria-label="Historique indisponible">
+<svg viewBox="0 0 530 132" preserveAspectRatio="none" aria-label="Graphique énergie">
+<defs><linearGradient id="chartGold" x1="0" y1="0" x2="0" y2="1"><stop stop-color="#ffd35b" stop-opacity=".35"/><stop offset="1" stop-color="#ffce57" stop-opacity="0"/></linearGradient></defs>
 <path d="M0 24H530M0 56H530M0 88H530M0 120H530" stroke="#2e6080" stroke-width="1" stroke-dasharray="4 7"/>
-</svg>
+<g id="demoChart" style="display:none">
+<path d="M0 120L85 120C120 120 143 103 169 72S226 26 265 18S338 40 367 80S431 116 530 120L530 132H0Z" fill="url(#chartGold)"/>
+<path d="M0 120L85 120C120 120 143 103 169 72S226 26 265 18S338 40 367 80S431 116 530 120" stroke="#ffd25c" fill="none" stroke-width="3.5" stroke-linecap="round"/>
+<path d="M0 86Q39 102 75 91T150 96T220 87T295 98T373 83T448 98T530 90" stroke="#4dd7ff" fill="none" stroke-width="2.6" stroke-linecap="round"/>
+</g></svg>
 <div class="chart-cover">Les courbes apparaîtront lorsque l'historique des mesures sera disponible.</div></div>
 <div class="chart-hours"><span>00h</span><span>06h</span><span>12h</span><span>18h</span><span>24h</span></div></div>
 <div class="glass">
@@ -241,6 +262,7 @@ el('demoToggle').addEventListener('click',function(){
  demoOn=!demoOn;
  document.body.classList.toggle('preview-demo',demoOn);
  el('demoWarning').hidden=!demoOn;
+ el('demoChart').style.display=demoOn?'inline':'none';
  el('demoToggle').textContent=demoOn?'Retour aux mesures réelles':'Voir une démo';
  renderEnergy(demoOn?sample:lastReal);
 });
