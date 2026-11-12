@@ -13,8 +13,57 @@
 @keyframes flowmove{to{stroke-dashoffset:-50}}
 @media(max-width:540px){.shell{padding:7px 0 15px}.summary{grid-template-columns:repeat(2,1fr)}.stat{padding:9px}.scene{height:215px}.cards{grid-template-columns:1fr 1fr;gap:7px}.glass{padding:9px}.card-header{font-size:11px}.count{font-size:9px}.device-icon{width:22px;height:27px}.device-icon:after{width:12px;left:4px}.device-row{gap:5px}.devname{font-size:10px}.devreading{font-size:10px}.bottom{grid-template-columns:1fr 1.2fr;gap:7px}.mini{padding:9px}.ring{height:88px;width:88px}.ringcore strong{font-size:23px}.flrow{font-size:10px}.scene-heading{font-size:10px}}
 @media(prefers-reduced-motion:reduce){.flow-line{animation:none}}
+
+.premium-header{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:5px 3px 9px}
+.premium-brand{display:flex;align-items:center;gap:7px;min-width:0}
+.premium-logo{flex:none;width:47px;height:48px;filter:drop-shadow(0 0 8px #00edcc99)}
+.premium-title{font-size:clamp(19px,4.7vw,29px);font-weight:900;font-style:italic;letter-spacing:-.9px;white-space:nowrap;text-shadow:0 0 13px #56fee448}
+.premium-title em{color:#00e9d1}
+.premium-tagline{font-size:clamp(9px,2.3vw,13px);color:#bdd8e5;white-space:nowrap}
+.premium-tools{display:flex;align-items:center;gap:6px;flex:none}
+.connection-badge{border:1px solid #347b97;border-radius:22px;background:linear-gradient(135deg,#15495a,#082c3d);padding:7px 9px;color:#a6e5ec;font-size:10px;max-width:175px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.iconbutton{color:#a4ebfa;border:1px solid #398bb4;border-radius:12px;background:linear-gradient(#16465f,#08213b);width:34px;height:34px;font-size:21px}
+.premium-navigation{display:flex;gap:7px;overflow-x:auto;padding:5px 2px 12px;scrollbar-width:none}
+.premium-navigation::-webkit-scrollbar{display:none}
+.premium-navigation button{flex:1 0 auto;border:1px solid #3884a9;border-radius:10px;background:linear-gradient(180deg,#14415c,#082038);color:#eafaff;padding:10px 8px;font-size:12px;font-weight:750;white-space:nowrap}
+.premium-navigation button.active{color:#00262e;background:linear-gradient(155deg,#6affee,#00c4a9);border-color:#b7fff5;box-shadow:0 0 12px #26ead490,inset 0 1px 0 #ffffff99}
+body{background:radial-gradient(ellipse at 45% -12%,#10415d 0,transparent 44%),#061322}
+.shell{max-width:1200px;padding:6px 0 15px}
+.stat{border-width:1.4px;box-shadow:inset 0 0 20px #138ff42b,0 0 11px #0fd8ff24;background:linear-gradient(150deg,#124566,#082037 85%);min-height:103px}
+.stat.pv{box-shadow:inset 0 0 21px #ffda362b,0 0 11px #ffd5383f}.stat.bat{box-shadow:inset 0 0 21px #29f3ac30,0 0 11px #17df995a}
+.sttitle{font-weight:750;color:#d1eaf6}.sttitle .sym{font-size:22px;color:#61e6ff;text-shadow:0 0 8px #62edff}
+.stat.pv .sym{color:#ffdc66}.stat.bat .sym{color:#3affad}
+.big{font-weight:900;text-shadow:0 0 10px #89fbff20}
+.scene{border-color:#2dc9df;box-shadow:0 0 19px #36dfff23,inset 0 0 30px #0fe4ff1a;border-radius:23px}
+.scene:after{content:"";position:absolute;inset:0;pointer-events:none;border-radius:23px;box-shadow:inset 0 0 25px #16d9e939}
+.scene-state{border-color:#258bab;background:#072438ee}
+.glass,.mini{border-color:#3486ab;background:linear-gradient(143deg,#134361,#071d33 87%);box-shadow:inset 0 0 19px #1e9ecd2e,0 0 8px #0accff22}
+.card-header,.minititle{font-weight:900;color:#ddf9ff;border-color:#3994b9}
+.count{color:#40f4aa;text-shadow:0 0 8px #42efab35}
+@media(max-width:550px){
+ .shell{padding:4px 0 12px}.premium-header{padding:3px 2px 7px}
+ .premium-logo,.premium-logo svg{width:39px;height:42px}
+ .premium-brand{gap:4px}.premium-title{font-size:19px}.premium-tagline{font-size:9px}
+ .connection-badge{font-size:9px;max-width:100px;padding:6px 8px}.iconbutton{display:none}
+ .premium-navigation{gap:4px;padding-bottom:10px}.premium-navigation button{padding:9px 9px;font-size:11px}
+ .summary{gap:7px;margin-bottom:10px}.stat{min-height:97px;border-radius:14px;padding:10px}
+ .stat .big{font-size:25px;line-height:1.13}.sttitle{font-size:12px}.little{font-size:10px}
+ .scene{height:285px}.scene-heading{font-size:11px}.scene-state{font-size:10px}
+ .cards{grid-template-columns:1fr;gap:9px}.glass{padding:12px}.card-header{font-size:13px}
+ .device-row{gap:10px}.device-icon{width:30px;height:36px}.devname{font-size:12px}.devreading{font-size:11px}
+}
+
 </style></head><body><main class="shell">
-<div class="head"><div class="brand">SMART <b>ENERGY</b><span class="sub">Gestion Énergie Solaire & Batteries</span></div><div id="online" class="online">Recherche des équipements</div></div>
+<header class="premium-header"><div class="premium-brand">
+<div class="premium-logo"><svg viewBox="0 0 58 54" width="48" height="48" aria-hidden="true"><circle cx="42" cy="12" r="10" fill="#ffe35e"/><path d="M4 26L25 6L50 26" fill="none" stroke="#35f7e4" stroke-width="4.5" stroke-linecap="round" stroke-linejoin="round"/><path d="M10 25V49H43V25" fill="#06243a" stroke="#3bffe2" stroke-width="3.5" stroke-linejoin="round"/><path d="M22 28L18 39H28L22 48L25 36H17" fill="#ffe15e"/></svg></div>
+<div><div class="premium-title">SMART <em>ENERGY</em></div><div class="premium-tagline">Gestion Énergie Solaire &amp; Batteries</div></div>
+</div><div class="premium-tools"><span id="online" class="connection-badge">Non connecté</span><button class="iconbutton" type="button" data-nav="settings" aria-label="Réglages">⚙</button></div></header>
+<nav class="premium-navigation" aria-label="Navigation Smart Energy">
+<button type="button" class="active" data-nav="home">⌂ Accueil</button>
+<button type="button" data-scroll="inverters-card">▣ Onduleurs</button>
+<button type="button" data-nav="batteries">▣ Batteries</button>
+<button type="button" data-scroll="flows-card">⇄ Énergie</button>
+<button type="button" data-nav="settings">⚙ Réglages</button></nav>
 <div class="summary">
 <div class="stat pv"><div class="sttitle"><span class="sym">☀</span> Production PV</div><div id="pv" class="big">— W</div><div id="pvInfo" class="little">En attente onduleur</div></div>
 <div class="stat"><div class="sttitle"><span class="sym">⌂</span> Consommation</div><div id="load" class="big">— W</div><div class="little">Sortie AC</div></div>
@@ -47,7 +96,7 @@
 <!-- Photographic scene backing; no duplicate vector roof under the art. -->
 <ellipse cx="420" cy="321" rx="172" ry="17" fill="#021819" opacity=".72"/>
 <!-- Bundled dusk house artwork; all telemetry labels/flows remain dynamic. -->
-<image href="energy_house.webp" x="267" y="127" width="309" height="195" preserveAspectRatio="xMidYMid meet" />
+<image href="energy_house.webp" x="202" y="113" width="425" height="244" preserveAspectRatio="xMidYMid meet" />
 <!-- right inverter pair -->
 <g transform="translate(647 115)"><rect x="0" y="0" width="49" height="80" rx="9" fill="#ccd9e2" stroke="#f4fbff" stroke-width="3"/><rect x="55" y="0" width="49" height="80" rx="9" fill="#afc7d9" stroke="#f4fbff" stroke-width="3"/><path d="M7 68H42M62 68H97" stroke="#637e91" stroke-width="6"/><rect x="14" y="47" width="22" height="11" rx="2" fill="#0e2843"/><rect x="68" y="47" width="22" height="11" rx="2" fill="#0e2843"/><path d="M15 51H29M68 51H83" stroke="#4be2ee" stroke-width="2"/></g>
 <!-- battery icon -->
@@ -64,7 +113,7 @@
 <g transform="translate(30 205)"><rect width="163" height="45" rx="10" class="labelchip"/><text x="81" y="19" class="svgtitle" text-anchor="middle">Réseau</text><text x="81" y="38" class="svgvalue" text-anchor="middle" id="sceneGrid">— W</text></g>
 </svg></div>
 <div class="cards">
-<section class="glass"><div class="card-header">⚡ Onduleurs Voltronic / SunSpec <span id="invCount" class="count">—</span></div><div id="inverters" class="spaced">Ajoute un onduleur depuis Configuration pour afficher les mesures réelles.</div></section>
+<section id="inverters-card" class="glass"><div class="card-header">⚡ Onduleurs Voltronic / SunSpec <span id="invCount" class="count">—</span></div><div id="inverters" class="spaced">Ajoute un onduleur depuis Configuration pour afficher les mesures réelles.</div></section>
 <section class="glass"><div class="card-header">▣ Batteries JK BMS <span id="bmsCount" class="count">0/0</span></div><div id="bmsDevices" class="spaced">Lecture des batteries en attente.</div></section>
 </div>
 <div class="bottom"><section class="mini"><div class="minititle">◉ SOC global</div><div class="socwrap"><div id="socRing" class="ring" style="--soc:0%"><div class="ringcore"><strong id="socRingValue">— %</strong><small>JK BMS</small></div></div></div></section>
@@ -82,6 +131,15 @@ function safeNumber(x){return typeof x==='number'&&Number.isFinite(x)?x:null}
 function stateFlow(id,on,reverse){var e=el(id);if(e){e.classList.toggle('off',!on);e.classList.toggle('direction-reverse',!!reverse)}}
 function create(tag,cls,text){var e=document.createElement(tag);if(cls)e.className=cls;if(text!=null)e.textContent=text;return e}
 function deviceRow(target,icon,name,reading,status){var row=create('div','device-row');var ico=create('div',icon);row.appendChild(ico);var body=create('div','devbody');body.appendChild(create('div','devname',name));body.appendChild(create('div','devreading',reading));body.appendChild(create('div','devstate',status));row.appendChild(body);target.appendChild(row)}
+document.querySelectorAll('[data-nav]').forEach(function(btn){btn.addEventListener('click',function(){
+ var target=btn.getAttribute('data-nav');
+ if(target==='home'){window.scrollTo({top:0,behavior:'smooth'});return;}
+ if(window.SmartEnergyApp && typeof window.SmartEnergyApp.navigate==='function')window.SmartEnergyApp.navigate(target);
+});});
+document.querySelectorAll('[data-scroll]').forEach(function(btn){btn.addEventListener('click',function(){
+ var target=document.getElementById(btn.getAttribute('data-scroll'));
+ if(target)target.scrollIntoView({behavior:'smooth',block:'start'});
+});});
 window.updateSmartEnergy=function(data){
  if(!data || typeof data!=='object')return;
  var jk=data.jk||{};var inv=data.inverter||{};var soc=safeNumber(jk.soc);
