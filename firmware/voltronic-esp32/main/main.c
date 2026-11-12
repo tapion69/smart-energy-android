@@ -10,6 +10,8 @@
 #include <string.h>
 #include <stdlib.h>
 #include <ctype.h>
+#include <time.h>
+#include "esp_sntp.h"
 #include "esp_system.h"
 #include "esp_log.h"
 #include "esp_wifi.h"
@@ -28,7 +30,7 @@
 #include "cJSON.h"
 #include "voltronic_protocol.h"
 
-#define VT_VERSION "0.1.1-dev-s3-read-only"
+#define VT_VERSION "0.2.0-dev-flowport-read-only"
 #define VT_UART UART_NUM_1
 #define VT_TX GPIO_NUM_17
 #define VT_RX GPIO_NUM_16
@@ -36,7 +38,6 @@
 #define VT_HTTP_PORT 18081
 #define VT_NVS_NS "se_volt"
 #define VT_NVS_KEY "usb_config"
-#define VT_MAX_FRAME 512
 static const char *TAG="SE-VOLTRONIC";
 
 typedef struct {
@@ -47,13 +48,24 @@ typedef struct {
 typedef struct {
     vt_qpigs_t qpigs;
     vt_qpigs2_t qpigs2;
-    bool have_qpigs;
-    bool have_qpigs2;
-    char qmod;
-    bool have_qpiri;
+    bool have_qpigs, have_qpigs2, have_qpiri, have_qdop, have_qpiws;
+    bool have_pv_energy_total, have_load_energy_total;
+    double pv_energy_total_raw_wh, load_energy_total_raw_wh;
+    char qmod, warning_bits[128];
     uint32_t last_qpigs_ms,last_qpigs2_ms,last_qmod_ms,last_qpiri_ms;
+    uint32_t last_qdop_ms,last_qpiws_ms,last_valid_ms;
     uint32_t q2_disabled_until_ms, polls_ok, crc_rejects, timeouts, naks;
+    uint32_t rx_bytes, rx_frames, no_rx_timeouts, partial_frames;
+    uint32_t malformed_frames, overflow_frames, parse_rejects;
+    uint32_t tx_commands, last_request_rx_bytes;
+    char last_command[VT_MAX_COMMAND];
 } vol_state_t;
+typedef struct {
+    uint8_t frame[VT_MAX_FRAME];
+    size_t len;
+    uint32_t rx_bytes, bad_crc, malformed, overflow, partial;
+    bool timeout, nak;
+} vt_exchange_t;
 static vol_cfg_t cfg={0};
 static vol_state_t state={0};
 static SemaphoreHandle_t state_lock;
@@ -290,6 +302,9 @@ static esp_err_t telemetry_handler(httpd_req_t *r){
     cJSON_AddNumberToObject(root,"polls_ok",snap.polls_ok);
     cJSON_AddNumberToObject(root,"crc_rejects",snap.crc_rejects);
     cJSON_AddNumberToObject(root,"timeouts",snap.timeouts);
+    cJSON_AddNumberToObject(root,"rx_bytes_total",snap.rx_bytes);
+    cJSON_AddNumberToObject(root,"no_rx_timeouts",snap.no_rx_timeouts);
+    cJSON_AddNumberToObject(root,"partial_frames",snap.partial_frames);
     if(live){
         cJSON *v=cJSON_AddObjectToObject(root,"values");
         vt_qpigs_t m=snap.qpigs;
@@ -308,6 +323,11 @@ static esp_err_t telemetry_handler(httpd_req_t *r){
         cJSON_AddNumberToObject(v,"output_current_a",m.output_current_a);
         cJSON_AddNumberToObject(v,"pv1_current_a",m.pv1_current_a);
         cJSON_AddNumberToObject(v,"pv1_voltage_v",m.pv1_voltage_v);
+        cJSON_AddNumberToObject(v,"bus_voltage_v",m.bus_voltage_v);
+        cJSON_AddNumberToObject(v,"battery_voltage_from_scc_v",
+                                m.battery_voltage_from_scc_v);
+        if(m.pv1_power_native_available)
+            cJSON_AddNumberToObject(v,"pv1_power_native_w",m.pv1_power_native_w);
         cJSON_AddNumberToObject(v,"heatsink_temp_c",m.heat_sink_c);
         if(m.grid_power_native_available)
             cJSON_AddNumberToObject(v,"grid_power_native_w",m.grid_power_native_w);
@@ -328,22 +348,61 @@ static esp_err_t details_handler(httpd_req_t *r){
         snap.qmod ? (char[]){snap.qmod,0} : "");
     cJSON_AddBoolToObject(root,"qpigs2_available",snap.have_qpigs2);
     cJSON_AddBoolToObject(root,"qpiri_available",snap.have_qpiri);
+    cJSON_AddBoolToObject(root,"qdop_available",snap.have_qdop);
+    cJSON_AddBoolToObject(root,"qpiws_available",snap.have_qpiws);
+    if(snap.have_qpiws)
+        cJSON_AddStringToObject(root,"warning_bits",snap.warning_bits);
+    cJSON_AddBoolToObject(root,"pv_energy_total_available",snap.have_pv_energy_total);
+    if(snap.have_pv_energy_total)
+        cJSON_AddNumberToObject(root,"pv_energy_total_raw_wh",snap.pv_energy_total_raw_wh);
+    cJSON_AddBoolToObject(root,"load_energy_total_available",snap.have_load_energy_total);
+    if(snap.have_load_energy_total)
+        cJSON_AddNumberToObject(root,"load_energy_total_raw_wh",snap.load_energy_total_raw_wh);
+    cJSON_AddStringToObject(root,"dated_energy_basis","UTC; only when SNTP is synchronized");
     cJSON_AddNumberToObject(root,"naks",snap.naks);
-    // QPIRI frame is detected only; exact positions depend on model/firmware.
-    // Never present ambiguous fields as validated bulk/float settings.
+    /* Never guess QPIRI/QDOP field positions, or publish serial QID. */
+    return send_json(r,root);
+}
+static esp_err_t diagnostics_handler(httpd_req_t *r) {
+    if(!authorized(r))return deny(r);
+    vol_state_t snap;
+    xSemaphoreTake(state_lock,portMAX_DELAY);snap=state;xSemaphoreGive(state_lock);
+    cJSON *root=base_json("voltronic-diagnostics-read-only");
+    cJSON_AddStringToObject(root,"last_command",snap.last_command);
+    cJSON_AddNumberToObject(root,"tx_commands",snap.tx_commands);
+    cJSON_AddNumberToObject(root,"rx_bytes_total",snap.rx_bytes);
+    cJSON_AddNumberToObject(root,"rx_frames",snap.rx_frames);
+    cJSON_AddNumberToObject(root,"last_request_rx_bytes",snap.last_request_rx_bytes);
+    cJSON_AddNumberToObject(root,"polls_ok",snap.polls_ok);
+    cJSON_AddNumberToObject(root,"timeouts",snap.timeouts);
+    cJSON_AddNumberToObject(root,"no_rx_timeouts",snap.no_rx_timeouts);
+    cJSON_AddNumberToObject(root,"partial_frames",snap.partial_frames);
+    cJSON_AddNumberToObject(root,"crc_rejects",snap.crc_rejects);
+    cJSON_AddNumberToObject(root,"malformed_frames",snap.malformed_frames);
+    cJSON_AddNumberToObject(root,"overflow_frames",snap.overflow_frames);
+    cJSON_AddNumberToObject(root,"parse_rejects",snap.parse_rejects);
+    cJSON_AddNumberToObject(root,"naks",snap.naks);
+    cJSON_AddBoolToObject(root,"qpigs_available",snap.have_qpigs);
+    cJSON_AddNumberToObject(root,"last_good_age_ms",
+        snap.last_valid_ms ?
+        (uint32_t)(esp_log_timestamp()-snap.last_valid_ms):-1);
+    cJSON_AddBoolToObject(root,"read_only",true);
     return send_json(r,root);
 }
 static void start_api(void){
     httpd_config_t conf=HTTPD_DEFAULT_CONFIG();conf.server_port=VT_HTTP_PORT;
-    conf.max_uri_handlers=4;
+    conf.max_uri_handlers=5;
     httpd_handle_t server=NULL;
     ESP_ERROR_CHECK(httpd_start(&server,&conf));
     httpd_uri_t info={.uri="/api/v1/info",.method=HTTP_GET,.handler=info_handler};
     httpd_uri_t telemetry={.uri="/api/v1/telemetry",.method=HTTP_GET,.handler=telemetry_handler};
     httpd_uri_t details={.uri="/api/v1/details",.method=HTTP_GET,.handler=details_handler};
+    httpd_uri_t diag={.uri="/api/v1/diagnostics",.method=HTTP_GET,
+                       .handler=diagnostics_handler};
     ESP_ERROR_CHECK(httpd_register_uri_handler(server,&info));
     ESP_ERROR_CHECK(httpd_register_uri_handler(server,&telemetry));
     ESP_ERROR_CHECK(httpd_register_uri_handler(server,&details));
+    ESP_ERROR_CHECK(httpd_register_uri_handler(server,&diag));
 }
 static void serial_start(void){
     const uart_config_t u={
@@ -354,75 +413,235 @@ static void serial_start(void){
     ESP_ERROR_CHECK(uart_set_pin(VT_UART,VT_TX,VT_RX,UART_PIN_NO_CHANGE,UART_PIN_NO_CHANGE));
     ESP_ERROR_CHECK(uart_driver_install(VT_UART,2048,0,0,NULL,0));
 }
-static size_t exchange(const char *command,uint8_t *frame,size_t cap,bool *timeout){
-    uint8_t out[16]={0};
-    size_t n=vt_make_command(command,out);
-    if(n==0)return 0; // No serial writes except the five whitelisted queries.
+/* The known-good Node-RED flow: one request in flight, accumulator until CR.
+ * Transport instrumentation distinguishes no signal, partial bytes and bad
+ * CRC. No raw serial payload, SSID, code or device ID enters HTTP/logs.
+ */
+static vt_exchange_t exchange(const char *command) {
+    vt_exchange_t out={0};
+    uint8_t tx[VT_MAX_COMMAND]={0};
+    size_t tx_len=vt_make_command(command,tx);
+    if(!tx_len)return out;
     uart_flush_input(VT_UART);
-    uart_write_bytes(VT_UART,(const char*)out,n);
-    uart_wait_tx_done(VT_UART,pdMS_TO_TICKS(500));
-    size_t len=0;uint32_t started=esp_log_timestamp();
-    while((uint32_t)(esp_log_timestamp()-started)<2500 && len<cap){
-        uint8_t b=0;int received=uart_read_bytes(VT_UART,&b,1,pdMS_TO_TICKS(70));
+    uart_write_bytes(VT_UART,(const char*)tx,tx_len);
+    uart_wait_tx_done(VT_UART,pdMS_TO_TICKS(600));
+    vt_rx_stream_t stream={0};
+    uint32_t started=esp_log_timestamp();
+    while((uint32_t)(esp_log_timestamp()-started)<3000) {
+        uint8_t bytes[64];
+        int received=uart_read_bytes(VT_UART,bytes,sizeof(bytes),pdMS_TO_TICKS(65));
         if(received<=0)continue;
-        frame[len++]=b;
-        if(b==13){
-            if(vt_valid_response(frame,len))return len;
-            return 0;
+        for(int i=0;i<received;i++) {
+            if(bytes[i]==0x15 && stream.len==0) {
+                out.nak=true;out.rx_bytes++;
+                return out;
+            }
+            vt_reply_t status=vt_rx_feed(&stream,bytes[i]);
+            if(status==VT_REPLY_OVERFLOW) {
+                out.overflow++;
+                continue;
+            }
+            if(status!=VT_REPLY_VALID)continue;
+            out.rx_bytes=stream.rx_bytes;
+            vt_reply_t classified=vt_classify_response(stream.bytes,stream.len);
+            if(classified==VT_REPLY_VALID || classified==VT_REPLY_NAK) {
+                out.len=stream.len;
+                memcpy(out.frame,stream.bytes,out.len);
+                out.nak=(classified==VT_REPLY_NAK);
+                return out;
+            }
+            if(classified==VT_REPLY_BAD_CRC)out.bad_crc++;
+            else out.malformed++;
+            vt_rx_reset(&stream);
         }
     }
-    *timeout=true;
-    return 0;
+    out.rx_bytes=stream.rx_bytes;
+    if(stream.len>0)out.partial++;
+    out.timeout=true;
+    return out;
 }
-static void polling_task(void *unused){
+typedef struct {
+    const char *command;
+    uint32_t interval_ms;
+    uint32_t next_ms;
+    uint32_t deferred_until_ms;
+    bool dated;
+} vt_job_t;
+#define VT_JOBS 18
+static vt_job_t jobs[VT_JOBS]={
+    {"QMOD",12000,0,0,false},
+    {"QPIRI",300000,0,0,false},
+    {"QDOP",300000,0,0,false},
+    {"QPIWS",300000,0,0,false},
+    {"QET",3600000,0,0,false},
+    {"QLT",3600000,0,0,false},
+    {"QMN",3600000,0,0,false},
+    {"QVFW",3600000,0,0,false},
+    {"QVFW3",3600000,0,0,false},
+    {"QID",3600000,0,0,false},
+    {"QED",600000,0,0,true},
+    {"QLD",600000,0,0,true},
+    {"QEM",21600000,0,0,true},
+    {"QLM",21600000,0,0,true},
+    {"QEY",86400000,0,0,true},
+    {"QLY",86400000,0,0,true},
+    {"QPIGS",2500,0,0,false},
+    {"QPIGS2",4000,0,0,false}
+};
+static bool job_command(const vt_job_t *job,char *dst,size_t dst_len) {
+    if(!job->dated) {
+        snprintf(dst,dst_len,"%s",job->command);
+        return true;
+    }
+    time_t now=time(NULL);
+    if(now < (time_t)1700000000)return false; /* Wait for SNTP. */
+    struct tm utc={0};
+    if(!gmtime_r(&now,&utc))return false;
+    char date[12]={0};
+    const char *fmt=NULL;
+    size_t len=strlen(job->command);
+    if(len<3)return false;
+    char scope=job->command[2];
+    if(scope=='D')fmt="%Y%m%d";
+    else if(scope=='M')fmt="%Y%m";
+    else if(scope=='Y')fmt="%Y";
+    else return false;
+    if(strftime(date,sizeof(date),fmt,&utc)==0)return false;
+    snprintf(dst,dst_len,"%s%s",job->command,date);
+    return true;
+}
+static vt_job_t *next_due_job(uint32_t now,bool secondary) {
+    /* Avoid starvation: alternate QPIGS / QPIGS2 with one queued background
+       query. Intervals are independent; never send concurrent commands. */
+    static size_t round=0;
+    size_t low=secondary?0:16;
+    size_t high=secondary?16:VT_JOBS;
+    for(size_t k=0;k<high-low;k++) {
+        size_t idx=low+(round+k)%(high-low);
+        vt_job_t *j=&jobs[idx];
+        if((int32_t)(now-j->next_ms)>=0 &&
+           (int32_t)(now-j->deferred_until_ms)>=0) {
+            round=(idx-low+1)%(high-low);
+            return j;
+        }
+    }
+    return NULL;
+}
+static void interpret_reply(const char *cmd,const vt_exchange_t *rx,uint32_t now) {
+    bool known=rx->len>0 && !rx->nak;
+    if(rx->nak) {
+        state.naks++;
+        if(strcmp(cmd,"QPIGS2")==0)
+            state.q2_disabled_until_ms=now+3600000U;
+        return;
+    }
+    if(!known)return;
+    if(strcmp(cmd,"QPIGS")==0) {
+        vt_qpigs_t m;
+        if(vt_parse_qpigs(rx->frame,rx->len,&m)) {
+            state.qpigs=m;state.have_qpigs=true;state.last_qpigs_ms=now;
+            state.polls_ok++;
+        } else state.parse_rejects++;
+    } else if(strcmp(cmd,"QPIGS2")==0) {
+        vt_qpigs2_t m;
+        if(vt_parse_qpigs2(rx->frame,rx->len,&m)) {
+            state.qpigs2=m;state.have_qpigs2=true;
+            state.last_qpigs2_ms=now;state.polls_ok++;
+        } else {
+            state.parse_rejects++;
+            state.q2_disabled_until_ms=now+3600000U;
+        }
+    } else if(strcmp(cmd,"QMOD")==0) {
+        char c=vt_parse_qmod(rx->frame,rx->len);
+        if(c) {
+            state.qmod=c;state.last_qmod_ms=now;state.polls_ok++;
+        } else state.parse_rejects++;
+    } else if(strcmp(cmd,"QPIRI")==0 || strcmp(cmd,"QDOP")==0) {
+        /* Parameter positions are model dependent. Do NOT publish numbers
+           with guessed labels. Mark only that a valid frame was received. */
+        double numbers[48]={0};
+        if(vt_fields(rx->frame,rx->len,numbers,48)>=10) {
+            if(strcmp(cmd,"QPIRI")==0) {
+                state.have_qpiri=true;state.last_qpiri_ms=now;
+            } else {
+                state.have_qdop=true;state.last_qdop_ms=now;
+            }
+            state.polls_ok++;
+        } else state.parse_rejects++;
+    } else if(strcmp(cmd,"QPIWS")==0) {
+        char bits[128]={0};
+        if(vt_payload_copy(rx->frame,rx->len,bits,sizeof(bits))) {
+            strncpy(state.warning_bits,bits,sizeof(state.warning_bits)-1);
+            state.have_qpiws=true;state.last_qpiws_ms=now;
+            state.polls_ok++;
+        } else state.parse_rejects++;
+    } else if(strcmp(cmd,"QET")==0 || strcmp(cmd,"QLT")==0) {
+        double value;
+        if(vt_parse_energy(rx->frame,rx->len,&value)) {
+            if(strcmp(cmd,"QET")==0) {
+                state.pv_energy_total_raw_wh=value;
+                state.have_pv_energy_total=true;
+            } else {
+                state.load_energy_total_raw_wh=value;
+                state.have_load_energy_total=true;
+            }
+            state.polls_ok++;
+        } else state.parse_rejects++;
+    } else {
+        /* QMN / QID / VFW and dated energy frames: CRC-verified ACK only,
+           never expose identifiers or unvalidated units. */
+        state.polls_ok++;
+    }
+}
+static void polling_task(void *unused) {
     (void)unused;
     serial_start();
-    uint32_t last_qpigs=0,last_qpigs2=0,last_qmod=0,last_qpiri=0;
-    while(true){
-        uint32_t now=esp_log_timestamp();uint8_t bytes[VT_MAX_FRAME];
-        const char *cmd=NULL;
-        if(now-last_qpigs>=2500)cmd="QPIGS";
-        else if(now-last_qpigs2>=4000 && now>=state.q2_disabled_until_ms)cmd="QPIGS2";
-        else if(now-last_qmod>=12000)cmd="QMOD";
-        else if(now-last_qpiri>=300000)cmd="QPIRI";
-        if(!cmd){vTaskDelay(pdMS_TO_TICKS(100));continue;}
-        if(strcmp(cmd,"QPIGS")==0)last_qpigs=now;
-        if(strcmp(cmd,"QPIGS2")==0)last_qpigs2=now;
-        if(strcmp(cmd,"QMOD")==0)last_qmod=now;
-        if(strcmp(cmd,"QPIRI")==0)last_qpiri=now;
-        bool timeout=false;
-        size_t length=exchange(cmd,bytes,sizeof(bytes),&timeout);
-        xSemaphoreTake(state_lock,portMAX_DELAY);
-        if(!length){if(timeout)state.timeouts++;else state.crc_rejects++;}
-        else if(vt_nak(bytes,length)){
-            state.naks++;
-            if(strcmp(cmd,"QPIGS2")==0)
-                state.q2_disabled_until_ms=(uint32_t)(esp_log_timestamp()+3600000U);
-        }else if(strcmp(cmd,"QPIGS")==0){
-            vt_qpigs_t measured;
-            if(vt_parse_qpigs(bytes,length,&measured)){
-                state.qpigs=measured;state.have_qpigs=true;
-                state.last_qpigs_ms=esp_log_timestamp();state.polls_ok++;
-            }
-        }else if(strcmp(cmd,"QPIGS2")==0){
-            vt_qpigs2_t measured;
-            if(vt_parse_qpigs2(bytes,length,&measured)){
-                state.qpigs2=measured;state.have_qpigs2=true;
-                state.last_qpigs2_ms=esp_log_timestamp();state.polls_ok++;
-            }else state.q2_disabled_until_ms=(uint32_t)(esp_log_timestamp()+3600000U);
-        }else if(strcmp(cmd,"QMOD")==0){
-            char mode=vt_parse_qmod(bytes,length);
-            if(mode){state.qmod=mode;state.last_qmod_ms=esp_log_timestamp();}
-        }else if(strcmp(cmd,"QPIRI")==0){
-            double fields[40];
-            size_t count=vt_fields(bytes,length,fields,40);
-            if(count>=20) {
-                state.have_qpiri=true; // Read confirmed, no unverified mapping.
-                state.last_qpiri_ms=esp_log_timestamp();
-            }
+    uint32_t start=esp_log_timestamp();
+    for(size_t i=0;i<VT_JOBS;i++) {
+        jobs[i].next_ms=start+(uint32_t)(i%16)*4200U;
+    }
+    jobs[16].next_ms=start;       /* QPIGS first. */
+    jobs[17].next_ms=start+1300;  /* MPPT2 next. */
+    uint32_t iterations=0;
+    while(true) {
+        uint32_t now=esp_log_timestamp();
+        bool secondary=(iterations%3==2);
+        vt_job_t *job=next_due_job(now,secondary);
+        if(!job)job=next_due_job(now,!secondary);
+        if(!job) {vTaskDelay(pdMS_TO_TICKS(120));continue;}
+        if(strcmp(job->command,"QPIGS2")==0 &&
+           (int32_t)(now-state.q2_disabled_until_ms)<0) {
+            job->next_ms=state.q2_disabled_until_ms;
+            continue;
         }
+        char cmd[VT_MAX_COMMAND]={0};
+        if(!job_command(job,cmd,sizeof(cmd))) {
+            job->next_ms=now+60000U;
+            continue;
+        }
+        job->next_ms=now+job->interval_ms;
+        vt_exchange_t rx=exchange(cmd);
+        uint32_t end=esp_log_timestamp();
+        xSemaphoreTake(state_lock,portMAX_DELAY);
+        state.tx_commands++;
+        /* Publish only whitelisted command name. No raw serial data or ID. */
+        snprintf(state.last_command,sizeof(state.last_command),"%s",cmd);
+        state.rx_bytes+=rx.rx_bytes;
+        state.rx_frames+=(rx.len>0?1U:0U);
+        state.last_request_rx_bytes=rx.rx_bytes;
+        state.crc_rejects+=rx.bad_crc;
+        state.malformed_frames+=rx.malformed;
+        state.partial_frames+=rx.partial;
+        state.overflow_frames+=rx.overflow;
+        if(rx.timeout) {
+            state.timeouts++;
+            if(rx.rx_bytes==0)state.no_rx_timeouts++;
+        }
+        if(rx.len>0)state.last_valid_ms=end;
+        interpret_reply(cmd,&rx,end);
         xSemaphoreGive(state_lock);
-        vTaskDelay(pdMS_TO_TICKS(60));
+        iterations++;
+        vTaskDelay(pdMS_TO_TICKS(120));
     }
 }
 void app_main(void){
@@ -434,6 +653,11 @@ void app_main(void){
         usb_provision();return;
     }
     wifi_start();
+    /* Network time only for UTC-dated QED/QEM/QEY/QLD/QLM/QLY.
+       The serial reader does not depend on Internet or an NTP response. */
+    esp_sntp_setoperatingmode(SNTP_OPMODE_POLL);
+    esp_sntp_setservername(0,"pool.ntp.org");
+    esp_sntp_init();
     xTaskCreate(polling_task,"voltronic_read",7168,NULL,6,NULL);
     start_api();
     ESP_LOGI(TAG,"Read-only Voltronic bridge starting. HTTP port %d",VT_HTTP_PORT);
