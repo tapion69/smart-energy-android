@@ -53,6 +53,17 @@ body{background:radial-gradient(ellipse at 45% -12%,#10415d 0,transparent 44%),#
  .device-row{gap:10px}.device-icon{width:30px;height:36px}.devname{font-size:12px}.devreading{font-size:11px}
 }
 
+
+.more-grid{display:grid;grid-template-columns:1.3fr 1fr;gap:10px;margin-top:11px}
+.chart-placeholder{position:relative;height:120px;margin-top:9px;background:linear-gradient(150deg,#102c41,#0d1d32);border-radius:10px;overflow:hidden}
+.chart-placeholder svg{width:100%;height:100%}
+.chart-cover{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;text-align:center;padding:14px;background:#0617279e;color:#a3c7d8;font-size:12px;line-height:1.5}
+.chart-hours{display:flex;justify-content:space-between;color:#7395b3;font-size:10px;margin-top:5px}
+.health-line{display:flex;justify-content:space-between;gap:9px;align-items:center;padding:11px 0;border-bottom:1px solid #285c76;font-size:12px}
+.health-line:last-child{border:0}.health-line b{color:#a6e7eb;text-align:right;font-weight:750;font-size:11px}
+.disclaimer{font-size:10px;color:#83aab9;padding:10px 4px 2px}
+@media(max-width:550px){.more-grid{grid-template-columns:1fr;gap:9px}.health-line{font-size:11px}}
+
 </style></head><body><main class="shell">
 <header class="premium-header"><div class="premium-brand">
 <div class="premium-logo"><svg viewBox="0 0 58 54" width="48" height="48" aria-hidden="true"><circle cx="42" cy="12" r="10" fill="#ffe35e"/><path d="M4 26L25 6L50 26" fill="none" stroke="#35f7e4" stroke-width="4.5" stroke-linecap="round" stroke-linejoin="round"/><path d="M10 25V49H43V25" fill="#06243a" stroke="#3bffe2" stroke-width="3.5" stroke-linejoin="round"/><path d="M22 28L18 39H28L22 48L25 36H17" fill="#ffe15e"/></svg></div>
@@ -118,7 +129,23 @@ body{background:radial-gradient(ellipse at 45% -12%,#10415d 0,transparent 44%),#
 </div>
 <div class="bottom"><section class="mini"><div class="minititle">◉ SOC global</div><div class="socwrap"><div id="socRing" class="ring" style="--soc:0%"><div class="ringcore"><strong id="socRingValue">— %</strong><small>JK BMS</small></div></div></div></section>
 <section class="mini"><div class="minititle">⇄ Flux d'énergie</div><div class="flrow"><span>☀ PV → Installation</span><b id="flSolar">— W</b></div><div class="flrow"><span>⌂ Consommation AC</span><b id="flHome">— W</b></div><div class="flrow"><span>▣ Batterie</span><b id="flBattery">— W</b></div><div class="flrow"><span>♧ Réseau</span><b id="flGrid">— W</b></div></section></div>
-<div class="spaced">Les flèches ne s'animent que si le sens de circulation est connu. Un tiret signifie « mesure indisponible », pas 0 W.</div>
+<section class="more-grid">
+<div class="glass chart-panel">
+<div class="card-header">⌁ Production &amp; consommation <span class="count">Historique</span></div>
+<div class="chart-placeholder">
+<svg viewBox="0 0 530 132" preserveAspectRatio="none" aria-label="Historique indisponible">
+<path d="M0 24H530M0 56H530M0 88H530M0 120H530" stroke="#2e6080" stroke-width="1" stroke-dasharray="4 7"/>
+</svg>
+<div class="chart-cover">Les courbes apparaîtront lorsque l'historique des mesures sera disponible.</div></div>
+<div class="chart-hours"><span>00h</span><span>06h</span><span>12h</span><span>18h</span><span>24h</span></div></div>
+<div class="glass">
+<div class="card-header">✓ État du système <span id="healthStatus" class="count">En attente</span></div>
+<div class="health-line"><span>Onduleurs</span><b id="healthInv">Non configuré</b></div>
+<div class="health-line"><span>Batteries JK</span><b id="healthBms">Non configuré</b></div>
+<div class="health-line"><span>Connexion</span><b id="healthConn">En attente</b></div>
+<div class="health-line"><span>Alarmes</span><b>À vérifier dans Batteries</b></div>
+</div></section>
+<div class="disclaimer">Les flux sont animés seulement lorsque le sens de l'énergie est réellement connu. « — » signifie mesure indisponible, pas zéro.</div>
 <div class="foot"><span id="health">En attente des données fraîches</span><span id="updated">Aucune mesure</span></div>
 </main>
 <script>
@@ -170,6 +197,10 @@ window.updateSmartEnergy=function(data){
  if(inv.configured){deviceRow(invList,'device-icon',inv.name||'Onduleur Voltronic',ready?fmt(load,'W')+' sortie AC · '+fmt(p,'W')+' PV':'Mesures indisponibles',ready?'● Lecture fraîche':'○ En attente / hors ligne')}
  else invList.appendChild(create('div','spaced','Aucun onduleur configuré. Section Onduleurs dans Configuration.'));
  set('invCount',inv.configured?(ready?'1/1':'0/1'):'0/0');
+ set('healthInv',inv.configured?(ready?'Mesures reçues':'En attente'):'Non configuré');
+ set('healthBms',(jk.online||0)+' / '+(jk.total||0)+' BMS');
+ set('healthConn',data.route||'Non connecté');
+ set('healthStatus',ready||jk.online>0?'Mesures partielles':'En attente');
  set('health',jk.complete===true?'JK : mesures fraîches':(jk.total>0?'JK : données partielles':'JK : non configuré'));
  set('updated',data.updated||'En attente');
 };
