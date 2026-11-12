@@ -1,0 +1,136 @@
+<!doctype html>
+<html lang="fr"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1,user-scalable=no">
+<title>Smart Energy · Cockpit</title>
+<style>
+:root{color-scheme:dark;--bg:#05101f;--panel:#0b253e;--cyan:#43e4ff;--mint:#25e8ad;--gold:#ffd15d;--ink:#e7f7ff;--muted:#93afc4}
+*{box-sizing:border-box}body{margin:0;font-family:Roboto,'Segoe UI',Arial,sans-serif;color:var(--ink);background:radial-gradient(ellipse at 50% 0,#103b52 0,transparent 56%),#061425} .shell{max-width:1050px;margin:0 auto;padding:10px 0 22px}
+.head{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:2px 3px 10px}.brand{font-size:clamp(17px,4.3vw,26px);font-weight:900;font-style:italic;letter-spacing:-.7px;text-shadow:0 0 20px #21e8e67d}.brand b{color:#19e7d9}.sub{font-size:10px;color:#a3d0de;font-style:normal;letter-spacing:.3px;font-weight:400;display:block}.online{font-size:10px;white-space:nowrap;color:#58fbb9;border:1px solid #2ba87e;background:#09513653;border-radius:26px;padding:7px 9px}.online:before{content:"● ";color:#33f3a6}
+.summary{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px;margin-bottom:9px}.stat{min-width:0;background:linear-gradient(150deg,#0d314b,#08192b);padding:11px 9px;border-radius:15px;border:1px solid #14769a;box-shadow:inset 0 0 16px #1df9ff08,0 3px 14px #0008;position:relative;overflow:hidden}.stat:after{content:"";position:absolute;inset:auto 12% 0;height:1px;background:#bff;filter:blur(2px)}.stat.pv{border-color:#bca327;box-shadow:inset 0 0 16px #ffe03e15,0 0 9px #ffe03e20}.stat.bat{border-color:#19d88e;box-shadow:inset 0 0 16px #29df9930}.sttitle{font-size:10px;color:#b3cddb;display:flex;gap:5px;align-items:center;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.sym{font-size:17px;line-height:1}.big{font-size:clamp(17px,4.3vw,28px);font-weight:800;letter-spacing:-1px;white-space:nowrap;margin-top:5px}.stat.pv .big{color:#ffe078}.stat.bat .big{color:#5cf0ad}.little{font-size:10px;color:#97bdd2;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.scene{height:clamp(315px,53vw,460px);border:1px solid #287f97;border-radius:20px;position:relative;overflow:hidden;background:linear-gradient(180deg,#091933 0%,#25405d 32%,#4b4a58 49%,#163e3b 76%,#092c2a);box-shadow:inset 0 0 32px #12d7ea1a,0 5px 26px #0008}.scene svg{width:100%;height:100%;display:block}.scene-heading{position:absolute;top:9px;left:12px;font-size:11px;font-weight:800;color:#e8faff;text-shadow:0 2px 8px #001}.scene-state{position:absolute;top:10px;right:12px;background:#062531cc;border:1px solid #3e899e;border-radius:20px;padding:4px 8px;color:#7ffce6;font-size:10px}
+.flow-line{fill:none;stroke-width:5.3;stroke-linecap:round;stroke-linejoin:round;stroke-dasharray:13 12;animation:flowmove 1.25s linear infinite}.flow-outline{fill:none;stroke:#04111b;stroke-width:15;stroke-linecap:round;stroke-linejoin:round}.solar-line{stroke:#ffb837;filter:drop-shadow(0 0 6px #ffd258)}.bat-line{stroke:#31f893;filter:drop-shadow(0 0 6px #36ffab)}.home-line{stroke:#53d6ff;filter:drop-shadow(0 0 6px #42cfff)}.grid-line{stroke:#3da9ff;filter:drop-shadow(0 0 6px #6be5ff)}.direction-reverse{animation-direction:reverse}.off{opacity:.08;animation-play-state:paused}.labelchip{fill:#082238ed;stroke:#42cfff;stroke-width:1.4}.labelchip-gold{fill:#30220ced;stroke:#ffd057;stroke-width:1.4}.labelchip-mint{fill:#0b2926ee;stroke:#36e8a0;stroke-width:1.4}.svgtitle{fill:#dbeffc;font-size:16px;font-weight:700}.svgvalue{fill:white;font-size:20px;font-weight:900}.svgdesc{fill:#a4cde3;font-size:12px}
+.cards{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:11px}.glass{background:linear-gradient(153deg,#123b54,#071a2e 92%);border:1px solid #287a9d;border-radius:17px;box-shadow:inset 0 0 19px #37d2ff09;padding:11px;min-width:0}.card-header{display:flex;justify-content:space-between;gap:5px;font-size:13px;font-weight:800;color:#d6f8ff;border-bottom:1px solid #3b809a;padding:0 0 9px}.count{color:#40efa5;white-space:nowrap;font-size:11px}.device-row{display:flex;gap:8px;padding:10px 0 4px;align-items:center;border-bottom:1px solid #ffffff13}.device-row:last-child{border:0}.device-icon{width:28px;height:34px;border-radius:7px;background:linear-gradient(145deg,#edf8fd,#7295a7);border:1px solid #9fdaeb;box-shadow:0 0 12px #38c9ef50;position:relative;flex:none}.device-icon:after{content:"";position:absolute;background:#0c3141;width:17px;height:7px;bottom:5px;left:5px;border-radius:2px}.devbody{min-width:0;flex:1}.devname{font-weight:750;font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.devreading{color:#cce9f6;font-size:11px;margin-top:3px}.devstate{font-size:10px;color:#77eec0}.bms-icon{width:24px;height:30px;border:2px solid #43eab7;border-radius:5px;box-shadow:0 0 10px #34ffb044;position:relative;flex:none}.bms-icon:before{content:"";position:absolute;top:-5px;width:9px;height:3px;background:#43eab7;left:5px}.bms-icon:after{content:"";position:absolute;inset:5px 3px;background:linear-gradient(to top,#41e8a2 0 70%,transparent 70%)}
+.bottom{display:grid;grid-template-columns:1fr 1.4fr;gap:10px;margin-top:10px}.mini{background:linear-gradient(140deg,#0a304a,#091e35);border:1px solid #2d789c;border-radius:17px;padding:12px;min-width:0}.minititle{font-size:12px;font-weight:800;border-bottom:1px solid #37758d;padding-bottom:7px}.socwrap{display:flex;justify-content:center;align-items:center;padding:12px 0}.ring{width:105px;height:105px;border-radius:50%;background:conic-gradient(#26e9b3 0 var(--soc,0%),#17384c var(--soc,0%) 100%);padding:9px;box-shadow:0 0 13px #27e4ac41}.ringcore{height:100%;width:100%;border-radius:50%;background:#082033;display:flex;align-items:center;justify-content:center;flex-direction:column}.ringcore strong{font-size:28px}.ringcore small{font-size:10px;color:#94bcca}.flrow{display:flex;justify-content:space-between;gap:5px;padding:8px 0;border-bottom:1px solid #21506b;font-size:11px}.flrow:last-child{border:0}.flrow b{white-space:nowrap}.foot{color:#81abba;display:flex;justify-content:space-between;gap:10px;font-size:10px;padding:12px 5px}.warning{color:#eccc85}.unknown{color:#90a9bd}.spaced{font-size:11px;color:#a2c6d6;padding:9px 4px 2px}
+@keyframes flowmove{to{stroke-dashoffset:-50}}
+@media(max-width:540px){.shell{padding:7px 0 15px}.summary{grid-template-columns:repeat(2,1fr)}.stat{padding:9px}.scene{height:350px}.cards{grid-template-columns:1fr 1fr;gap:7px}.glass{padding:9px}.card-header{font-size:11px}.count{font-size:9px}.device-icon{width:22px;height:27px}.device-icon:after{width:12px;left:4px}.device-row{gap:5px}.devname{font-size:10px}.devreading{font-size:10px}.bottom{grid-template-columns:1fr 1.2fr;gap:7px}.mini{padding:9px}.ring{height:88px;width:88px}.ringcore strong{font-size:23px}.flrow{font-size:10px}.scene-heading{font-size:10px}}
+@media(prefers-reduced-motion:reduce){.flow-line{animation:none}}
+</style></head><body><main class="shell">
+<div class="head"><div class="brand">SMART <b>ENERGY</b><span class="sub">Gestion Énergie Solaire & Batteries</span></div><div id="online" class="online">Recherche des équipements</div></div>
+<div class="summary">
+<div class="stat pv"><div class="sttitle"><span class="sym">☀</span> Production PV</div><div id="pv" class="big">— W</div><div id="pvInfo" class="little">En attente onduleur</div></div>
+<div class="stat"><div class="sttitle"><span class="sym">⌂</span> Consommation</div><div id="load" class="big">— W</div><div class="little">Sortie AC</div></div>
+<div class="stat bat"><div class="sttitle"><span class="sym">▣</span> Batteries (SOC)</div><div id="soc" class="big">— %</div><div id="batterySummary" class="little">JK BMS en attente</div></div>
+<div class="stat"><div class="sttitle"><span class="sym">♧</span> Réseau électrique</div><div id="grid" class="big">— W</div><div id="gridInfo" class="little">Puissance non connue</div></div>
+</div>
+<div class="scene"><div class="scene-heading">⚡ FLUX D'ÉNERGIE</div><div id="routeChip" class="scene-state">LOCAL / VPN</div>
+<svg viewBox="0 0 820 395" preserveAspectRatio="xMidYMid slice" xmlns="http://www.w3.org/2000/svg" aria-label="Maison solaire, réseau, onduleur et batteries reliés par des flux d'énergie">
+<defs>
+<linearGradient id="sky" x1="0" y1="0" x2="0" y2="1"><stop stop-color="#142b59"/><stop offset=".57" stop-color="#f2926e"/><stop offset="1" stop-color="#19465d"/></linearGradient>
+<linearGradient id="roof" x1="0" x2=".7" y1="0" y2="1"><stop stop-color="#25395c"/><stop offset="1" stop-color="#0d182e"/></linearGradient>
+<linearGradient id="wall" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#dfcab1"/><stop offset=".8" stop-color="#746e74"/><stop offset="1" stop-color="#263249"/></linearGradient>
+<linearGradient id="glass" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#fff3b3"/><stop offset="1" stop-color="#e99c50"/></linearGradient>
+<linearGradient id="grass" x1="0" y1="0" x2="0" y2="1"><stop stop-color="#1f625c"/><stop offset="1" stop-color="#052c2a"/></linearGradient>
+<filter id="glow"><feGaussianBlur stdDeviation="2.7"/></filter>
+<pattern id="panelCells" width="22" height="18" patternUnits="userSpaceOnUse"><rect width="22" height="18" fill="#114a9c"/><path d="M0 0H22V18H0Z M11 0V18" fill="none" stroke="#9fd8ff" stroke-width=".65"/></pattern>
+</defs>
+<rect width="820" height="395" fill="url(#sky)"/>
+<circle cx="427" cy="135" r="55" fill="#ffc17b" opacity=".55" filter="url(#glow)"/>
+<path d="M0 196L74 140L134 166L193 115L279 180L344 131L419 174L485 115L572 170L664 109L720 155L820 102V265H0Z" fill="#182e4e" opacity=".75"/>
+<path d="M0 216L126 148L178 188L246 157L316 199L447 139L545 190L633 150L728 197L820 167V268H0Z" fill="#0b3143" opacity=".95"/>
+<path d="M0 239 Q140 216 270 242 T540 236 T820 217V395H0Z" fill="url(#grass)"/>
+<g fill="#092f2f"><path d="M20 252L37 195L55 253ZM55 256L73 178L94 256ZM752 246L773 178L800 246ZM699 266L730 160L756 266Z"/><path d="M0 269Q200 236 394 271T820 266V395H0Z" fill="#0b413b"/></g>
+<!-- garden -->
+<g opacity=".8"><g fill="#245b3f"><ellipse cx="250" cy="323" rx="120" ry="27"/><ellipse cx="569" cy="319" rx="145" ry="29"/></g><g fill="#f6d568"><circle cx="96" cy="348" r="2"/><circle cx="135" cy="365" r="2"/><circle cx="194" cy="344" r="2"/><circle cx="606" cy="360" r="2"/><circle cx="714" cy="343" r="2"/></g></g>
+<!-- standalone PV array on left -->
+<g transform="translate(68 118)"><path d="M0 100L20 100L65 33L48 33Z" fill="#174a6c"/><path d="M16 16L109 27L137 94L40 82Z" fill="url(#panelCells)" stroke="#80ceff" stroke-width="4"/><path d="M16 16L109 27L137 94L40 82Z" stroke="#ffffff55" stroke-width="1.5" fill="none"/><path d="M54 88V113M122 94V112" stroke="#8ea0a3" stroke-width="4"/><ellipse cx="84" cy="119" rx="98" ry="10" fill="#6cd25e" opacity=".4"/></g>
+<!-- pylon left -->
+<g stroke="#91d9f9" stroke-width="3" fill="none" transform="translate(66 262)"><path d="M33-40L10 91M33-40L63 91M23 1H49M15 37H55M7 65H66M-3 17L33 0L71 17M-6 58L33 39L75 58M33-40V-54M15-28H52"/></g>
+<!-- house shadow and architecture -->
+<ellipse cx="420" cy="321" rx="188" ry="18" fill="#021819" opacity=".8"/>
+<g>
+<path d="M269 218L409 132L553 217L542 313L284 314Z" fill="url(#wall)" stroke="#bcaca7" stroke-width="3"/>
+<path d="M409 132L553 217L575 241L409 153L253 241L263 210Z" fill="#15233b" stroke="#728ca2" stroke-width="4"/>
+<path d="M251 240L409 146L566 236L553 238L409 170L270 252Z" fill="url(#roof)" stroke="#739cd1" stroke-width="4"/>
+<path d="M294 220L394 160L474 211L377 263Z" fill="url(#panelCells)" stroke="#71bdf5" stroke-width="3"/>
+<path d="M316 224L394 174L457 211M340 237L410 191M361 250L427 201" stroke="#8ac5fd" stroke-width="2" fill="none"/>
+<path d="M289 253L289 307L376 309L376 254Z" fill="#a6a39a" stroke="#4e555b" stroke-width="3"/>
+<rect x="304" y="265" width="49" height="43" rx="2" fill="url(#glass)" stroke="#f8dbaa" stroke-width="4"/>
+<path d="M328 265V310M305 286H353" stroke="#826449" stroke-width="3"/>
+<path d="M394 235V312H502V241Z" fill="#b2aba0" stroke="#526478" stroke-width="3"/>
+<rect x="409" y="252" width="40" height="59" fill="url(#glass)" stroke="#e3d0a4" stroke-width="4"/>
+<rect x="456" y="257" width="35" height="51" fill="url(#glass)" stroke="#e3d0a4" stroke-width="4"/>
+<path d="M431 252V311M410 279H449M473 257V308" stroke="#7e674e" stroke-width="3"/>
+<path d="M409 169V213H455L409 169Z" fill="url(#glass)" stroke="#efdfbb" stroke-width="3"/>
+<path d="M409 170V211M410 211H451" stroke="#875d47" stroke-width="2.4"/>
+<path d="M257 314L553 316" stroke="#e4c4ad" stroke-width="7"/>
+<path d="M263 321L559 323" stroke="#12323c" stroke-width="7"/>
+</g>
+<!-- right inverter pair -->
+<g transform="translate(647 115)"><rect x="0" y="0" width="49" height="80" rx="9" fill="#ccd9e2" stroke="#f4fbff" stroke-width="3"/><rect x="55" y="0" width="49" height="80" rx="9" fill="#afc7d9" stroke="#f4fbff" stroke-width="3"/><path d="M7 68H42M62 68H97" stroke="#637e91" stroke-width="6"/><rect x="14" y="47" width="22" height="11" rx="2" fill="#0e2843"/><rect x="68" y="47" width="22" height="11" rx="2" fill="#0e2843"/><path d="M15 51H29M68 51H83" stroke="#4be2ee" stroke-width="2"/></g>
+<!-- battery icon -->
+<g transform="translate(687 252)"><rect x="1" y="5" width="67" height="83" rx="13" fill="#0b3135" stroke="#43e8ac" stroke-width="3"/><rect x="9" y="15" width="51" height="66" rx="8" fill="#1bca7a" opacity=".85"/><path d="M10 32H59M10 49H59M10 65H59" stroke="#b6ffe0" stroke-opacity=".7" stroke-width="3"/><rect x="25" y="-1" width="20" height="7" rx="3" fill="#b6f9de"/></g>
+<!-- energy paths, only energized when actual input supports direction -->
+<g id="solarTrace"><path class="flow-outline" d="M203 241C254 248 255 223 301 247"/><path class="flow-line solar-line off" id="solarFlow" d="M203 241C254 248 255 223 301 247"/></g>
+<g><path class="flow-outline" d="M529 247C580 238 582 169 646 168"/><path id="inverterFlow" class="flow-line home-line off" d="M529 247C580 238 582 169 646 168"/></g>
+<g><path class="flow-outline" d="M558 278C604 273 620 289 682 290"/><path id="batteryFlow" class="flow-line bat-line off" d="M558 278C604 273 620 289 682 290"/></g>
+<g><path class="flow-outline" d="M123 327C195 330 234 315 300 304"/><path id="gridFlow" class="flow-line grid-line off" d="M123 327C195 330 234 315 300 304"/></g>
+<!-- visual chips -->
+<g transform="translate(192 65)"><rect width="160" height="51" rx="12" class="labelchip-gold"/><text x="80" y="20" class="svgtitle" text-anchor="middle">☀ Solaire</text><text x="80" y="43" class="svgvalue" text-anchor="middle" id="sceneSolar">— W</text></g>
+<g transform="translate(307 305)"><rect width="183" height="55" rx="12" class="labelchip"/><text x="92" y="20" class="svgtitle" text-anchor="middle">⌂ Maison</text><text x="92" y="44" class="svgvalue" text-anchor="middle" id="sceneHome">— W</text></g>
+<g transform="translate(580 209)"><rect width="195" height="41" rx="11" class="labelchip-mint"/><text x="98" y="27" class="svgtitle" text-anchor="middle" id="sceneBms">Batteries · — %</text></g>
+<g transform="translate(30 205)"><rect width="163" height="45" rx="10" class="labelchip"/><text x="81" y="19" class="svgtitle" text-anchor="middle">Réseau</text><text x="81" y="38" class="svgvalue" text-anchor="middle" id="sceneGrid">— W</text></g>
+</svg></div>
+<div class="cards">
+<section class="glass"><div class="card-header">⚡ Onduleurs Voltronic / SunSpec <span id="invCount" class="count">—</span></div><div id="inverters" class="spaced">Ajoute un onduleur depuis Configuration pour afficher les mesures réelles.</div></section>
+<section class="glass"><div class="card-header">▣ Batteries JK BMS <span id="bmsCount" class="count">0/0</span></div><div id="bmsDevices" class="spaced">Lecture des batteries en attente.</div></section>
+</div>
+<div class="bottom"><section class="mini"><div class="minititle">◉ SOC global</div><div class="socwrap"><div id="socRing" class="ring" style="--soc:0%"><div class="ringcore"><strong id="socRingValue">— %</strong><small>JK BMS</small></div></div></div></section>
+<section class="mini"><div class="minititle">⇄ Flux d'énergie</div><div class="flrow"><span>☀ PV → Installation</span><b id="flSolar">— W</b></div><div class="flrow"><span>⌂ Consommation AC</span><b id="flHome">— W</b></div><div class="flrow"><span>▣ Batterie</span><b id="flBattery">— W</b></div><div class="flrow"><span>♧ Réseau</span><b id="flGrid">— W</b></div></section></div>
+<div class="spaced">Les flèches ne s'animent que si le sens de circulation est connu. Un tiret signifie « mesure indisponible », pas 0 W.</div>
+<div class="foot"><span id="health">En attente des données fraîches</span><span id="updated">Aucune mesure</span></div>
+</main>
+<script>
+(function(){
+'use strict';
+function el(x){return document.getElementById(x)}
+function fmt(v,u,d){return Number.isFinite(v)?new Intl.NumberFormat('fr-FR',{maximumFractionDigits:d||0}).format(v)+' '+u:'— '+u}
+function set(id,s){var node=el(id);if(node)node.textContent=s}
+function safeNumber(x){return typeof x==='number'&&Number.isFinite(x)?x:null}
+function stateFlow(id,on,reverse){var e=el(id);if(e){e.classList.toggle('off',!on);e.classList.toggle('direction-reverse',!!reverse)}}
+function create(tag,cls,text){var e=document.createElement(tag);if(cls)e.className=cls;if(text!=null)e.textContent=text;return e}
+function deviceRow(target,icon,name,reading,status){var row=create('div','device-row');var ico=create('div',icon);row.appendChild(ico);var body=create('div','devbody');body.appendChild(create('div','devname',name));body.appendChild(create('div','devreading',reading));body.appendChild(create('div','devstate',status));row.appendChild(body);target.appendChild(row)}
+window.updateSmartEnergy=function(data){
+ if(!data || typeof data!=='object')return;
+ var jk=data.jk||{};var inv=data.inverter||{};var soc=safeNumber(jk.soc);
+ var p=safeNumber(inv.pvPowerW),load=safeNumber(inv.loadW),grid=safeNumber(inv.gridPowerW);
+ set('pv',fmt(p,'W'));set('sceneSolar',fmt(p,'W'));set('flSolar',fmt(p,'W'));
+ set('pvInfo',inv.pvDetail||'En attente onduleur');
+ set('load',fmt(load,'W'));set('sceneHome',fmt(load,'W'));set('flHome',fmt(load,'W'));
+ set('soc',fmt(soc,'%'));set('sceneBms','Batteries · '+fmt(soc,'%'));
+ set('socRingValue',fmt(soc,'%'));el('socRing').style.setProperty('--soc',(soc==null?0:Math.max(0,Math.min(100,soc)))+'%');
+ var batt=safeNumber(jk.powerW);set('batterySummary',fmt(batt,'W')+(jk.online>0?' · JK BMS':''));
+ set('flBattery',fmt(batt,'W'));
+ set('grid',fmt(grid,'W'));set('sceneGrid',fmt(grid,'W'));set('flGrid',fmt(grid,'W'));
+ set('gridInfo',inv.gridDetail||'Direction non vérifiée');
+ var ready=!!inv.fresh;
+ stateFlow('solarFlow',ready&&p!=null&&p>0,false);
+ stateFlow('inverterFlow',ready&&load!=null&&load>0,false);
+ // Battery values from JK packs describe net storage current, not necessarily
+ // where the power came from. Flow direction is drawn, not source attribution.
+ stateFlow('batteryFlow',jk.complete===true&&batt!=null&&Math.abs(batt)>30,batt<0);
+ // Native grid magnitude may not tell import/export sign on every inverter.
+ stateFlow('gridFlow',ready&&inv.gridDirectionVerified===true&&grid!=null&&Math.abs(grid)>30,inv.gridDirection==='export');
+ set('online',data.route||'Non connecté');set('routeChip',data.route||'Local / VPN');
+ var list=el('bmsDevices');list.replaceChildren();var devices=Array.isArray(jk.devices)?jk.devices:[];
+ if(!devices.length)list.appendChild(create('div','spaced','Aucune batterie associée.'));
+ devices.slice(0,8).forEach(function(d){deviceRow(list,'bms-icon',String(d.name||'Batterie'),d.available?fmt(safeNumber(d.soc),'%')+' · '+fmt(safeNumber(d.voltage),'V',2):'Mesures indisponibles',d.available?'● En ligne':'○ Hors ligne')});
+ set('bmsCount',(jk.online||0)+'/'+(jk.total||0));
+ var invList=el('inverters');invList.replaceChildren();
+ if(inv.configured){deviceRow(invList,'device-icon',inv.name||'Onduleur Voltronic',ready?fmt(load,'W')+' sortie AC · '+fmt(p,'W')+' PV':'Mesures indisponibles',ready?'● Lecture fraîche':'○ En attente / hors ligne')}
+ else invList.appendChild(create('div','spaced','Aucun onduleur configuré. Section Onduleurs dans Configuration.'));
+ set('invCount',inv.configured?(ready?'1/1':'0/1'):'0/0');
+ set('health',jk.complete===true?'JK : mesures fraîches':(jk.total>0?'JK : données partielles':'JK : non configuré'));
+ set('updated',data.updated||'En attente');
+};
+window.updateSmartEnergy({route:'Local / VPN',jk:{devices:[],total:0,online:0},inverter:{configured:false}});
+})();
+</script></body></html>
