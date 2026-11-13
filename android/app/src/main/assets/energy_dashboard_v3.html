@@ -159,7 +159,15 @@ if(n(v.serialNoRxTimeouts)!==null)row(details,'Sans retour série',String(v.seri
 if(n(v.serialCrcRejects)!==null)row(details,'Rejets CRC cumulés',String(v.serialCrcRejects));
 if(n(v.httpConsecutiveErrors)!==null)row(details,'Échecs HTTP consécutifs',String(v.httpConsecutiveErrors));
 if(n(v.httpErrorsTotal)!==null)row(details,'Échecs HTTP depuis ouverture',String(v.httpErrorsTotal));
-if(v.lastHttpErrorKind)row(details,'Type du dernier incident HTTP',v.lastHttpErrorKind);
+if(v.lastHttpErrorKind)row(details,'Dernier incident HTTP (même après reprise)',v.lastHttpErrorKind);
+if(v.firmwareVersion)row(details,'Firmware ESP32-S3',v.firmwareVersion);
+if(n(v.s3WifiDisconnects)!==null)row(details,'Coupures Wi-Fi ESP32 depuis démarrage',String(v.s3WifiDisconnects));
+if(n(v.s3WifiLastReason)!==null && v.s3WifiDisconnects>0)row(details,'Dernier code de coupure Wi-Fi S3',String(v.s3WifiLastReason));
+if(n(v.s3WifiRssi)!==null)row(details,'Signal Wi-Fi ESP32',fmt(v.s3WifiRssi,'dBm'));
+if(n(v.s3HttpTelemetryRequests)!==null)row(details,'Requêtes HTTP reçues par ESP32',String(v.s3HttpTelemetryRequests));
+if(n(v.s3HttpSendFailures)!==null)row(details,'Échecs HTTP envoyés côté ESP32',String(v.s3HttpSendFailures));
+if(n(v.s3FreeHeapBytes)!==null)row(details,'Mémoire libre ESP32',fmt(v.s3FreeHeapBytes/1024,'Ko',0));
+if(n(v.s3UptimeMs)!==null)row(details,'Durée de fonctionnement ESP32',fmt(v.s3UptimeMs/60000,'min',0));
 if(n(v.effectiveSampleAgeMs)!==null)row(details,'Âge de la dernière mesure',fmt(v.effectiveSampleAgeMs/1000,'s',1));(v.pvChannels||[]).forEach(function(c){row(details,'MPPT '+c.index+' · puissance',fmt(c.powerW,'W')+(c.derived?' (estimée)':''));row(details,'MPPT '+c.index+' · tension / courant',fmt(c.voltageV,'V',1)+' / '+fmt(c.currentA,'A',1))})}
 function render(){var items=data.inverters||[],live=fresh(),pvs=channels(live),p=sum(live,'pvPowerW'),l=sum(live,'loadW'),pvDay=(live.length===items.length&&live.length>0&&live.every(function(x){return n(x.pvDayKwh)!==null}))?sum(live,'pvDayKwh'):null,loadDay=null;var jk=data.jk||{},soc=n(jk.soc),bvol=null,bcur=null,batLabel='';if((jk.online||0)>0){batLabel='JK BMS'}else{var bat=live.find(function(x){return n(x.batteryVoltageV)!==null});if(bat){bvol=n(bat.batteryVoltageV);bcur=n(bat.batteryCurrentA);soc=n(bat.inverterBatterySoc);batLabel='Onduleur (estimation SOC)'}}var grid=null,gridInfo='Sens non vérifié';if(live.length===1){grid=n(live[0].gridPowerW);gridInfo=grid===null?'Mesure indisponible':'Puissance native, sens non validé'}else if(live.length>1){gridInfo='Multi-onduleurs : total réseau non mesurable'}
 el('setupHelp').style.display=items.length===0?'':'none';

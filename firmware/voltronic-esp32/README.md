@@ -1,4 +1,4 @@
-# Smart Energy Voltronic — ESP32-S3 N16R8 (v0.2.0, lecture seule)
+# Smart Energy Voltronic — ESP32-S3 N16R8 (v0.2.1-dev diagnostic HTTP, lecture seule)
 
 **État : moteur série et binaire compilables en CI. Validation sur un véritable onduleur Axpert Ultra encore nécessaire.**
 
@@ -41,6 +41,7 @@ Port **18081**, GET uniquement avec en-tête `X-Setup-Code: <code choisi au flas
 - `/api/v1/telemetry` → `available`, `age_ms`, `values` si QPIGS récent, et compteurs ;
 - `/api/v1/details` → mode QMOD, disponibilité QPIGS2, paramètres QPIRI/QDOP validés, énergie brute, QPIWS (bits + alertes classées) ;
 - **`/api/v1/diagnostics`** → commandes envoyées, octets reçus, trames complètes, `crc_rejects`, `partial_frames`, `no_rx_timeouts`, `parse_rejects` et dernier échantillon.
+- **v0.2.1-dev :** `/telemetry` et `/diagnostics` exposent en plus les compteurs Wi-Fi (`wifi_disconnect_count`, `wifi_last_disconnect_reason`, `wifi_rssi_dbm`) et serveur HTTP (`http_telemetry_requests`, `http_send_failures`), mémoire et uptime. Il n'y a **aucun SSID, code, MAC ou adresse IP** dans les diagnostics. Le serveur a une pile de 8 Ko, une purge LRU des sessions anciennes et un délai réseau de 4 secondes. Il continue de lire le RS232 exactement comme avant.
 
 **Pour la panne « `available=false`, `polls_ok=0`, `timeouts=111` » :**
 1. La bonne réponse `/api/v1/info` (HTTP 200 après code) confirme que Wi-Fi et provisionnement fonctionnent.
@@ -65,7 +66,7 @@ Le workflow `.github/workflows/build-vpn-gateway.yml` inclut un job **Voltronic 
 
 Dans l'onglet **Voltronic S3** :
 
-- **APP-ONLY (recommandé si S3 Voltronic déjà configuré)** : image `smart-energy-voltronic-S3-APP-0x10000.bin` à l'adresse `0x10000` ; pas de provisionnement USB, **préserve Wi-Fi + code en NVS**. Ne jamais utiliser APP-ONLY pour remplacer un firmware d'un autre projet (JK/VPN).
+- **APP-ONLY (recommandé si S3 Voltronic déjà configuré)** : image `smart-energy-voltronic-S3-APP-0x10000.bin` à l'adresse `0x10000` ; pas de provisionnement USB, **préserve Wi-Fi + code en NVS**. Pour passer de la v0.2.0 à la v0.2.1-dev, flasher uniquement cette image, sans effacement de la flash. Ne jamais utiliser APP-ONLY pour remplacer un firmware d'un autre projet (JK/VPN).
 - **FACTORY (S3 neuf uniquement)** : image `smart-energy-voltronic-S3-FACTORY-0x0.bin` à l'adresse `0x0` ; configure ensuite Wi-Fi et code de lecture 8–32 caractères via USB physique. Peut effacer les données présentes ; ne pas choisir pour un S3 déjà associé.
 - Ne pas reconfigurer/effacer le S3 VPN Tailscale, ni les lecteurs JK BMS.
 

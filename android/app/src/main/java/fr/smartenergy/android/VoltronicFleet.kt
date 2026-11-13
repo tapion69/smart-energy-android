@@ -33,6 +33,7 @@ class VoltronicFleet(
     private var energyBusy=false
     private var busy=false
     private val httpTotalErrors=IntArray(3)
+    private val lastHttpKinds=arrayOfNulls<String>(3)
 
     fun configured(slot:Int):Boolean {
         require(slot in 1..3)
@@ -76,6 +77,7 @@ class VoltronicFleet(
             states[i]=JSONObject().put("configured",false)
             solarDays[i]=null
             httpTotalErrors[i]=0
+            lastHttpKinds[i]=null
         }
         updated()
     }
@@ -134,9 +136,14 @@ class VoltronicFleet(
                         nextReading.put("httpConsecutiveErrors",0)
                             .put("httpErrorsTotal",httpTotalErrors[c.slot-1])
                             .put("transientHttpError",false)
+                        lastHttpKinds[c.slot-1]?.let {
+                            nextReading.put("lastHttpErrorKind",it)
+                        }
                     } catch(ex:Exception) {
                         val errors=prior.optInt("httpConsecutiveErrors",0)+1
                         httpTotalErrors[c.slot-1]++
+                        val errorKind=VoltronicHttpResilience.errorKind(ex)
+                        lastHttpKinds[c.slot-1]=errorKind
                         val recent=VoltronicHttpResilience.recentOnFailure(
                             errors,prior.optLong("sampleAtMs",-1L),
                             prior.optLong("qpigsAgeMs",-1L),SystemClock.elapsedRealtime())
@@ -148,7 +155,7 @@ class VoltronicFleet(
                             .put("transientHttpError",recent)
                             .put("httpConsecutiveErrors",errors)
                             .put("httpErrorsTotal",httpTotalErrors[c.slot-1])
-                            .put("lastHttpErrorKind",VoltronicHttpResilience.errorKind(ex))
+                            .put("lastHttpErrorKind",errorKind)
                             .put("detail",if(recent)
                                 "HTTP instable · dernière mesure récente conservée"
                                 else if(errors<VoltronicHttpResilience.OFFLINE_AFTER)
@@ -269,7 +276,28 @@ class VoltronicFleet(
         out.put("gridDirectionVerified",false)
         // /telemetry has no energy_wh; only the optional /details PV counter is used.
         out.put("fresh",true).put("sampleAtMs",SystemClock.elapsedRealtime())
+            .put("firmwareVersion",raw.optString("version",""))
             .put("qpigsAgeMs",age).put("transportReachable",true)
+        // Optional fields require Voltronic S3 0.2.1+; older firmware
+        // continues to function, and absent counters stay unavailable.
+        for((source,target) in listOf(
+            "wifi_disconnect_count" to "s3WifiDisconnects",
+            "wifi_last_disconnect_reason" to "s3WifiLastReason",
+            "wifi_got_ip_count" to "s3WifiGotIp",
+            "http_requests" to "s3HttpRequests",
+            "http_telemetry_requests" to "s3HttpTelemetryRequests",
+            "http_send_failures" to "s3HttpSendFailures",
+            "wifi_rssi_dbm" to "s3WifiRssi",
+            "free_heap_bytes" to "s3FreeHeapBytes",
+            "minimum_free_heap_bytes" to "s3MinFreeHeapBytes",
+            "uptime_ms" to "s3UptimeMs")) {
+            if(raw.has(source) && !raw.isNull(source))
+                raw.optDouble(source,Double.NaN).takeIf{it.isFinite()}?.let{
+                    out.put(target,it)
+                }
+        }
+        if(raw.has("wifi_connected"))
+            out.put("s3WifiConnected",raw.optBoolean("wifi_connected"))
             .put("httpConsecutiveErrors",0)
             .put("serialTimeouts",raw.optLong("timeouts",0L))
             .put("serialNoRxTimeouts",raw.optLong("no_rx_timeouts",0L))

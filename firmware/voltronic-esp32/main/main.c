@@ -30,7 +30,7 @@
 #include "cJSON.h"
 #include "voltronic_protocol.h"
 
-#define VT_VERSION "0.2.0-dev-flowport-read-only"
+#define VT_VERSION "0.2.1-dev-httpdiag-read-only"
 #define VT_UART UART_NUM_1
 #define VT_TX GPIO_NUM_17
 #define VT_RX GPIO_NUM_16
@@ -75,6 +75,14 @@ static vol_state_t state={0};
 static SemaphoreHandle_t state_lock;
 static EventGroupHandle_t wifi_events;
 #define WIFI_OK BIT0
+/* Aggregated, anonymous counters; no SSID, MAC, IP, password or access code. */
+typedef struct {
+    uint32_t wifi_disconnects, wifi_got_ip, wifi_connect_attempts;
+    uint32_t http_requests, http_telemetry_requests, http_send_failures;
+    int32_t wifi_last_disconnect_reason;
+} vt_net_diag_t;
+static vt_net_diag_t net_diag={0};
+static portMUX_TYPE net_diag_lock=portMUX_INITIALIZER_UNLOCKED;
 
 static bool valid_config_json(const char *text,vol_cfg_t *out) {
     cJSON *root=cJSON_Parse(text);
@@ -228,13 +236,29 @@ static void usb_provision(void) {
 }
 
 static void wifi_handler(void *arg,esp_event_base_t base,int32_t id,void *data){
-    (void)arg;(void)data;
-    if(base==WIFI_EVENT && id==WIFI_EVENT_STA_START)esp_wifi_connect();
-    if(base==WIFI_EVENT && id==WIFI_EVENT_STA_DISCONNECTED){
-        xEventGroupClearBits(wifi_events,WIFI_OK);esp_wifi_connect();
+    (void)arg;
+    if(base==WIFI_EVENT && id==WIFI_EVENT_STA_START) {
+        portENTER_CRITICAL(&net_diag_lock);
+        net_diag.wifi_connect_attempts++;
+        portEXIT_CRITICAL(&net_diag_lock);
+        esp_wifi_connect();
     }
-    if(base==IP_EVENT && id==IP_EVENT_STA_GOT_IP)
+    if(base==WIFI_EVENT && id==WIFI_EVENT_STA_DISCONNECTED){
+        wifi_event_sta_disconnected_t *evt=(wifi_event_sta_disconnected_t *)data;
+        portENTER_CRITICAL(&net_diag_lock);
+        net_diag.wifi_disconnects++;
+        net_diag.wifi_connect_attempts++;
+        if(evt)net_diag.wifi_last_disconnect_reason=evt->reason;
+        portEXIT_CRITICAL(&net_diag_lock);
+        xEventGroupClearBits(wifi_events,WIFI_OK);
+        esp_wifi_connect();
+    }
+    if(base==IP_EVENT && id==IP_EVENT_STA_GOT_IP) {
+        portENTER_CRITICAL(&net_diag_lock);
+        net_diag.wifi_got_ip++;
+        portEXIT_CRITICAL(&net_diag_lock);
         xEventGroupSetBits(wifi_events,WIFI_OK);
+    }
 }
 static void wifi_start(void){
     wifi_events=xEventGroupCreate();
@@ -257,6 +281,9 @@ static void wifi_start(void){
     ESP_ERROR_CHECK(esp_wifi_set_ps(WIFI_PS_NONE));
 }
 static bool authorized(httpd_req_t *r) {
+    portENTER_CRITICAL(&net_diag_lock);
+    net_diag.http_requests++;
+    portEXIT_CRITICAL(&net_diag_lock);
     char code[48]={0};
     if(httpd_req_get_hdr_value_str(r,"X-Setup-Code",code,sizeof(code))!=ESP_OK)
         return false;
@@ -271,7 +298,13 @@ static esp_err_t send_json(httpd_req_t *r,cJSON *doc){
     if(!json)return httpd_resp_send_err(r,HTTPD_500_INTERNAL_SERVER_ERROR,"json");
     httpd_resp_set_type(r,"application/json");
     httpd_resp_set_hdr(r,"Cache-Control","no-store");
-    esp_err_t out=httpd_resp_sendstr(r,json);free(json);return out;
+    esp_err_t out=httpd_resp_sendstr(r,json);
+    if(out!=ESP_OK){
+        portENTER_CRITICAL(&net_diag_lock);
+        net_diag.http_send_failures++;
+        portEXIT_CRITICAL(&net_diag_lock);
+    }
+    free(json);return out;
 }
 static esp_err_t deny(httpd_req_t *r){
     httpd_resp_set_status(r,"401 Unauthorized");
@@ -283,6 +316,29 @@ static cJSON *base_json(const char *source){
     cJSON_AddStringToObject(root,"version",VT_VERSION);
     cJSON_AddBoolToObject(root,"read_only",true);
     return root;
+}
+/* Safe snapshot, cheap enough to add to an existing telemetry GET.
+ * Firmware returns counters since boot; Android compares them over time. */
+static void add_runtime_net_diag(cJSON *root){
+    vt_net_diag_t nd;
+    portENTER_CRITICAL(&net_diag_lock);
+    nd=net_diag;
+    portEXIT_CRITICAL(&net_diag_lock);
+    bool wifi_connected=(xEventGroupGetBits(wifi_events)&WIFI_OK)!=0;
+    cJSON_AddBoolToObject(root,"wifi_connected",wifi_connected);
+    cJSON_AddNumberToObject(root,"wifi_disconnect_count",nd.wifi_disconnects);
+    cJSON_AddNumberToObject(root,"wifi_got_ip_count",nd.wifi_got_ip);
+    cJSON_AddNumberToObject(root,"wifi_connect_attempts",nd.wifi_connect_attempts);
+    cJSON_AddNumberToObject(root,"wifi_last_disconnect_reason",nd.wifi_last_disconnect_reason);
+    cJSON_AddNumberToObject(root,"http_requests",nd.http_requests);
+    cJSON_AddNumberToObject(root,"http_telemetry_requests",nd.http_telemetry_requests);
+    cJSON_AddNumberToObject(root,"http_send_failures",nd.http_send_failures);
+    cJSON_AddNumberToObject(root,"uptime_ms",esp_log_timestamp());
+    cJSON_AddNumberToObject(root,"free_heap_bytes",esp_get_free_heap_size());
+    cJSON_AddNumberToObject(root,"minimum_free_heap_bytes",esp_get_minimum_free_heap_size());
+    wifi_ap_record_t ap={0};
+    if(wifi_connected && esp_wifi_sta_get_ap_info(&ap)==ESP_OK)
+        cJSON_AddNumberToObject(root,"wifi_rssi_dbm",ap.rssi);
 }
 static esp_err_t info_handler(httpd_req_t *r){
     if(!authorized(r))return deny(r);
@@ -296,6 +352,9 @@ static esp_err_t info_handler(httpd_req_t *r){
 }
 static esp_err_t telemetry_handler(httpd_req_t *r){
     if(!authorized(r))return deny(r);
+    portENTER_CRITICAL(&net_diag_lock);
+    net_diag.http_telemetry_requests++;
+    portEXIT_CRITICAL(&net_diag_lock);
     vol_state_t snap;
     xSemaphoreTake(state_lock,portMAX_DELAY);snap=state;xSemaphoreGive(state_lock);
     uint32_t age=(uint32_t)(esp_log_timestamp()-snap.last_qpigs_ms);
@@ -309,6 +368,7 @@ static esp_err_t telemetry_handler(httpd_req_t *r){
     cJSON_AddNumberToObject(root,"rx_bytes_total",snap.rx_bytes);
     cJSON_AddNumberToObject(root,"no_rx_timeouts",snap.no_rx_timeouts);
     cJSON_AddNumberToObject(root,"partial_frames",snap.partial_frames);
+    add_runtime_net_diag(root);
     if(live){
         cJSON *v=cJSON_AddObjectToObject(root,"values");
         vt_qpigs_t m=snap.qpigs;
@@ -462,11 +522,20 @@ static esp_err_t diagnostics_handler(httpd_req_t *r) {
         snap.last_valid_ms ?
         (uint32_t)(esp_log_timestamp()-snap.last_valid_ms):-1);
     cJSON_AddBoolToObject(root,"read_only",true);
+    add_runtime_net_diag(root);
     return send_json(r,root);
 }
 static void start_api(void){
-    httpd_config_t conf=HTTPD_DEFAULT_CONFIG();conf.server_port=VT_HTTP_PORT;
+    httpd_config_t conf=HTTPD_DEFAULT_CONFIG();
+    conf.server_port=VT_HTTP_PORT;
     conf.max_uri_handlers=5;
+    /* Default 4 KB HTTP stack and LRU disabled: protect frequent polling
+       from held sessions and provide more room for cJSON + stack locals. */
+    conf.stack_size=8192;
+    conf.lru_purge_enable=true;
+    conf.recv_wait_timeout=4;
+    conf.send_wait_timeout=4;
+    conf.backlog_conn=8;
     httpd_handle_t server=NULL;
     ESP_ERROR_CHECK(httpd_start(&server,&conf));
     httpd_uri_t info={.uri="/api/v1/info",.method=HTTP_GET,.handler=info_handler};

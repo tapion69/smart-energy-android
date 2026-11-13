@@ -169,12 +169,15 @@ class MainActivity : Activity() {
     // Voltronic is read-only and must never expose its setup code to a VPN proxy.
     private fun voltronicWifiNetwork():android.net.Network? =
         try {
-            connectivity.allNetworks.firstOrNull { network ->
+            fun wifi(network:android.net.Network):Boolean =
                 connectivity.getNetworkCapabilities(network)?.let { cap ->
                     cap.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) &&
                         !cap.hasTransport(NetworkCapabilities.TRANSPORT_VPN)
                 } == true
-            }
+            // Prefer the currently active physical Wi-Fi to avoid selecting
+            // a stale Network handle after an Android connectivity transition.
+            connectivity.activeNetwork?.takeIf(::wifi)
+                ?: connectivity.allNetworks.firstOrNull(::wifi)
         } catch (_:Exception) { null }
     // A saved JK reader or BMS is sufficient even if its measurements are stale.
     private fun hasAnyConfiguredJk():Boolean =
