@@ -30,6 +30,29 @@ object VoltronicReadOnlyClient {
             info
         } finally { connection.disconnect() }
     }
+    /** Optional solar day counter, fetched separately from live telemetry. */
+    fun details(host:String,accessCode:String,port:Int=18081,wifiNetwork:Network?=null):JSONObject {
+        require(SunSpecReadOnly.isPrivateIPv4(host))
+        require(accessCode.length in 8..32)
+        require(port in 1..65535)
+        val url=URL("http://$host:$port/api/v1/details")
+        val connection=(if(wifiNetwork!=null)wifiNetwork.openConnection(url)
+            else url.openConnection()) as HttpURLConnection
+        return try {
+            connection.requestMethod="GET"
+            connection.connectTimeout=2200
+            connection.readTimeout=3200
+            connection.setRequestProperty("X-Setup-Code",accessCode)
+            if(connection.responseCode!=200)
+                throw IllegalArgumentException("Voltronic détails HTTP "+connection.responseCode)
+            val body=connection.inputStream.bufferedReader().use {it.readText()}
+            val obj=JSONObject(body)
+            require(obj.optString("source")=="voltronic-details-read-only" &&
+                obj.optBoolean("read_only")){"Réponse détails Voltronic invalide"}
+            obj
+        } finally {connection.disconnect()}
+    }
+
     /** Live read-only snapshot; no serial commands exposed to the APK. */
     fun telemetry(host:String, accessCode:String, port:Int=18081, wifiNetwork:Network?=null):JSONObject {
         require(SunSpecReadOnly.isPrivateIPv4(host)) { "Adresse LAN privée obligatoire" }

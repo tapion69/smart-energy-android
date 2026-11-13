@@ -5,6 +5,8 @@ import android.net.Network
 import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
+import java.time.LocalDate
+import java.time.ZoneOffset
 import org.json.JSONArray
 import org.json.JSONObject
 import java.util.concurrent.ExecutorService
@@ -18,12 +20,17 @@ class VoltronicFleet(
     private val prefs:SharedPreferences,
     private val readCode:(String)->String,
     private val worker:ExecutorService,
+    private val energyWorker:ExecutorService,
     private val localWifiNetwork:()->Network?,
     private val updated:()->Unit
 ) {
     private val mainHandler=Handler(Looper.getMainLooper())
     private val states=Array(3){ JSONObject().put("configured",false) }
+    private data class SolarDay(val utcDate:String,val kwh:Double,val receivedAtMs:Long)
+    private val solarDays=arrayOfNulls<SolarDay>(3)
     private var lastPoll=0L
+    private var lastEnergyPoll=0L
+    private var energyBusy=false
     private var busy=false
 
     fun configured(slot:Int):Boolean {
@@ -35,21 +42,44 @@ class VoltronicFleet(
     fun snapshotFor(slot:Int):JSONObject {
         if(!configured(slot)) return JSONObject().put("configured",false).put("slot",slot)
         val s=states[slot-1]
-        return if(s.optBoolean("configured"))s
+        val result=if(s.optBoolean("configured"))JSONObject(s.toString())
                else JSONObject().put("configured",true).put("slot",slot)
                    .put("fresh",false).put("name","Onduleur INV$slot")
+        // Cached values never become 'fresh' just because the screen redraws.
+        val stamp=result.optLong("sampleAtMs",-1L)
+        val age=result.optLong("qpigsAgeMs",-1L)
+        if(result.optBoolean("fresh") && stamp>0L && age>=0L &&
+           age+(SystemClock.elapsedRealtime()-stamp).coerceAtLeast(0L)>20000L) {
+            result.put("fresh",false).put("transportReachable",true)
+                .put("detail","Mesure QPIGS en retard")
+        }
+        val solar=solarDays[slot-1]
+        if(result.optBoolean("fresh") && solar!=null &&
+            solar.utcDate==LocalDate.now(ZoneOffset.UTC).toString() &&
+            SystemClock.elapsedRealtime()-solar.receivedAtMs in 0L..1200000L)
+            result.put("pvDayKwh",solar.kwh)
+        return result
     }
     fun snapshot():JSONArray {
         val out=JSONArray()
         for(slot in 1..3) if(configured(slot))out.put(snapshotFor(slot))
         return out
     }
-    fun changed() { lastPoll=0L; updated() }
+    fun changed() {
+        lastPoll=0L
+        lastEnergyPoll=0L
+        for(i in states.indices) {
+            states[i]=JSONObject().put("configured",false)
+            solarDays[i]=null
+        }
+        updated()
+    }
     fun poll(now:Long,wifiNetwork:Network?) {
         if(!hasInverters()) {
             if(now-lastPoll>20000L) {lastPoll=now;updated()}
             return
         }
+        pollSolarDay(now,wifiNetwork)
         if(busy || (lastPoll>0L && now-lastPoll<8000L))return
         lastPoll=now
         val configs=(1..3).filter {configured(it)}.map { slot ->
@@ -82,11 +112,26 @@ class VoltronicFleet(
                                 "Wi-Fi local requis · VPN Voltronic non relayé"
                                 else "Lecteur à associer")
                     else -> try {
-                        mapTelemetry(c.slot,VoltronicReadOnlyClient.telemetry(c.host,c.code,c.port,wifiNetwork))
+                        val raw=VoltronicReadOnlyClient.telemetry(
+                            c.host,c.code,c.port,wifiNetwork)
+                        if(raw.optBoolean("available") && raw.optJSONObject("values")!=null)
+                            mapTelemetry(c.slot,raw)
+                        else JSONObject(prior.toString()).put("configured",true)
+                            .put("slot",c.slot).put("fresh",false)
+                            .put("transportReachable",true)
+                            .put("httpConsecutiveErrors",0)
+                            .put("qpigsAgeMs",raw.optLong("age_ms",-1L))
+                            .put("serialTimeouts",raw.optLong("timeouts",0L))
+                            .put("serialNoRxTimeouts",raw.optLong("no_rx_timeouts",0L))
+                            .put("serialCrcRejects",raw.optLong("crc_rejects",0L))
+                            .put("detail","ESP32 joignable · QPIGS en retard")
                     } catch(_:Exception) {
                         JSONObject(prior.toString()).put("configured",true)
                             .put("slot",c.slot).put("fresh",false)
-                            .put("detail","Liaison indisponible · dernière lecture conservée")
+                            .put("transportReachable",false)
+                            .put("httpConsecutiveErrors",
+                                 prior.optInt("httpConsecutiveErrors",0)+1)
+                            .put("detail","HTTP ESP32 inaccessible · dernières valeurs conservées")
                     }
                 }
                 results[c.slot-1]=next
@@ -100,6 +145,46 @@ class VoltronicFleet(
     }
     private data class Config(val slot:Int,val kind:String,val host:String,
                               val port:Int,val code:String)
+
+    private fun pollSolarDay(now:Long,network:Network?) {
+        if(network==null || energyBusy ||
+            (lastEnergyPoll>0L && now-lastEnergyPoll<600000L))return
+        val configs=(1..3).filter {configured(it)}.mapNotNull { slot ->
+            val type=if(slot==1)prefs.getString("inverter_probe_type","voltronic")
+                else "voltronic"
+            if(type!="voltronic")return@mapNotNull null
+            val host=if(slot==1)prefs.getString("inverter_probe_ip","") ?: ""
+                else prefs.getString("inverter_"+slot+"_ip","") ?: ""
+            val port=if(slot==1)prefs.getInt("inverter_probe_port",18081)
+                else prefs.getInt("inverter_"+slot+"_port",18081)
+            val code=readCode(if(slot==1)"premium_voltronic_code_cipher"
+                else "premium_voltronic_"+slot+"_code_cipher")
+            if(!SunSpecReadOnly.isPrivateIPv4(host) || port !in 1..65535 ||
+                code.length !in 8..32) null else Config(slot,"voltronic",host,port,code)
+        }
+        if(configs.isEmpty())return
+        lastEnergyPoll=now
+        energyBusy=true
+        energyWorker.execute {
+            val solar=mutableMapOf<Int,Double>()
+            for(config in configs) {
+                try {
+                    val obj=VoltronicReadOnlyClient.details(
+                        config.host,config.code,config.port,network)
+                    val wh=obj.optJSONObject("energy_wh")?.optJSONObject("pv")
+                        ?.optDouble("day_utc",Double.NaN)
+                    if(wh!=null && wh.isFinite() && wh>=0.0) solar[config.slot]=wh/1000.0
+                } catch(_:Exception) { /* Optional count: telemetry is independent. */ }
+            }
+            mainHandler.post {
+                val date=LocalDate.now(ZoneOffset.UTC).toString()
+                val stamp=SystemClock.elapsedRealtime()
+                for((slot,kwh) in solar)solarDays[slot-1]=SolarDay(date,kwh,stamp)
+                energyBusy=false
+                updated()
+            }
+        }
+    }
     private fun mapTelemetry(slot:Int,raw:JSONObject):JSONObject {
         val out=JSONObject().put("configured",true).put("slot",slot)
             .put("name","Voltronic INV$slot")
@@ -157,14 +242,13 @@ class VoltronicFleet(
             out.put("gridDetail","Puissance native, sens non vérifié")
         }
         out.put("gridDirectionVerified",false)
-        val energy=raw.optJSONObject("energy_wh")
-        for((s,k) in listOf("pv" to "pvDayKwh","load" to "loadDayKwh")) {
-            val group=energy?.optJSONObject(s)
-            if(group!=null && group.has("day_utc") && !group.isNull("day_utc"))
-                group.optDouble("day_utc",Double.NaN)
-                    .takeIf {it.isFinite()&&it>=0.0}?.let {out.put(k,it/1000.0)}
-        }
+        // /telemetry has no energy_wh; only the optional /details PV counter is used.
         out.put("fresh",true).put("sampleAtMs",SystemClock.elapsedRealtime())
+            .put("qpigsAgeMs",age).put("transportReachable",true)
+            .put("httpConsecutiveErrors",0)
+            .put("serialTimeouts",raw.optLong("timeouts",0L))
+            .put("serialNoRxTimeouts",raw.optLong("no_rx_timeouts",0L))
+            .put("serialCrcRejects",raw.optLong("crc_rejects",0L))
             .put("detail","Lecture fraîche")
         return out
     }

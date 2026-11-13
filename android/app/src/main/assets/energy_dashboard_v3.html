@@ -16,7 +16,7 @@ button{font:inherit;cursor:pointer}
 .nav,.styles{display:flex;gap:6px;margin:4px 0 12px}
 .nav button,.styles button{flex:1;min-width:0;padding:9px 4px;background:#133242;border:1px solid #326173;color:#b3d0df;border-radius:9px;font-weight:bold}
 .nav button.active,.styles button.active{background:#205660;color:#e6fff6;border-color:#5ddabd}
-.nav button{font-size:11px}
+.nav button{font-size:clamp(9px,2.6vw,11px);padding:10px 1px;overflow-wrap:anywhere}
 .note{padding:8px;background:#3c3018;border:1px solid #77633c;color:#ffe0a3;border-radius:8px;font-size:10px;margin:8px 0}
 .panel{background:linear-gradient(135deg,#113546,#0a1e2b);border:1px solid #315b6b;border-radius:14px;padding:12px;margin:9px 0}
 .panel h3{margin:0 0 10px;font-size:14px}.muted{color:var(--muted)}
@@ -83,7 +83,7 @@ button{font:inherit;cursor:pointer}
 </style></head>
 <body><main class="wrap">
 <header class="header"><div><div class="brand">SMART <b>ENERGY</b></div><div class="sub">Onduleurs Voltronic · Énergie en lecture seule</div></div><span class="status" id="state">En attente</span></header>
-<nav class="nav"><button type="button" class="active" id="navHome">⌂ Accueil</button><button type="button" id="navInv">▣ Onduleurs</button><button type="button" id="navJk">▣ Batteries</button><button type="button" id="navSettings">⚙ Réglages</button></nav>
+<nav class="nav"><button type="button" class="active" id="navHome">⌂ Accueil</button><button type="button" id="navInv">▣ Onduleurs</button><button type="button" id="navJk">▣ Batteries</button><button type="button" id="navConfig">⚙ Config</button><button type="button" id="navSettings">Réglages</button></nav>
 <div id="pageHome">
 <div class="styles"><button type="button" id="modernBtn" class="active">Moderne</button><button type="button" id="sunBtn">Sunsynk</button></div>
 <div class="panel" id="setupHelp" style="display:none;border-color:#58b79c">
@@ -97,28 +97,25 @@ button{font:inherit;cursor:pointer}
 <path class="solar" d="M125 105 Q182 134 171 230"/><path class="house" d="M184 248 Q228 219 298 210"/><path class="store" d="M196 276 Q254 310 303 355"/><path class="utility" d="M66 356 Q104 330 144 274"/>
 </svg>
 <div class="photoVal pv"><span class="cap">☀ Solaire</span><strong id="mPv">— W</strong><span class="day" id="mPvDay">Jour : —</span></div>
-<div class="photoVal home"><span class="cap">⌂ Maison</span><strong id="mLoad">— W</strong><span class="day" id="mLoadDay">Jour : —</span></div>
+<div class="photoVal home"><span class="cap">⌂ Maison</span><strong id="mLoad">— W</strong></div>
 <div class="photoVal inv"><span class="cap">⚡ Onduleurs</span><strong id="mInv">—</strong></div>
-<div class="photoVal grid"><span class="cap">♧ Réseau</span><strong id="mGrid">— W</strong><span class="day" id="mGridDay">Achat jour : —</span></div>
-<div class="photoVal bat"><span class="cap">▣ Batteries</span><strong id="mSoc">— %</strong><span class="day" id="mBat">Charge jour : —</span></div>
+<div class="photoVal grid"><span class="cap">♧ Réseau</span><strong id="mGrid">— W</strong></div>
+<div class="photoVal bat"><span class="cap">▣ Batteries</span><strong id="mSoc">— %</strong></div>
 </section>
-<div class="daily"><div class="item"><small>☀ PV jour (UTC)</small><b id="mDailyPv">— kWh</b></div><div class="item"><small>⌂ Maison jour (UTC)</small><b id="mDailyLoad">— kWh</b></div><div class="item"><small>▣ Charge / décharge jour</small><b>— / — kWh</b></div><div class="item"><small>♧ Import / export jour</small><b>— / — kWh</b></div></div>
+<div class="note">Seuls les compteurs journaliers transmis et vérifiés sont affichés. Pas de calcul pendant les périodes sans mesure.</div>
 </div>
 <div id="sun" class="view">
 <section class="sun">
 <div class="sun-title"><b>☀ MPPT INDIVIDUELS</b><div><span class="total" id="sunPv">— W</span><div class="sun-small" id="sunPvDay">PV jour UTC : —</div></div></div>
 <div class="mppt-area" id="mpptArea"><div class="mppt-grid" id="mppts"></div><svg class="mppt-wire-svg" id="mpptWires" aria-hidden="true"></svg></div>
 <div class="flow-main">
-<div class="node grid"><span>⚡ Réseau</span><strong id="sunGrid">— W</strong><span id="sunGridInfo">Sens non vérifié</span><span class="sun-small">Import jour : —</span></div>
+<div class="node grid"><span>⚡ Réseau</span><strong id="sunGrid">— W</strong><span id="sunGridInfo">Sens non vérifié</span></div>
 <div class="center"><i class="join left"></i><div class="inv">⇄</div><i class="join right"></i><div class="subtitle" id="sunInv">Onduleur</div><div class="sun-small" id="sunAc">AC : —</div></div>
-<div class="node home"><span>⌂ Maison</span><strong id="sunHome">— W</strong><span class="sun-small" id="sunHomeDay">Conso jour : —</span></div>
+<div class="node home"><span>⌂ Maison</span><strong id="sunHome">— W</strong></div>
 </div>
 <div class="battery-branch"></div>
-<div class="battery-node"><div class="battery-icon"><div class="fill"></div></div><div><strong id="sunSoc">— %</strong><div class="small" id="sunBattery">Tension : — · Courant : —</div><div class="small">Charge jour : — · Décharge jour : —</div></div></div>
-<div class="grid-home-summary">
-<div class="stat"><small>☀ Production jour UTC</small><b id="sunPvDaySmall">— kWh</b></div>
-<div class="stat"><small>⌂ Consommation jour UTC</small><b id="sunLoadDaySmall">— kWh</b></div>
-</div>
+<div class="battery-node"><div class="battery-icon"><div class="fill"></div></div><div><strong id="sunSoc">— %</strong><div class="small" id="sunBattery">Tension : — · Courant : —</div></div></div>
+
 </section></div>
 <div class="note" id="qualityNote">Valeurs indisponibles = « — ». Une puissance réseau native n'indique pas à elle seule un import EDF.</div>
 </div>
@@ -145,6 +142,7 @@ function setStyle(s,notify){style=s==='sunsynk'?'sunsynk':'modern';el('modern').
 el('navHome').onclick=function(){setPage('home')};
 el('navInv').onclick=function(){setPage('inverters')};
 el('navJk').onclick=function(){appNav('batteries')};
+el('navConfig').onclick=function(){appNav('configuration')};
 el('navSettings').onclick=function(){appNav('settings')};
 el('configureInverter').onclick=function(){appNav('configuration')};
 el('modernBtn').onclick=function(){setStyle('modern',true)};
@@ -154,10 +152,15 @@ function drawMppts(list){var host=el('mppts');host.replaceChildren();list.forEac
 if(!list.length){var none=document.createElement('div');none.className='mppt-empty';none.style.gridColumn='1/-1';none.textContent='MPPT indisponibles : aucune valeur mesurée fraîche';host.append(none)}requestAnimationFrame(wires)}
 function wires(){if(style!=='sunsynk'||active!=='home')return;var area=el('mpptArea'),box=el('mppts'),svg=el('mpptWires'),nodes=Array.from(box.querySelectorAll('.mppt-box'));var a=area.getBoundingClientRect();var cx=a.width/2,bus=a.height-23;svg.setAttribute('viewBox','0 0 '+a.width+' '+a.height);svg.replaceChildren();if(!nodes.length)return;function addPath(d){var p=document.createElementNS('http://www.w3.org/2000/svg','path');p.setAttribute('d',d);svg.append(p)};nodes.forEach(function(node){var r=node.getBoundingClientRect();var x=r.left-a.left+r.width/2,y=r.bottom-a.top;addPath('M '+x+' '+y+' V '+bus+' H '+cx)});addPath('M '+cx+' '+bus+' V '+(a.height-1));var dot=document.createElementNS('http://www.w3.org/2000/svg','circle');dot.setAttribute('cx',cx);dot.setAttribute('cy',bus);dot.setAttribute('r',3.6);svg.append(dot)}
 window.addEventListener('resize',function(){requestAnimationFrame(wires)});
-function renderInverters(){var root=el('tabs'),details=el('inverterDetails'),items=data.inverters||[];root.replaceChildren();details.replaceChildren();if(!items.length){row(details,'Aucun onduleur','Ajouter depuis Configuration');return}if(selected>=items.length)selected=0;items.forEach(function(inv,i){var b=document.createElement('button');b.className=i===selected?'active':'';b.textContent='INV'+inv.slot;b.onclick=function(){selected=i;renderInverters()};root.append(b)});var v=items[selected];var state=v.fresh?'Lecture fraîche':(n(v.sampleAtMs)!==null?'Mesure ancienne':'Hors ligne');row(details,'État',state);row(details,'Puissance solaire',fmt(v.pvPowerW,'W'));row(details,'Consommation AC',fmt(v.loadW,'W'));row(details,'Tension AC',fmt(v.outputVoltageV,'V',1));row(details,'Courant AC',fmt(v.outputCurrentA,'A',1));row(details,'Fréquence',fmt(v.outputHz,'Hz',2));row(details,'PV jour UTC',fmt(v.pvDayKwh,'kWh',2));row(details,'Charge jour UTC',fmt(v.loadDayKwh,'kWh',2));row(details,'Batterie (onduleur)',fmt(v.batteryVoltageV,'V',1)+' · '+fmt(v.batteryCurrentA,'A',1));row(details,'Mode',v.operationMode||'—');row(details,'Dernier diagnostic',v.detail||'—');(v.pvChannels||[]).forEach(function(c){row(details,'MPPT '+c.index+' · puissance',fmt(c.powerW,'W')+(c.derived?' (estimée)':''));row(details,'MPPT '+c.index+' · tension / courant',fmt(c.voltageV,'V',1)+' / '+fmt(c.currentA,'A',1))})}
-function render(){var items=data.inverters||[],live=fresh(),pvs=channels(live),p=sum(live,'pvPowerW'),l=sum(live,'loadW'),pvDay=sum(live,'pvDayKwh'),loadDay=sum(live,'loadDayKwh');var jk=data.jk||{},soc=n(jk.soc),bvol=null,bcur=null,batLabel='';if((jk.online||0)>0){batLabel='JK BMS'}else{var bat=live.find(function(x){return n(x.batteryVoltageV)!==null});if(bat){bvol=n(bat.batteryVoltageV);bcur=n(bat.batteryCurrentA);soc=n(bat.inverterBatterySoc);batLabel='Onduleur (estimation SOC)'}}var grid=null,gridInfo='Sens non vérifié';if(live.length===1){grid=n(live[0].gridPowerW);gridInfo=grid===null?'Mesure indisponible':'Puissance native, sens non validé'}else if(live.length>1){gridInfo='Multi-onduleurs : total réseau non mesurable'}
+function renderInverters(){var root=el('tabs'),details=el('inverterDetails'),items=data.inverters||[];root.replaceChildren();details.replaceChildren();if(!items.length){row(details,'Aucun onduleur','Ajouter depuis Configuration');return}if(selected>=items.length)selected=0;items.forEach(function(inv,i){var b=document.createElement('button');b.className=i===selected?'active':'';b.textContent='INV'+inv.slot;b.onclick=function(){selected=i;renderInverters()};root.append(b)});var v=items[selected];var state=v.fresh?'Lecture fraîche':v.transportReachable===true?'ESP32 joignable · QPIGS en retard':n(v.sampleAtMs)!==null?'ESP32 inaccessible · dernière mesure conservée':'Lecture indisponible';row(details,'État',state);row(details,'Puissance solaire',fmt(v.pvPowerW,'W'));row(details,'Consommation AC',fmt(v.loadW,'W'));row(details,'Tension AC',fmt(v.outputVoltageV,'V',1));row(details,'Courant AC',fmt(v.outputCurrentA,'A',1));row(details,'Fréquence',fmt(v.outputHz,'Hz',2));row(details,'PV jour UTC',fmt(v.pvDayKwh,'kWh',2));row(details,'Batterie (onduleur)',fmt(v.batteryVoltageV,'V',1)+' · '+fmt(v.batteryCurrentA,'A',1));row(details,'Mode',v.operationMode||'—');row(details,'Dernier diagnostic',v.detail||'—');
+if(n(v.qpigsAgeMs)!==null)row(details,'Âge QPIGS',fmt(v.qpigsAgeMs/1000,'s',1));
+if(n(v.serialTimeouts)!==null)row(details,'Timeouts série cumulés',String(v.serialTimeouts));
+if(n(v.serialNoRxTimeouts)!==null)row(details,'Sans retour série',String(v.serialNoRxTimeouts));
+if(n(v.serialCrcRejects)!==null)row(details,'Rejets CRC cumulés',String(v.serialCrcRejects));
+if(n(v.httpConsecutiveErrors)!==null)row(details,'Échecs HTTP consécutifs',String(v.httpConsecutiveErrors));(v.pvChannels||[]).forEach(function(c){row(details,'MPPT '+c.index+' · puissance',fmt(c.powerW,'W')+(c.derived?' (estimée)':''));row(details,'MPPT '+c.index+' · tension / courant',fmt(c.voltageV,'V',1)+' / '+fmt(c.currentA,'A',1))})}
+function render(){var items=data.inverters||[],live=fresh(),pvs=channels(live),p=sum(live,'pvPowerW'),l=sum(live,'loadW'),pvDay=(live.length===items.length&&live.length>0&&live.every(function(x){return n(x.pvDayKwh)!==null}))?sum(live,'pvDayKwh'):null,loadDay=null;var jk=data.jk||{},soc=n(jk.soc),bvol=null,bcur=null,batLabel='';if((jk.online||0)>0){batLabel='JK BMS'}else{var bat=live.find(function(x){return n(x.batteryVoltageV)!==null});if(bat){bvol=n(bat.batteryVoltageV);bcur=n(bat.batteryCurrentA);soc=n(bat.inverterBatterySoc);batLabel='Onduleur (estimation SOC)'}}var grid=null,gridInfo='Sens non vérifié';if(live.length===1){grid=n(live[0].gridPowerW);gridInfo=grid===null?'Mesure indisponible':'Puissance native, sens non validé'}else if(live.length>1){gridInfo='Multi-onduleurs : total réseau non mesurable'}
 el('setupHelp').style.display=items.length===0?'':'none';
-var stale=items.length>0&&live.length===0;el('state').textContent=items.length===0?'○ À configurer':live.length===items.length&&live.length>0?'● Connecté':stale?'● Données anciennes / hors ligne':'◷ Partiel';el('state').className='status'+(stale?' old':live.length!==items.length?' off':'');el('hero').classList.toggle('paused',stale);txt('mPv',fmt(p,'W'));txt('mLoad',fmt(l,'W'));txt('mGrid',fmt(grid,'W'));txt('mSoc',fmt(soc,'%'));txt('mPvDay','Jour UTC : '+fmt(pvDay,'kWh',2));txt('mLoadDay','Jour UTC : '+fmt(loadDay,'kWh',2));txt('mGridDay','Import jour : —');txt('mBat','Charge jour : —');txt('mInv',items.length+' / 3 INV');txt('mDailyPv',fmt(pvDay,'kWh',2));txt('mDailyLoad',fmt(loadDay,'kWh',2));txt('sunPv',fmt(p,'W'));txt('sunPvDay','Production jour UTC : '+fmt(pvDay,'kWh',2));txt('sunPvDaySmall',fmt(pvDay,'kWh',2));txt('sunLoadDaySmall',fmt(loadDay,'kWh',2));txt('sunHome',fmt(l,'W'));txt('sunHomeDay','Consommation jour UTC : '+fmt(loadDay,'kWh',2));txt('sunGrid',fmt(grid,'W'));txt('sunGridInfo',gridInfo);txt('sunInv',live.length+'/'+items.length+' onduleur(s)');txt('sunAc',live.length===1?fmt(live[0].outputVoltageV,'V',1)+' · '+fmt(live[0].outputHz,'Hz',2):'Voir onglets Onduleurs');txt('sunSoc',fmt(soc,'%'));txt('sunBattery',(batLabel||'Batterie sans mesure')+' · '+(bvol===null?'—':fmt(bvol,'V',1))+(bcur===null?'':' · '+fmt(bcur,'A',1)));drawMppts(pvs);
+var stale=items.length>0&&live.length===0,reachable=items.some(function(v){return v.transportReachable===true});el('state').textContent=items.length===0?'○ À configurer':live.length===items.length&&live.length>0?'● Connecté':stale&&reachable?'◷ QPIGS en retard':stale?'○ Liaison indisponible':'◷ Partiel';el('state').className='status'+(stale?' old':live.length!==items.length?' off':'');el('hero').classList.toggle('paused',stale);txt('mPv',fmt(p,'W'));txt('mLoad',fmt(l,'W'));txt('mGrid',fmt(grid,'W'));txt('mSoc',fmt(soc,'%'));txt('mPvDay','PV jour UTC : '+fmt(pvDay,'kWh',2));el('mPvDay').style.display=pvDay===null?'none':'';txt('mInv',items.length+' / 3 INV');txt('sunPv',fmt(p,'W'));txt('sunPvDay','PV jour UTC : '+fmt(pvDay,'kWh',2));el('sunPvDay').style.display=pvDay===null?'none':'';txt('sunHome',fmt(l,'W'));txt('sunGrid',fmt(grid,'W'));txt('sunGridInfo',gridInfo);txt('sunInv',live.length+'/'+items.length+' onduleur(s)');txt('sunAc',live.length===1?fmt(live[0].outputVoltageV,'V',1)+' · '+fmt(live[0].outputHz,'Hz',2):'Voir onglets Onduleurs');txt('sunSoc',fmt(soc,'%'));txt('sunBattery',(batLabel||'Batterie sans mesure')+' · '+(bvol===null?'—':fmt(bvol,'V',1))+(bcur===null?'':' · '+fmt(bcur,'A',1)));drawMppts(pvs);
 txt('route',data.route||'Local');txt('count',items.length+' INV · '+pvs.length+' MPPT frais');txt('updated',data.updated||'—');
 txt('qualityNote',items.length===0?'Ajoute un ESP32-S3 Voltronic dans Configuration pour obtenir des mesures. Aucune valeur fictive n’est affichée.':stale?'Les dernières mesures restent consultables dans les onglets Onduleurs, mais ne sont plus prises pour des valeurs en direct.':'Les totaux excluent les onduleurs sans mesure fraîche. Réseau : sens à vérifier, jamais assimilé à un achat EDF. MPPT non détectés non affichés.');
 renderInverters()}

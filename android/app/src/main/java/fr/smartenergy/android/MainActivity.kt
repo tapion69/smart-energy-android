@@ -155,11 +155,13 @@ class MainActivity : Activity() {
     private var lastWarmStartAt=0L
     private val settingsWorker=Executors.newSingleThreadExecutor()
     private val inverterWorker=Executors.newSingleThreadExecutor()
+    // Low-frequency solar-counter reads must not delay live inverter telemetry.
+    private val inverterEnergyWorker=Executors.newSingleThreadExecutor()
     private lateinit var premiumDashboard: PremiumEnergyDashboard
     private lateinit var energyDashboard: EnergyDashboardV3
     // Lazy: no change to JK telemetry, associations, BMS cards or settings.
     private val voltronicFleet by lazy {
-        VoltronicFleet(prefs,::auxiliaryCode,inverterWorker,::voltronicWifiNetwork) {
+        VoltronicFleet(prefs,::auxiliaryCode,inverterWorker,inverterEnergyWorker,::voltronicWifiNetwork) {
             publishPremiumDashboard()
         }
     }
@@ -1068,9 +1070,9 @@ class MainActivity : Activity() {
                     }.show()
             },6)
         }
-        add(inverter,label("Cette première étape vérifie le protocole. "+
-            "L'affichage des mesures dans le tableau de bord sera ajouté "+
-            "après validation du modèle réel.",12f,color=subdued))
+        add(inverter,label("Après association, les mesures Voltronic s'affichent "+
+            "sur Accueil. Les mesures absentes restent indisponibles, sans valeur "+
+            "fictive.",12f,color=subdued))
         add(advanced, label("BLE multi-batteries, OTA et accès distant : fonctions en développement.", 12f, color = subdued), 12)
 
         add(settingsPage,label("Réglages de l'application",25f,true),16)
@@ -3575,6 +3577,7 @@ class MainActivity : Activity() {
         readerWarmWorker.shutdownNow()
         settingsWorker.shutdownNow()
         inverterWorker.shutdownNow()
+        inverterEnergyWorker.shutdownNow()
         super.onDestroy()
     }
 }
