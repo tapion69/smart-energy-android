@@ -170,6 +170,8 @@ class MainActivity : Activity() {
             publishPremiumDashboard()
         }
     }
+    private val voltronicProfiles by lazy { VoltronicProfileStore(prefs) }
+    private lateinit var voltronicProfileFeedback:TextView
     // Bound to a physical Wi-Fi transport, not to an active Tailscale tunnel.
     // Voltronic is read-only and must never expose its setup code to a VPN proxy.
     private fun voltronicWifiNetwork():android.net.Network? =
@@ -1133,6 +1135,44 @@ class MainActivity : Activity() {
         add(advanced, label("BLE multi-batteries, OTA et accès distant : fonctions en développement.", 12f, color = subdued), 12)
 
         add(settingsPage,label("Réglages de l'application",25f,true),16)
+        val voltProfiles=section(settingsPage,
+            "Profils Voltronic · apprentissage et sauvegarde",true)
+        add(voltProfiles,label("L'application apprend les capacités et les "+
+            "paramètres QPIRI/QDOP réellement lus pour INV1 à INV3. "+
+            "Les profils restent sur ce téléphone et ne modifient "+
+            "jamais un paramètre de l'onduleur.",12f,color=subdued))
+        add(voltProfiles,action("Exporter mes profils Voltronic en JSON") {
+            try {
+                startActivityForResult(Intent(Intent.ACTION_CREATE_DOCUMENT).apply {
+                    addCategory(Intent.CATEGORY_OPENABLE)
+                    type="application/json"
+                    putExtra(Intent.EXTRA_TITLE,
+                        "smart-energy-voltronic-profils.json")
+                },711)
+            } catch(ex:Exception) {
+                voltronicProfileFeedback.text="Export impossible : "+
+                    ex.javaClass.simpleName
+            }
+        },8)
+        add(voltProfiles,action("Importer un profil JSON (sans application)") {
+            try {
+                startActivityForResult(Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
+                    addCategory(Intent.CATEGORY_OPENABLE)
+                    type="application/json"
+                },712)
+            } catch(ex:Exception) {
+                voltronicProfileFeedback.text="Import impossible : "+
+                    ex.javaClass.simpleName
+            }
+        },6)
+        voltronicProfileFeedback=label(
+            "Profils liés aux modèles détectés. Export sans IP, codes, "+
+            "numéros de série ni données Wi-Fi.",12f,false,subdued)
+        add(voltProfiles,voltronicProfileFeedback,8)
+        add(voltProfiles,label(
+            "Les paramètres restaurés servent uniquement de référence. "+
+            "Aucune écriture automatique. Les commandes ne seront apprises "+
+            "qu'après vérification d'une vraie relecture QPIRI/QDOP.",12f,color=subdued))
         val energyStyle=section(settingsPage,"Affichage du dashboard énergie")
         add(energyStyle,label("Le tableau de bord JK seul reste strictement identique "+
             "à celui de la version précédente.",12f,color=subdued))
@@ -3589,6 +3629,10 @@ class MainActivity : Activity() {
             else -> "Hors ligne"
         }
         premiumInverter=voltronicFleet.snapshotFor(1)
+        // Only native, fresh GET snapshots can update the persisted profile.
+        // No backup import is ever sent to the inverter.
+        for(slot in 1..3)
+            voltronicProfiles.observe(slot,voltronicFleet.snapshotFor(slot))
         val payload=JSONObject()
             .put("jk",premiumJk)
             .put("inverter",premiumInverter)
@@ -3613,6 +3657,75 @@ class MainActivity : Activity() {
 
     private fun pollPremiumVoltronic(now:Long) {
         voltronicFleet.poll(now,voltronicWifiNetwork())
+    }
+
+    @Deprecated("Legacy Activity result for a local SAF JSON backup")
+    override fun onActivityResult(requestCode:Int,resultCode:Int,data:Intent?) {
+        super.onActivityResult(requestCode,resultCode,data)
+        if(resultCode!=RESULT_OK || requestCode !in listOf(711,712))return
+        val uri=data?.data ?: return
+        if(requestCode==711) {
+            val json=voltronicProfiles.exportedJson()
+            settingsWorker.execute {
+                val message=try {
+                    val stream=contentResolver.openOutputStream(uri,"w")
+                        ?: throw IllegalStateException("Destination indisponible")
+                    stream.bufferedWriter(Charsets.UTF_8).use {it.write(json)}
+                    "Profils Voltronic exportés. Aucun secret inclus."
+                } catch(ex:Exception) {
+                    "Export échoué : "+ex.javaClass.simpleName
+                }
+                runOnUiThread {
+                    if(::voltronicProfileFeedback.isInitialized)
+                        voltronicProfileFeedback.text=message
+                }
+            }
+        } else {
+            settingsWorker.execute {
+                try {
+                    val stream=contentResolver.openInputStream(uri)
+                        ?: throw IllegalStateException("Fichier inaccessible")
+                    // Bounded import: no untrusted large input files or keys.
+                    val bytes=stream.use { input ->
+                        val buffer=java.io.ByteArrayOutputStream()
+                        val chunk=ByteArray(2048)
+                        while(true) {
+                            val n=input.read(chunk)
+                            if(n<0)break
+                            buffer.write(chunk,0,n)
+                            require(buffer.size()<=65536){"Fichier trop volumineux"}
+                        }
+                        buffer.toByteArray()
+                    }
+                    val raw=String(bytes,Charsets.UTF_8)
+                    val (count,preview)=voltronicProfiles.previewImport(raw)
+                    runOnUiThread {
+                        AlertDialog.Builder(this)
+                            .setTitle("Importer $count profil(s) ?")
+                            .setMessage(preview+"\n\n"+
+                                "Sauvegarde locale uniquement. Aucun réglage "+
+                                "ne sera envoyé aux onduleurs.")
+                            .setNegativeButton("Annuler",null)
+                            .setPositiveButton("Importer") { _,_ ->
+                                val message=try {
+                                    val imported=voltronicProfiles.importApproved(raw)
+                                    "$imported profil(s) importé(s), sans modification matérielle."
+                                }catch(ex:Exception) {
+                                    "Import refusé : "+(ex.message?:"données invalides")
+                                }
+                                if(::voltronicProfileFeedback.isInitialized)
+                                    voltronicProfileFeedback.text=message
+                            }.show()
+                    }
+                } catch(ex:Exception) {
+                    runOnUiThread {
+                        if(::voltronicProfileFeedback.isInitialized)
+                            voltronicProfileFeedback.text="Import refusé : "+
+                                (ex.message?:"fichier invalide")
+                    }
+                }
+            }
+        }
     }
 
     override fun onResume() {
