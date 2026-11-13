@@ -653,7 +653,7 @@ static void ota_restart(void *unused){
 }
 static esp_err_t ota_image_handler(httpd_req_t *req){
     if(!authorized(req))return deny(req);
-    if(strcmp(req->method==HTTP_POST?"POST":"OTHER","POST")!=0)
+    if(req->method!=HTTP_POST)
         return httpd_resp_send_err(req,HTTPD_405_METHOD_NOT_ALLOWED,"post only");
     char approved[8]={0};
     if(httpd_req_get_hdr_value_str(req,"X-OTA-Confirmed",
@@ -661,7 +661,7 @@ static esp_err_t ota_image_handler(httpd_req_t *req){
         return httpd_resp_send_err(req,HTTPD_403_FORBIDDEN,"confirmation required");
     const esp_partition_t *partition=ota_destination();
     if(!partition)
-        return httpd_resp_send_err(req,HTTPD_409_CONFLICT,
+        return httpd_resp_send_err(req,HTTPD_400_BAD_REQUEST,
             "one-time USB OTA partition migration required");
     if(req->content_len<16384 || req->content_len>(int)partition->size)
         return httpd_resp_send_err(req,HTTPD_400_BAD_REQUEST,"invalid image size");
@@ -700,12 +700,12 @@ static esp_err_t ota_image_handler(httpd_req_t *req){
     good=good && remaining==0 && diff==0;
     if(!good){
         esp_ota_abort(handle);
-        return httpd_resp_send_err(req,HTTPD_422_UNPROCESSABLE_ENTITY,
+        return httpd_resp_send_err(req,HTTPD_400_BAD_REQUEST,
             "incomplete or SHA256 mismatched firmware; current firmware retained");
     }
     esp_err_t err=esp_ota_end(handle);
     if(err!=ESP_OK)
-        return httpd_resp_send_err(req,HTTPD_422_UNPROCESSABLE_ENTITY,
+        return httpd_resp_send_err(req,HTTPD_400_BAD_REQUEST,
             "invalid OTA application image");
     err=esp_ota_set_boot_partition(partition);
     if(err!=ESP_OK)
