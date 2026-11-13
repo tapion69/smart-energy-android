@@ -69,6 +69,21 @@ static void test_qpigs_qpigs2(void) {
     n=response("(230.1 50.0 230.0 50.0 0120 0110 999 365 52.1 010 063 032 0.5 357.0 52.2 006",f);
     assert(!vt_parse_qpigs(f,n,&m));
 }
+static void test_identification_read_only(void) {
+    uint8_t frame[512]={0};
+    char data[96]={0};
+    size_t n=response("(TEST-AXPERT-S3",frame);
+    assert(vt_payload_copy(frame,n,data,sizeof(data)));
+    assert(strcmp(data,"TEST-AXPERT-S3")==0);
+    frame[n-2]^=0x01;
+    assert(!vt_payload_copy(frame,n,data,sizeof(data)));
+    uint8_t command[VT_MAX_COMMAND];
+    assert(vt_make_command("QMN",command)>0);
+    assert(vt_make_command("QID",command)>0);
+    assert(vt_make_command("QVFW",command)>0);
+    assert(vt_make_command("QVFW3",command)>0);
+    assert(vt_make_command("PBCV55.2",command)==0);
+}
 static void test_numeric_energy_and_warning(void) {
     uint8_t f[512]={0};double v=0;
     size_t n=response("(10411700",f);
@@ -89,6 +104,7 @@ int main(void) {
     test_streaming_frames();
     test_qpigs_qpigs2();
     test_numeric_energy_and_warning();
-    puts("Voltronic flow-port read-only serial protocol: PASS");
+    test_identification_read_only();
+    puts("Voltronic complete native read-only serial protocol: PASS");
     return 0;
 }

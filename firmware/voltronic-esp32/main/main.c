@@ -30,7 +30,7 @@
 #include "cJSON.h"
 #include "voltronic_protocol.h"
 
-#define VT_VERSION "0.2.1-dev-httpdiag-read-only"
+#define VT_VERSION "0.3.0-dev-complete-native-read-only"
 #define VT_UART UART_NUM_1
 #define VT_TX GPIO_NUM_17
 #define VT_RX GPIO_NUM_16
@@ -51,11 +51,17 @@ typedef struct {
     bool have_qpigs, have_qpigs2, have_qpiri, have_qdop, have_qpiws;
     bool have_pv_energy_total, have_load_energy_total;
     double pv_energy_total_raw_wh, load_energy_total_raw_wh;
-    double energy_raw_wh[2][4]; /* solar/load x total/day/month/year */
+    double energy_raw_wh[2][4]; /* native solar/load x total/day/month/year */
     bool energy_valid[2][4];
+    char energy_query_keys[2][4][9]; /* YYYYMMDD, YYYYMM, YYYY; blank for totals */
     double qpiri_fields[48], qdop_fields[48];
     uint8_t qpiri_count, qdop_count;
     char qmod, warning_bits[128];
+    /* QMN/QID/QVFW/QVFW3 are CRC-validated, stored only in RAM and served
+       solely on the authenticated local read-only details endpoint. */
+    char inverter_model[96], inverter_serial[96];
+    char inverter_fw_main[96], inverter_fw_remote[96];
+    uint32_t last_qmn_ms,last_qid_ms,last_qvfw_ms,last_qvfw3_ms;
     uint32_t last_qpigs_ms,last_qpigs2_ms,last_qmod_ms,last_qpiri_ms;
     uint32_t last_qdop_ms,last_qpiws_ms,last_valid_ms;
     uint32_t q2_disabled_until_ms, polls_ok, crc_rejects, timeouts, naks;
@@ -347,7 +353,8 @@ static esp_err_t info_handler(httpd_req_t *r){
     cJSON_AddStringToObject(root,"chip","esp32s3");
     cJSON_AddNumberToObject(root,"serial_baud",VT_BAUD);
     cJSON_AddStringToObject(root,"transport","uart1-rs232-max3232");
-    cJSON_AddStringToObject(root,"capabilities","QPIGS QPIGS2 QMOD QPIRI");
+    cJSON_AddStringToObject(root,"capabilities",
+        "QPIGS QPIGS2 QMOD QPIRI QDOP QPIWS QMN QID QVFW QVFW3 QET QEY QEM QED QLT QLY QLM QLD");
     return send_json(r,root);
 }
 static esp_err_t telemetry_handler(httpd_req_t *r){
@@ -443,6 +450,17 @@ static esp_err_t details_handler(httpd_req_t *r){
     cJSON *root=base_json("voltronic-details-read-only");
     cJSON_AddStringToObject(root,"operation_mode",
         snap.qmod ? (char[]){snap.qmod,0} : "");
+    if(snap.qmod) cJSON_AddNumberToObject(root,"operation_mode_age_ms",
+        (uint32_t)(esp_log_timestamp()-snap.last_qmod_ms));
+    cJSON *identity=cJSON_AddObjectToObject(root,"identification");
+    if(snap.inverter_model[0])
+        cJSON_AddStringToObject(identity,"model",snap.inverter_model);
+    if(snap.inverter_serial[0])
+        cJSON_AddStringToObject(identity,"serial",snap.inverter_serial);
+    if(snap.inverter_fw_main[0])
+        cJSON_AddStringToObject(identity,"firmware_main",snap.inverter_fw_main);
+    if(snap.inverter_fw_remote[0])
+        cJSON_AddStringToObject(identity,"firmware_remote",snap.inverter_fw_remote);
     cJSON_AddBoolToObject(root,"qpigs2_available",snap.have_qpigs2);
     cJSON_AddBoolToObject(root,"qpiri_available",snap.have_qpiri);
     cJSON_AddBoolToObject(root,"qdop_available",snap.have_qdop);
@@ -466,6 +484,13 @@ static esp_err_t details_handler(httpd_req_t *r){
             if(snap.qpiri_count>(uint8_t)mapping[j].index)
                 cJSON_AddNumberToObject(q,mapping[j].name,
                     snap.qpiri_fields[mapping[j].index]);
+        /* Preserve all native numeric fields in protocol order (0-based).
+           Unknown positions remain anonymous; no model-dependent guessing. */
+        cJSON *raw=cJSON_AddArrayToObject(q,"raw_fields");
+        for(size_t j=0;j<snap.qpiri_count;j++)
+            cJSON_AddItemToArray(raw,cJSON_CreateNumber(snap.qpiri_fields[j]));
+        cJSON_AddNumberToObject(q,"age_ms",
+            (uint32_t)(esp_log_timestamp()-snap.last_qpiri_ms));
     }
     if(snap.have_qdop) {
         cJSON *q=cJSON_AddObjectToObject(params,"qdop");
@@ -477,15 +502,39 @@ static esp_err_t details_handler(httpd_req_t *r){
         for(size_t j=0;j<3;j++)
             if(snap.qdop_count>(uint8_t)(j+8))
                 cJSON_AddNumberToObject(q,keys[j],snap.qdop_fields[j+8]);
+        cJSON *raw=cJSON_AddArrayToObject(q,"raw_fields");
+        for(size_t j=0;j<snap.qdop_count;j++)
+            cJSON_AddItemToArray(raw,cJSON_CreateNumber(snap.qdop_fields[j]));
+        cJSON_AddNumberToObject(q,"age_ms",
+            (uint32_t)(esp_log_timestamp()-snap.last_qdop_ms));
     }
     cJSON *energy=cJSON_AddObjectToObject(root,"energy_wh");
+    cJSON *keys=cJSON_AddObjectToObject(root,"energy_query_keys");
     const char *srcs[]={"pv","load"},*periods[]={"total","day_utc","month_utc","year_utc"};
+    time_t wall=time(NULL);
+    struct tm utc={0};
+    bool clock_valid=wall>=1700000000 && gmtime_r(&wall,&utc)!=NULL;
+    char day[9]={0},month[7]={0},year[5]={0};
+    if(clock_valid) {
+        strftime(day,sizeof(day),"%Y%m%d",&utc);
+        strftime(month,sizeof(month),"%Y%m",&utc);
+        strftime(year,sizeof(year),"%Y",&utc);
+    }
     for(int src=0;src<2;src++) {
         cJSON *values=cJSON_AddObjectToObject(energy,srcs[src]);
-        for(int period=0;period<4;period++)
-            if(snap.energy_valid[src][period])
-                cJSON_AddNumberToObject(values,periods[period],
-                                        snap.energy_raw_wh[src][period]);
+        cJSON *src_keys=cJSON_AddObjectToObject(keys,srcs[src]);
+        for(int period=0;period<4;period++) {
+            if(!snap.energy_valid[src][period])continue;
+            const char *date_key=snap.energy_query_keys[src][period];
+            const char *expected=period==1?day:period==2?month:period==3?year:"";
+            /* A value from yesterday/month/year must never be displayed
+               as today's/month's/year's value after a rollover. */
+            if(period>0 && (!clock_valid||!date_key[0]||
+                            strcmp(date_key,expected)!=0))continue;
+            cJSON_AddNumberToObject(values,periods[period],
+                                    snap.energy_raw_wh[src][period]);
+            if(period>0)cJSON_AddStringToObject(src_keys,periods[period],date_key);
+        }
     }
     cJSON_AddBoolToObject(root,"pv_energy_total_available",snap.have_pv_energy_total);
     if(snap.have_pv_energy_total)
@@ -495,7 +544,9 @@ static esp_err_t details_handler(httpd_req_t *r){
         cJSON_AddNumberToObject(root,"load_energy_total_raw_wh",snap.load_energy_total_raw_wh);
     cJSON_AddStringToObject(root,"dated_energy_basis","UTC; only when SNTP is synchronized");
     cJSON_AddNumberToObject(root,"naks",snap.naks);
-    /* Never guess QPIRI/QDOP field positions, or publish serial QID. */
+    /* Direct inverter-native counters only. No integrations or computed day
+       totals. Serial ID is available solely through authenticated /details;
+       never published in /telemetry, HTTP logs or external discovery. */
     return send_json(r,root);
 }
 static esp_err_t diagnostics_handler(httpd_req_t *r) {
@@ -730,6 +781,15 @@ static void interpret_reply(const char *cmd,const vt_exchange_t *rx,uint32_t now
             int period=cmd[2]=='T'?0:cmd[2]=='D'?1:cmd[2]=='M'?2:3;
             state.energy_raw_wh[source][period]=value;
             state.energy_valid[source][period]=true;
+            memset(state.energy_query_keys[source][period],0,
+                   sizeof(state.energy_query_keys[source][period]));
+            if(period>0) {
+                const size_t prefix=3;
+                const size_t key_len=strlen(cmd)>prefix?strlen(cmd)-prefix:0;
+                if(key_len>0 && key_len<
+                   sizeof(state.energy_query_keys[source][period]))
+                    memcpy(state.energy_query_keys[source][period],cmd+prefix,key_len);
+            }
             if(cmd[1]=='E' && cmd[2]=='T') {
                 state.pv_energy_total_raw_wh=value;
                 state.have_pv_energy_total=true;
@@ -740,9 +800,23 @@ static void interpret_reply(const char *cmd,const vt_exchange_t *rx,uint32_t now
             }
             state.polls_ok++;
         } else state.parse_rejects++;
+    } else if(strcmp(cmd,"QMN")==0 || strcmp(cmd,"QID")==0 ||
+               strcmp(cmd,"QVFW")==0 || strcmp(cmd,"QVFW3")==0) {
+        char value[96]={0};
+        if(vt_payload_copy(rx->frame,rx->len,value,sizeof(value)) && value[0]) {
+            char *dest=strcmp(cmd,"QMN")==0?state.inverter_model:
+                       strcmp(cmd,"QID")==0?state.inverter_serial:
+                       strcmp(cmd,"QVFW")==0?state.inverter_fw_main:
+                       state.inverter_fw_remote;
+            snprintf(dest,96,"%s",value);
+            if(strcmp(cmd,"QMN")==0)state.last_qmn_ms=now;
+            else if(strcmp(cmd,"QID")==0)state.last_qid_ms=now;
+            else if(strcmp(cmd,"QVFW")==0)state.last_qvfw_ms=now;
+            else state.last_qvfw3_ms=now;
+            state.polls_ok++;
+        } else state.parse_rejects++;
     } else {
-        /* QMN / QID / VFW and dated energy frames: CRC-verified ACK only,
-           never expose identifiers or unvalidated units. */
+        /* No unknown command response is exposed. */
         state.polls_ok++;
     }
 }

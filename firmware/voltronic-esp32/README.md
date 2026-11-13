@@ -1,4 +1,4 @@
-# Smart Energy Voltronic — ESP32-S3 N16R8 (v0.2.1-dev diagnostic HTTP, lecture seule)
+# Smart Energy Voltronic — ESP32-S3 N16R8 (v0.3.0-dev valeurs natives complètes, lecture seule)
 
 **État : moteur série et binaire compilables en CI. Validation sur un véritable onduleur Axpert Ultra encore nécessaire.**
 
@@ -32,6 +32,22 @@ Ce firmware ESP32-S3 N16R8 a été refondu en prenant comme référence le flow 
 - Le S3 conserve son fonctionnement et ses requêtes de mesures même sans accès NTP ; seuls QED/QEM/QEY/QLD/QLM/QLY demandent l'horloge UTC synchronisée. Les unités d'énergie sont des valeurs retournées par l'onduleur ; vérifier avec le flow HA avant toute facturation.
 - `pv1_power_native_w` n'est renseigné que si un champ parmi les positions candidates du flow est cohérent avec `V × I`. Sinon, ne pas affirmer qu'il est mesuré. `grid_power_native_w` n'est exposé que si le champ 25 est réellement présent et valide.
 - Les mesures demeurent conservatrices. Les avertissements `QPIWS` conservent les bits bruts et sont également décodés d'après la table `normalize state` du flow ; `Line fail` reste un **avertissement** (le réseau peut être volontairement coupé), pas automatiquement un défaut critique.
+
+## API Wi-Fi
+
+**v0.3.0-dev : audit du flow `smart_voltronic/develop/smart-voltronic/flows.json`.**
+L'API `/api/v1/telemetry` conserve les mesures QPIGS/QPIGS2. L'API
+`/api/v1/details` expose aussi QMOD, QPIWS, QMN, QID, QVFW/QVFW3, tous les
+champs numériques QPIRI/QDOP dans l'ordre brut (`raw_fields`, index 0-based),
+les 14 paramètres nommés documentés dans le flow, et les compteurs natifs
+QET/QEY/QEM/QED + QLT/QLY/QLM/QLD. Les dates UTC des compteurs sont
+contrôlées pour éviter d'afficher une valeur de la veille.
+L'identification série n'est exposée que sur la route locale authentifiée,
+pas dans la télémétrie fréquente ni les journaux.
+**Exclus volontairement :** charge/décharge batterie journalières,
+import réseau journalier, autosuffisance, économies et tous les compteurs
+calculés/intégrés par Node-RED. Aucune commande SET et aucun nouveau
+capteur JK n'ont été ajoutés.
 
 ## API Wi-Fi
 
