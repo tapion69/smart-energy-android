@@ -26,6 +26,16 @@ class SmartEnergyUpdateFeedTest {
         assertNull(SmartEnergyUpdateFeed.parseAndroid(
             json.replace("\"available\":true","\"available\":false"),48))
     }
+    @Test fun doNotDowngradeOrOfferAlreadyInstalledS3() {
+        assertFalse(SmartEnergyUpdateFeed.newerFirmware(
+            "0.3.2","0.3.2-dev-ota-gated-read-only"))
+        assertFalse(SmartEnergyUpdateFeed.newerFirmware(
+            "0.3.1","0.3.2-dev-ota-gated-read-only"))
+        assertTrue(SmartEnergyUpdateFeed.newerFirmware(
+            "0.3.3","0.3.2-dev-ota-gated-read-only"))
+        assertFalse(SmartEnergyUpdateFeed.newerFirmware(
+            "0.4.0","unknown"))
+    }
     @Test fun noArbitraryFirmwareUrl() {
         val json="""{"schemaVersion":1,"product":"smart-voltronic-esp32","available":true,
         "version":"1.1.0","hardwareTargets":["esp32s3-n16r8"],

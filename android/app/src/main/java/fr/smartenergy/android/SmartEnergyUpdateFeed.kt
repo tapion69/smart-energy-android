@@ -62,13 +62,30 @@ internal object SmartEnergyUpdateFeed {
             "https://github.com/tapion69/smart-energy-android/releases/"))notes else ""
         return AndroidRelease(version,code,url,hash.lowercase(),approvedNotes)
     }
+    // Native S3 reports "0.3.2-dev-ota-gated-read-only", while a release is
+    // named "0.3.2". Compare numeric versions to prevent same-version OTA
+    // loops and accidental downgrades; unknown versions require manual review.
+    internal fun versionParts(version:String):List<Int>? {
+        val match=Regex("^(\\d+)\\.(\\d+)\\.(\\d+)(?:$|[-+].*)")
+            .find(version) ?: return null
+        return (1..3).map { match.groupValues[it].toIntOrNull() ?: return null }
+    }
+    internal fun newerFirmware(published:String,installed:String):Boolean {
+        val target=versionParts(published) ?: return false
+        val current=versionParts(installed) ?: return false
+        for(i in 0..2) {
+            if(target[i]>current[i])return true
+            if(target[i]<current[i])return false
+        }
+        return false
+    }
     fun parseVoltronic(text:String,currentVersion:String):FirmwareRelease? {
         val json=JSONObject(text)
         if(json.optInt("schemaVersion",0)!=1 ||
             json.optString("product")!="smart-voltronic-esp32" ||
             !json.optBoolean("available",false))return null
         val name=json.optString("version","")
-        if(name.isBlank() || name==currentVersion)return null
+        if(!newerFirmware(name,currentVersion))return null
         val url=json.optString("downloadUrl","")
         val hash=json.optString("sha256","")
         val hardware=json.optJSONArray("hardwareTargets")
