@@ -1,4 +1,4 @@
-/* Smart Energy Voltronic/Axpert — ESP32-S3 N16R8, experimental READ-ONLY.
+/* Smart Energy Voltronic/Axpert — ESP32-S3 N16R8, OTA-capable build. *
  * Local Wi-Fi + UART1 2400 8N1 to a MAX3232 3.3V RS232 interface.
  * UART1 TX=GPIO17, RX=GPIO16. NEVER connect inverter RS232 directly to GPIO.
  * Commands are compile-time whitelisted queries; HTTP GET has no serial writes.
@@ -18,6 +18,9 @@
 #include "esp_event.h"
 #include "esp_netif.h"
 #include "esp_http_server.h"
+#include "esp_ota_ops.h"
+#include "esp_partition.h"
+#include "mbedtls/sha256.h"
 #include "driver/uart.h"
 #include "driver/gpio.h"
 #include "driver/usb_serial_jtag.h"
@@ -30,7 +33,7 @@
 #include "cJSON.h"
 #include "voltronic_protocol.h"
 
-#define VT_VERSION "0.3.1-dev-flow-poll-read-only"
+#define VT_VERSION "0.3.2-dev-ota-gated-read-only"
 #define VT_UART UART_NUM_1
 #define VT_TX GPIO_NUM_17
 #define VT_RX GPIO_NUM_16
@@ -600,10 +603,124 @@ static esp_err_t diagnostics_handler(httpd_req_t *r) {
     add_runtime_net_diag(root);
     return send_json(r,root);
 }
+/* OTA is strictly opt-in, LAN-only, and never proxied by VPN.
+ * On the original SINGLE_APP_LARGE partition table the next OTA partition
+ * is missing, hence both status and upload fail closed. This preserves all
+ * existing working installs until a separately verified migration.
+ * Image bytes must match the SHA256 from the GitHub release manifest. */
+static const esp_partition_t *ota_destination(void){
+    const esp_partition_t *next=esp_ota_get_next_update_partition(NULL);
+    if(!next || next->type!=ESP_PARTITION_TYPE_APP ||
+       next->subtype<ESP_PARTITION_SUBTYPE_APP_OTA_MIN ||
+       next->subtype>ESP_PARTITION_SUBTYPE_APP_OTA_MAX)return NULL;
+    return next;
+}
+static esp_err_t ota_status_handler(httpd_req_t *req){
+    if(!authorized(req))return deny(req);
+    cJSON *doc=base_json("voltronic-ota-status");
+    const esp_partition_t *next=ota_destination();
+    cJSON_AddBoolToObject(doc,"ota_supported",next!=NULL);
+    cJSON_AddStringToObject(doc,"partition_scheme",
+        next?"dual_ota":"single_app_migration_required");
+    cJSON_AddStringToObject(doc,"target","esp32s3-n16r8");
+    cJSON_AddNumberToObject(doc,"max_image_bytes",
+        next ? next->size : 0);
+    cJSON_AddBoolToObject(doc,"requires_explicit_confirmation",true);
+    return send_json(req,doc);
+}
+static int ota_hex_nibble(char ch){
+    if(ch>='0'&&ch<='9')return ch-'0';
+    if(ch>='a'&&ch<='f')return ch-'a'+10;
+    if(ch>='A'&&ch<='F')return ch-'A'+10;
+    return -1;
+}
+static bool ota_sha_from_header(httpd_req_t *r,uint8_t expected[32]){
+    char str[66]={0};
+    if(httpd_req_get_hdr_value_str(r,"X-Image-SHA256",
+        str,sizeof(str))!=ESP_OK || strlen(str)!=64)return false;
+    for(int i=0;i<32;i++){
+        int hi=ota_hex_nibble(str[i*2]);
+        int lo=ota_hex_nibble(str[i*2+1]);
+        if(hi<0||lo<0)return false;
+        expected[i]=(uint8_t)((hi<<4)|lo);
+    }
+    return true;
+}
+static void ota_restart(void *unused){
+    (void)unused;
+    vTaskDelay(pdMS_TO_TICKS(1600));
+    esp_restart();
+}
+static esp_err_t ota_image_handler(httpd_req_t *req){
+    if(!authorized(req))return deny(req);
+    if(strcmp(req->method==HTTP_POST?"POST":"OTHER","POST")!=0)
+        return httpd_resp_send_err(req,HTTPD_405_METHOD_NOT_ALLOWED,"post only");
+    char approved[8]={0};
+    if(httpd_req_get_hdr_value_str(req,"X-OTA-Confirmed",
+        approved,sizeof(approved))!=ESP_OK || strcmp(approved,"yes")!=0)
+        return httpd_resp_send_err(req,HTTPD_403_FORBIDDEN,"confirmation required");
+    const esp_partition_t *partition=ota_destination();
+    if(!partition)
+        return httpd_resp_send_err(req,HTTPD_409_CONFLICT,
+            "one-time USB OTA partition migration required");
+    if(req->content_len<16384 || req->content_len>(int)partition->size)
+        return httpd_resp_send_err(req,HTTPD_400_BAD_REQUEST,"invalid image size");
+    uint8_t expected[32]={0},actual[32]={0};
+    if(!ota_sha_from_header(req,expected))
+        return httpd_resp_send_err(req,HTTPD_400_BAD_REQUEST,"SHA256 required");
+    esp_ota_handle_t handle=0;
+    if(esp_ota_begin(partition,OTA_SIZE_UNKNOWN,&handle)!=ESP_OK)
+        return httpd_resp_send_err(req,HTTPD_500_INTERNAL_SERVER_ERROR,"OTA begin failed");
+    mbedtls_sha256_context ctx;
+    mbedtls_sha256_init(&ctx);
+    bool good=mbedtls_sha256_starts(&ctx,0)==0;
+    uint8_t buffer[1024];
+    int remaining=req->content_len;
+    int timeouts=0;
+    while(good && remaining>0){
+        int n=httpd_req_recv(req,(char*)buffer,
+            remaining>(int)sizeof(buffer)?sizeof(buffer):remaining);
+        if(n==HTTPD_SOCK_ERR_TIMEOUT){
+            if(++timeouts>4)good=false;
+            continue;
+        }
+        if(n<=0){good=false;break;}
+        timeouts=0;
+        if(mbedtls_sha256_update(&ctx,buffer,(size_t)n)!=0 ||
+           esp_ota_write(handle,buffer,(size_t)n)!=ESP_OK){
+            good=false;break;
+        }
+        remaining-=n;
+    }
+    if(good && remaining==0)
+        good=mbedtls_sha256_finish(&ctx,actual)==0;
+    mbedtls_sha256_free(&ctx);
+    unsigned diff=0;
+    for(int i=0;i<32;i++)diff|=(unsigned)(actual[i]^expected[i]);
+    good=good && remaining==0 && diff==0;
+    if(!good){
+        esp_ota_abort(handle);
+        return httpd_resp_send_err(req,HTTPD_422_UNPROCESSABLE_ENTITY,
+            "incomplete or SHA256 mismatched firmware; current firmware retained");
+    }
+    esp_err_t err=esp_ota_end(handle);
+    if(err!=ESP_OK)
+        return httpd_resp_send_err(req,HTTPD_422_UNPROCESSABLE_ENTITY,
+            "invalid OTA application image");
+    err=esp_ota_set_boot_partition(partition);
+    if(err!=ESP_OK)
+        return httpd_resp_send_err(req,HTTPD_500_INTERNAL_SERVER_ERROR,
+            "boot slot not changed");
+    httpd_resp_set_type(req,"application/json");
+    esp_err_t reply=httpd_resp_sendstr(req,
+        "{\"accepted\":true,\"rebooting\":true}");
+    xTaskCreate(ota_restart,"ota_restart",2048,NULL,3,NULL);
+    return reply;
+}
 static void start_api(void){
     httpd_config_t conf=HTTPD_DEFAULT_CONFIG();
     conf.server_port=VT_HTTP_PORT;
-    conf.max_uri_handlers=5;
+    conf.max_uri_handlers=7;
     /* Default 4 KB HTTP stack and LRU disabled: protect frequent polling
        from held sessions and provide more room for cJSON + stack locals. */
     conf.stack_size=8192;
@@ -622,6 +739,12 @@ static void start_api(void){
     ESP_ERROR_CHECK(httpd_register_uri_handler(server,&telemetry));
     ESP_ERROR_CHECK(httpd_register_uri_handler(server,&details));
     ESP_ERROR_CHECK(httpd_register_uri_handler(server,&diag));
+    httpd_uri_t ota_status={.uri="/api/v1/ota/status",.method=HTTP_GET,
+        .handler=ota_status_handler};
+    httpd_uri_t ota_image={.uri="/api/v1/ota/image",.method=HTTP_POST,
+        .handler=ota_image_handler};
+    ESP_ERROR_CHECK(httpd_register_uri_handler(server,&ota_status));
+    ESP_ERROR_CHECK(httpd_register_uri_handler(server,&ota_image));
 }
 static void serial_start(void){
     const uart_config_t u={
