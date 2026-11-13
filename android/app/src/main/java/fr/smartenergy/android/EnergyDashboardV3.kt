@@ -15,6 +15,7 @@ class EnergyDashboardV3(context:Context) : WebView(context) {
     var onStyleChanged:((String)->Unit)?=null
     private var ready=false
     private var latest="{}"
+    private var requestedSection="home"
     private val bridge=object {
         @JavascriptInterface fun navigate(destination:String) {
             post {onNavigate?.invoke(destination)}
@@ -40,9 +41,21 @@ class EnergyDashboardV3(context:Context) : WebView(context) {
                 if(url!="file:///android_asset/energy_dashboard_v3.html")return
                 ready=true
                 publish()
+                applyRequestedSection()
             }
         }
         loadUrl("file:///android_asset/energy_dashboard_v3.html")
+    }
+    /** Native navigation is the only visible menu; HTML retains its inner tabs. */
+    fun showSection(section:String) {
+        requestedSection=if(section=="inverters")"inverters" else "home"
+        if(ready)applyRequestedSection()
+    }
+    private fun applyRequestedSection() {
+        val target=JSONObject.quote(requestedSection)
+        evaluateJavascript("window.smartEnergySetPage($target);") {
+            post {fitHeight()}
+        }
     }
     fun showSnapshot(snapshot:JSONObject) {
         latest=snapshot.toString()

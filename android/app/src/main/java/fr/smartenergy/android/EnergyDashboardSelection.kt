@@ -4,4 +4,8 @@ package fr.smartenergy.android
 object EnergyDashboardSelection {
     fun showEnergy(hasInverter:Boolean,hasConfiguredJk:Boolean):Boolean =
         hasInverter || !hasConfiguredJk
+
+    /** Exactly one home surface: native JK when JK is the only configured source. */
+    fun showBatteryHome(hasInverter:Boolean,hasConfiguredJk:Boolean):Boolean =
+        !hasInverter && hasConfiguredJk
 }

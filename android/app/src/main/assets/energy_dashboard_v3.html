@@ -17,6 +17,9 @@ button{font:inherit;cursor:pointer}
 .nav button,.styles button{flex:1;min-width:0;padding:9px 4px;background:#133242;border:1px solid #326173;color:#b3d0df;border-radius:9px;font-weight:bold}
 .nav button.active,.styles button.active{background:#205660;color:#e6fff6;border-color:#5ddabd}
 .nav button{font-size:clamp(9px,2.6vw,11px);padding:10px 1px;overflow-wrap:anywhere}
+/* The native navigation and shared native brand own every screen.
+   These controls remain in DOM for internal JS compatibility only. */
+.header,.nav{display:none!important}
 .note{padding:8px;background:#3c3018;border:1px solid #77633c;color:#ffe0a3;border-radius:8px;font-size:10px;margin:8px 0}
 .panel{background:linear-gradient(135deg,#113546,#0a1e2b);border:1px solid #315b6b;border-radius:14px;padding:12px;margin:9px 0}
 .panel h3{margin:0 0 10px;font-size:14px}.muted{color:var(--muted)}
@@ -145,6 +148,7 @@ function fresh(){return (data.inverters||[]).filter(function(x){return x&&x.fres
 function channels(items){var all=[];items.forEach(function(inv){(inv.pvChannels||[]).forEach(function(c){all.push({slot:inv.slot,index:c.index,voltageV:c.voltageV,currentA:c.currentA,powerW:c.powerW,derived:c.derived})})});return all}
 function appNav(destination){if(window.SmartEnergyApp&&window.SmartEnergyApp.navigate)window.SmartEnergyApp.navigate(destination)}
 function setPage(page){active=page;el('pageHome').style.display=page==='home'?'':'none';el('pageInverters').style.display=page==='inverters'?'':'none';el('navHome').classList.toggle('active',page==='home');el('navInv').classList.toggle('active',page==='inverters');if(page==='inverters')renderInverters()}
+window.smartEnergySetPage=function(page){setPage(page==='inverters'?'inverters':'home')};
 function setStyle(s,notify){style=s==='sunsynk'?'sunsynk':'modern';el('modern').classList.toggle('show',style==='modern');el('sun').classList.toggle('show',style==='sunsynk');el('modernBtn').classList.toggle('active',style==='modern');el('sunBtn').classList.toggle('active',style==='sunsynk');if(notify&&window.SmartEnergyApp&&window.SmartEnergyApp.style)window.SmartEnergyApp.style(style);if(style==='sunsynk')requestAnimationFrame(wires)}
 el('navHome').onclick=function(){setPage('home')};
 el('navInv').onclick=function(){setPage('inverters')};

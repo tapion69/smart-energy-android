@@ -157,6 +157,11 @@ class MainActivity : Activity() {
     private val inverterWorker=Executors.newSingleThreadExecutor()
     // Low-frequency solar-counter reads must not delay live inverter telemetry.
     private val inverterEnergyWorker=Executors.newSingleThreadExecutor()
+    // One shared native navigation regardless of inverter/JK availability.
+    private var currentRootPage=0
+    private var homeBatteryMode:Boolean?=null
+    private var navigateNative:((Int)->Unit)?=null
+    private lateinit var connectionBadge:TextView
     private lateinit var premiumDashboard: PremiumEnergyDashboard
     private lateinit var energyDashboard: EnergyDashboardV3
     // Lazy: no change to JK telemetry, associations, BMS cards or settings.
@@ -602,73 +607,137 @@ class MainActivity : Activity() {
         scroll.addView(root)
         setContentView(scroll)
 
+        // Shared brand, route badge and main menu in native Android.
+        // Both WebViews hide their own header/navigation: no duplicated menus.
         val brand = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
+            orientation=LinearLayout.HORIZONTAL
+            gravity=Gravity.CENTER_VERTICAL
+            setPadding(d(8),d(9),d(8),d(9))
+            background=GradientDrawable(
+                GradientDrawable.Orientation.TOP_BOTTOM,
+                intArrayOf(Color.rgb(9,43,59),Color.rgb(6,26,41))).apply {
+                cornerRadius=d(13).toFloat()
+            }
         }
         val brandLogo = ImageView(this).apply {
             setImageResource(R.drawable.smart_energy_icon)
             scaleType = ImageView.ScaleType.FIT_CENTER
             contentDescription = "Logo Smart Energy"
         }
-        brand.addView(brandLogo, LinearLayout.LayoutParams(d(54), d(54)))
-        brand.addView(label("SMART ENERGY", 17f, true, mint),
-            LinearLayout.LayoutParams(-2, -2).apply { leftMargin = d(8) })
-        add(root, brand, 2)
-        val homePage=LinearLayout(this).apply { orientation=LinearLayout.VERTICAL }
-        val dashboardPage=LinearLayout(this).apply { orientation=LinearLayout.VERTICAL }
-        val configurationPage=LinearLayout(this).apply { orientation=LinearLayout.VERTICAL }
-        val settingsPage=LinearLayout(this).apply { orientation=LinearLayout.VERTICAL }
-        var mainNavigation: LinearLayout?=null
+        brand.addView(brandLogo, LinearLayout.LayoutParams(d(42), d(42)))
+        val branding=LinearLayout(this).apply {orientation=LinearLayout.VERTICAL}
+        val heading=label("SMART ENERGY",19f,true,Color.rgb(47,232,209)).apply {
+            typeface=Typeface.create("sans-serif",Typeface.BOLD_ITALIC)
+        }
+        add(branding,heading,0)
+        add(branding,label("Gestion Énergie Solaire & Batteries",10f,false,
+            Color.rgb(171,205,218)),0)
+        brand.addView(branding,LinearLayout.LayoutParams(0,-2,1f).apply {
+            leftMargin=d(7)
+        })
+        connectionBadge=label("Hors ligne",10f,false,
+            Color.rgb(161,235,214)).apply {
+            gravity=Gravity.CENTER
+            setPadding(d(6),d(7),d(6),d(7))
+            background=GradientDrawable().apply {
+                setColor(Color.rgb(17,60,72))
+                setStroke(d(1),Color.rgb(49,123,147))
+                cornerRadius=d(22).toFloat()
+            }
+        }
+        brand.addView(connectionBadge,LinearLayout.LayoutParams(d(86),-2))
+        add(root,brand,2)
+        val homePage=LinearLayout(this).apply {orientation=LinearLayout.VERTICAL}
+        val dashboardPage=LinearLayout(this).apply {orientation=LinearLayout.VERTICAL}
+        val configurationPage=LinearLayout(this).apply {orientation=LinearLayout.VERTICAL}
+        val settingsPage=LinearLayout(this).apply {orientation=LinearLayout.VERTICAL}
+        val navButtons=linkedMapOf<Int,TextView>()
         fun showPage(page:Int) {
-            brand.visibility=if(page==0)View.GONE else View.VISIBLE
-            mainNavigation?.visibility=if(page==0)View.GONE else View.VISIBLE
-            homePage.visibility=if(page==0)View.VISIBLE else View.GONE
-            dashboardPage.visibility=if(page==1)View.VISIBLE else View.GONE
+            currentRootPage=page
+            val jkPresent=hasAnyConfiguredJk() || premiumJk.optInt("total",0)>0
+            val batteryHome=EnergyDashboardSelection.showBatteryHome(
+                voltronicFleet.hasInverters(),jkPresent)
+            if(page==0)homeBatteryMode=batteryHome
+            val energyVisible=(page==0 && !batteryHome) || page==4 || page==5
+            val batteryVisible=(page==0 && batteryHome) || page==1
+            homePage.visibility=if(energyVisible)View.VISIBLE else View.GONE
+            dashboardPage.visibility=if(batteryVisible)View.VISIBLE else View.GONE
             configurationPage.visibility=if(page==2)View.VISIBLE else View.GONE
             settingsPage.visibility=if(page==3)View.VISIBLE else View.GONE
+            // Never show the obsolete premium scene on a JK-only installation.
+            if(::premiumDashboard.isInitialized)premiumDashboard.visibility=View.GONE
+            if(::energyDashboard.isInitialized) {
+                energyDashboard.visibility=if(energyVisible)View.VISIBLE else View.GONE
+                energyDashboard.showSection(if(page==4)"inverters" else "home")
+            }
+            navButtons.forEach { (destination,button) ->
+                val selected=destination==page
+                button.setTextColor(if(selected)Color.rgb(2,43,49) else normal)
+                button.background=GradientDrawable(
+                    GradientDrawable.Orientation.TOP_BOTTOM,
+                    if(selected)
+                        intArrayOf(Color.rgb(111,255,234),Color.rgb(21,201,176))
+                    else
+                        intArrayOf(Color.rgb(23,66,89),Color.rgb(9,34,55))).apply {
+                    cornerRadius=d(11).toFloat()
+                    setStroke(d(1),if(selected)
+                        Color.rgb(168,255,243) else Color.rgb(64,134,162))
+                }
+            }
             parameterEditingEnabled=false
             mountedTab=-1
-            if(page==0 || page==1) lastTelemetry?.let { showTelemetry(it) }
-            if(page==0) publishPremiumDashboard()
-            scroll.post { scroll.scrollTo(0,0) }
+            if(batteryVisible)lastTelemetry?.let {showTelemetry(it)}
+            scroll.post {scroll.scrollTo(0,0)}
         }
-        val navigation=LinearLayout(this).apply { orientation=LinearLayout.HORIZONTAL }
-        mainNavigation=navigation
-        for((title,page) in listOf("Accueil" to 0,"Batteries" to 1,
-            "Configuration" to 2,"Réglages" to 3)) {
-            val item=action(title) { showPage(page) }
-            item.textSize=11f
-            navigation.addView(item,LinearLayout.LayoutParams(0,d(48),1f).apply {
-                rightMargin=d(3);leftMargin=d(3)
+        navigateNative={ page -> showPage(page) }
+        val navigation=LinearLayout(this).apply {
+            orientation=LinearLayout.HORIZONTAL
+            gravity=Gravity.CENTER_VERTICAL
+        }
+        // Six consistent destinations: short Config is never hidden.
+        // TextView (instead of platform Button) avoids forced min-width.
+        val items=listOf(
+            Triple("⌂ Accueil",0,"Accueil"),
+            Triple("▣ Onduleurs",4,"Onduleurs"),
+            Triple("▣ Batteries",1,"Batteries"),
+            Triple("⇄ Énergie",5,"Énergie"),
+            Triple("⚙ Config",2,"Configuration"),
+            Triple("Réglages",3,"Réglages"))
+        for((title,page,description) in items) {
+            val item=label(title,if(resources.configuration.screenWidthDp<375)9f else 10f,
+                true,normal).apply {
+                gravity=Gravity.CENTER
+                isClickable=true
+                isFocusable=true
+                contentDescription=description
+                setPadding(d(1),d(4),d(1),d(4))
+                setOnClickListener {showPage(page)}
+            }
+            navButtons[page]=item
+            navigation.addView(item,LinearLayout.LayoutParams(0,d(52),1f).apply {
+                leftMargin=d(2);rightMargin=d(2)
             })
         }
-        add(root,navigation,14)
+        add(root,navigation,8)
         root.addView(homePage)
         root.addView(dashboardPage)
         root.addView(configurationPage)
         root.addView(settingsPage)
-        // The energy cockpit also works when only an inverter is installed.
-        // A first-time JK user can open Configuration from the same navigation.
-        val startInConfig=false
-        homePage.visibility=if(startInConfig) View.GONE else View.VISIBLE
-        dashboardPage.visibility=View.GONE
-        configurationPage.visibility=if(startInConfig) View.VISIBLE else View.GONE
-        settingsPage.visibility=View.GONE
-        brand.visibility=if(startInConfig)View.VISIBLE else View.GONE
-        navigation.visibility=if(startInConfig)View.VISIBLE else View.GONE
         premiumDashboard=PremiumEnergyDashboard(this)
         premiumDashboard.onNavigate={ destination ->
             when(destination) {
-                "section:inverters-card" -> premiumDashboard.scrollNativeToSection("inverters-card",scroll)
-                "section:flows-card" -> premiumDashboard.scrollNativeToSection("flows-card",scroll)
+                "section:inverters-card" -> showPage(4)
+                "section:flows-card" -> showPage(5)
                 "home" -> showPage(0)
                 "batteries" -> showPage(1)
                 "settings" -> showPage(3)
-                "inverters" -> showPage(2)
+                "inverters" -> showPage(4)
                 else -> showPage(0)
             }
         }
+        // Retained for backward compatibility only: never display the old
+        // house photo / obsolete four KPI cards on the JK-only home.
+        premiumDashboard.visibility=View.GONE
         homePage.addView(premiumDashboard,LinearLayout.LayoutParams(-1,d(940)).apply {
             topMargin=d(7)
         })
@@ -691,12 +760,8 @@ class MainActivity : Activity() {
         homePage.addView(energyDashboard,LinearLayout.LayoutParams(-1,d(1100)).apply {
             topMargin=d(7)
         })
-        // Do not display the old cockpit at startup for an unconfigured test
-        // installation: old JK-only UI remains unchanged once JK is configured.
-        val startEnergy=EnergyDashboardSelection.showEnergy(
-            voltronicFleet.hasInverters(),hasAnyConfiguredJk())
-        premiumDashboard.visibility=if(startEnergy)View.GONE else View.VISIBLE
-        energyDashboard.visibility=if(startEnergy)View.VISIBLE else View.GONE
+        // Initial page is selected after native JK controls are built.
+        // No energy WebView is presented for a JK-only home.
 
         add(dashboardPage, label("Batteries JK · Détails et paramètres", 23f, true), 12)
         // Connection/setup feedback remains accessible in Configuration.
@@ -1205,6 +1270,8 @@ class MainActivity : Activity() {
             "Surveillance demandée · vérifier la notification permanente Android"
             else "Surveillance désactivée"
 
+        // Complete native page construction before selecting the initial home.
+        showPage(0)
         val enabled = false
         scanBtn.isEnabled = enabled
         saveBtn.isEnabled = enabled
@@ -3530,14 +3597,17 @@ class MainActivity : Activity() {
             .put("route",route)
             .put("updated",java.text.SimpleDateFormat(
                 "'Actualisé à' HH:mm:ss",Locale.FRANCE).format(java.util.Date()))
-        premiumDashboard.showSnapshot(payload)
-        if(::energyDashboard.isInitialized) {
-            energyDashboard.showSnapshot(payload)
-            // EXACT pre-existing JK cockpit for configurations without inverter.
-            val displayEnergy=EnergyDashboardSelection.showEnergy(
-                voltronicFleet.hasInverters(),hasAnyConfiguredJk())
-            premiumDashboard.visibility=if(displayEnergy)View.GONE else View.VISIBLE
-            energyDashboard.visibility=if(displayEnergy)View.VISIBLE else View.GONE
+        // Keep the obsolete premium WebView hidden at all times.
+        premiumDashboard.visibility=View.GONE
+        if(::connectionBadge.isInitialized)connectionBadge.text=route
+        if(::energyDashboard.isInitialized)energyDashboard.showSnapshot(payload)
+        if(currentRootPage==0) {
+            val batteryHome=EnergyDashboardSelection.showBatteryHome(
+                voltronicFleet.hasInverters(),
+                hasAnyConfiguredJk() || premiumJk.optInt("total",0)>0)
+            // Switching from a newly unconfigured installation to JK-only
+            // happens once after the first successful BMS discovery.
+            if(homeBatteryMode!=batteryHome)navigateNative?.invoke(0)
         }
     }
 
