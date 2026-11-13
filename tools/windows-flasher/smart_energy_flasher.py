@@ -57,17 +57,28 @@ def validate_vpn_config(values: dict[str, str]) -> None:
         raise ValueError("Indique une clé d'association Tailscale tskey-auth- personnelle.")
     if not 20 <= len(values["gateway_token"]) <= 128:
         raise ValueError("Token VPN : utilise 20 à 128 caractères.")
+    count=0
     for index in range(1, 4):
         host = values[f"jk{index}_ip"].strip()
         code = values[f"jk{index}_code"]
-        if index == 1 and not host:
-            raise ValueError("Le lecteur JK 1 doit être renseigné.")
         if bool(host) != bool(code):
             raise ValueError(f"ESP JK {index} : renseigne à la fois l'IP et le code.")
         if host and not valid_lan_ip(host):
             raise ValueError(f"ESP JK {index} : l'adresse doit être une IPv4 privée du LAN.")
         if code and not 8 <= len(code) <= 32:
             raise ValueError(f"ESP JK {index} : code personnel invalide (8–32).")
+        if host:count+=1
+    for index in range(1,4):
+        host=values[f"volt{index}_ip"].strip()
+        code=values[f"volt{index}_code"]
+        if bool(host)!=bool(code):
+            raise ValueError(f"Voltronic INV{index} : IP et code obligatoires ensemble.")
+        if host and not valid_lan_ip(host):
+            raise ValueError(f"Voltronic INV{index} : IPv4 privée du LAN obligatoire.")
+        if code and not 8<=len(code)<=32:
+            raise ValueError(f"Voltronic INV{index} : code ESP32-S3 invalide (8–32).")
+        if host:count+=1
+    if count<1:raise ValueError("Configure au moins un ESP JK ou Voltronic.")
     # Reject syntax injection into sdkconfig / subprocess commands.
     for name, val in values.items():
         if any(c in val for c in ("\r", "\n", "\x00")):
@@ -86,9 +97,9 @@ def sdkconfig_contents(values: dict[str, str]) -> str:
         "SE_JK2_READ_CODE": values["jk2_code"],
         "SE_JK3_IP": values["jk3_ip"],
         "SE_JK3_READ_CODE": values["jk3_code"],
-        "SE_VOLT_IP": "",
-        "SE_VOLT_READ_PATH": "",
-        "SE_VOLT_READ_CODE": "",
+        "SE_VOLT_IP": values["volt1_ip"],
+        "SE_VOLT_READ_PATH": "/api/v1/telemetry" if values["volt1_ip"] else "",
+        "SE_VOLT_READ_CODE": values["volt1_code"],
     }
     return "# PRIVATE — NEVER COMMIT OR SEND THIS FILE\n" + "".join(
         f"CONFIG_{key}={json.dumps(value, ensure_ascii=False)}\n"
@@ -430,6 +441,18 @@ class Flasher(tk.Tk):
         ]):
             self._field(readers, caption, key, i, password)
 
+        volts=ttk.LabelFrame(root,text="Voltronic ESP32-S3 — INV1 à INV3 (VPN lecture seule)",padding=5)
+        volts.grid(row=5,column=0,columnspan=3,sticky="ew",padx=8,pady=5)
+        volts.columnconfigure(1,weight=1)
+        for i,(caption,key,password) in enumerate([
+            ("INV1 — IP locale :", "volt1_ip",False),
+            ("INV1 — code ESP :", "volt1_code",True),
+            ("INV2 — IP locale (optionnel) :", "volt2_ip",False),
+            ("INV2 — code (optionnel) :", "volt2_code",True),
+            ("INV3 — IP locale (optionnel) :", "volt3_ip",False),
+            ("INV3 — code (optionnel) :", "volt3_code",True),
+        ]):
+            self._field(volts,caption,key,i,password)
         expert = ttk.Frame(root)
         expert.columnconfigure(1, weight=1)
         expert.grid(row=6, column=0, columnspan=3, sticky="ew", padx=8)
@@ -676,6 +699,7 @@ class Flasher(tk.Tk):
         values = {
             key: field.get().strip() if key not in (
                 "wifi_password", "jk1_code", "jk2_code", "jk3_code",
+                "volt1_code", "volt2_code", "volt3_code",
                 "gateway_token", "tailscale_key"
             ) else field.get()
             for key, field in self.fields.items()

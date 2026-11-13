@@ -16,6 +16,9 @@ def config():
         "jk1_ip": "192.168.1.53", "jk1_code": "readerSecret1",
         "jk2_ip": "10.0.0.22", "jk2_code": "readerSecret2",
         "jk3_ip": "", "jk3_code": "",
+        "volt1_ip": "", "volt1_code": "",
+        "volt2_ip": "", "volt2_code": "",
+        "volt3_ip": "", "volt3_code": "",
     }
 
 
@@ -50,6 +53,20 @@ class FlasherTests(unittest.TestCase):
         self.assertIn('CONFIG_SE_JK3_IP="192.168.1.60"', content)
         self.assertIn('CONFIG_SE_JK2_READ_CODE="readerSecret2"', content)
 
+    def test_voltronic_only_and_reject_unpaired(self):
+        c=config()
+        for i in range(1,4):
+            c[f"jk{i}_ip"]="";c[f"jk{i}_code"]=""
+        c["volt1_ip"]="192.168.1.63"
+        c["volt1_code"]="voltronicABC"
+        validate_vpn_config(c)
+        c["volt1_code"]=""
+        with self.assertRaises(ValueError):
+            validate_vpn_config(c)
+    def test_voltronic_no_open_relay_or_public_ip(self):
+        c=config()
+        c["volt3_ip"]="8.8.8.8";c["volt3_code"]="secretABC"
+        with self.assertRaises(ValueError):validate_vpn_config(c)
     def test_escape_dangerous_characters(self):
         c = config()
         c["wifi_password"] = 'go\\"backslash'
