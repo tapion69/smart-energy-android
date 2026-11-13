@@ -1,4 +1,4 @@
-# Smart Energy Voltronic — ESP32-S3 N16R8 (v0.3.0-dev valeurs natives complètes, lecture seule)
+# Smart Energy Voltronic — ESP32-S3 N16R8 (v0.3.1-dev polling Node-RED + données natives, lecture seule)
 
 **État : moteur série et binaire compilables en CI. Validation sur un véritable onduleur Axpert Ultra encore nécessaire.**
 
@@ -27,7 +27,22 @@ Ce firmware ESP32-S3 N16R8 a été refondu en prenant comme référence le flow 
 | `normalize state` | valeurs QPIGS, QPIGS2, QMOD, paramètres QPIRI/QDOP, compteurs d'énergie | pas de mapping inventé, pas de pseudo-mesures réseau |
 | HA discovery, MQTT, SET/VERIFY | **non portés** | hors périmètre d'une passerelle Android en lecture seule |
 
-- QPIGS 2,5 s, QPIGS2 4 s, QMOD 12 s, QPIRI/QDOP/QPIWS 5 min ; autres informations périodiques.
+- **v0.3.1-dev :** stratégie reprise du flow `develop`, dont les injecteurs demandent
+  une commande toutes les **0,5 s** en alternant QPIGS/QPIGS2. Les deux
+  commandes deviennent dues chacune toutes les **1 s** ; la cadence réelle
+  dépend de la durée des réponses sur le RS232 2 400 bauds. Le moteur
+  n'envoie jamais deux commandes simultanément et n'accumule aucune file
+  de requêtes. Les rotations des commandes rapides et secondaires sont
+  indépendantes. Le démarrage étale le burst initial au lieu de bloquer
+  le flux en temps réel ; au plus une requête secondaire toutes les trois
+  requêtes reste prioritaire lorsque due.
+- QMOD passe à **5 min** comme le flow, tout comme QPIRI/QDOP/QPIWS.
+  QET/QLT restent à 1 h, QED/QLD à 10 min, QEM/QLM à 6 h,
+  QEY/QLY à 24 h. QPIGS2 reste désactivé une heure après NAK.
+- Le diagnostic publie `qpigs_actual_request_interval_ms`,
+  `qpigs2_actual_request_interval_ms`, le dernier temps d'échange
+  série et les nombres d'interrogations : ces valeurs sont mesurées,
+  elles ne sont pas des promesses de fréquence.
 - QPIGS2 suspendu 1 h après NAK / réponse incompatible, puis retenté.
 - Le S3 conserve son fonctionnement et ses requêtes de mesures même sans accès NTP ; seuls QED/QEM/QEY/QLD/QLM/QLY demandent l'horloge UTC synchronisée. Les unités d'énergie sont des valeurs retournées par l'onduleur ; vérifier avec le flow HA avant toute facturation.
 - `pv1_power_native_w` n'est renseigné que si un champ parmi les positions candidates du flow est cohérent avec `V × I`. Sinon, ne pas affirmer qu'il est mesuré. `grid_power_native_w` n'est exposé que si le champ 25 est réellement présent et valide.
