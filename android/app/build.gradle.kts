@@ -20,8 +20,8 @@ android {
         applicationId = "fr.smartenergy.android"
         minSdk = 29
         targetSdk = 35
-        versionCode = 44
-        versionName = "0.3.30-dev"
+        versionCode = 45
+        versionName = "0.3.31-dev"
     }
     signingConfigs {
         if (hasStableSigning) {
@@ -40,7 +40,7 @@ android {
             // older debug installations (and their Keystore data) untouched.
             // Once GitHub signing secrets are configured, keep this package
             // ID and reuse the stable signer for subsequent upgrades.
-            applicationIdSuffix = ".vpntrial330"
+            applicationIdSuffix = ".vpntrial331"
             if (hasStableSigning) signingConfig = signingConfigs.getByName("stable")
         }
         release {
