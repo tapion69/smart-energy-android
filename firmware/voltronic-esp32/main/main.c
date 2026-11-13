@@ -1047,6 +1047,30 @@ static void polling_task(void *unused) {
         vTaskDelay(pdMS_TO_TICKS(120));
     }
 }
+/* A migrated dual-OTA image must be confirmed after it has started its
+ * local services. Roll back if Wi-Fi cannot become operational, rather than
+ * permanently accepting an unreachable firmware after update. */
+static void ota_postboot_validate_task(void *unused){
+    (void)unused;
+    const esp_partition_t *running=esp_ota_get_running_partition();
+    esp_ota_img_states_t image_state=ESP_OTA_IMG_UNDEFINED;
+    if(esp_ota_get_state_partition(running,&image_state)==ESP_OK &&
+       image_state==ESP_OTA_IMG_PENDING_VERIFY){
+        for(int i=0;i<120;i++){
+            if((xEventGroupGetBits(wifi_events)&WIFI_OK)!=0){
+                esp_err_t result=esp_ota_mark_app_valid_cancel_rollback();
+                if(result==ESP_OK)
+                    ESP_LOGI(TAG,"OTA startup verified after Wi-Fi connectivity");
+                else ESP_LOGE(TAG,"OTA validation failed: %s",esp_err_to_name(result));
+                vTaskDelete(NULL);return;
+            }
+            vTaskDelay(pdMS_TO_TICKS(500));
+        }
+        ESP_LOGE(TAG,"OTA startup failed Wi-Fi health; rolling back");
+        esp_ota_mark_app_invalid_rollback_and_reboot();
+    }
+    vTaskDelete(NULL);
+}
 void app_main(void){
     ESP_ERROR_CHECK(nvs_flash_init());
     state_lock=xSemaphoreCreateMutex();
@@ -1063,5 +1087,6 @@ void app_main(void){
     esp_sntp_init();
     xTaskCreate(polling_task,"voltronic_read",7168,NULL,6,NULL);
     start_api();
-    ESP_LOGI(TAG,"Read-only Voltronic bridge starting. HTTP port %d",VT_HTTP_PORT);
+    xTaskCreate(ota_postboot_validate_task,"ota_validate",3072,NULL,3,NULL);
+    ESP_LOGI(TAG,"Voltronic bridge starting. HTTP port %d",VT_HTTP_PORT);
 }
