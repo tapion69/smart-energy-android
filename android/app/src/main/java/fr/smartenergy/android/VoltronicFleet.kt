@@ -26,8 +26,9 @@ class VoltronicFleet(
 ) {
     private val mainHandler=Handler(Looper.getMainLooper())
     private val states=Array(3){ JSONObject().put("configured",false) }
-    private data class SolarDay(val utcDate:String,val kwh:Double,val receivedAtMs:Long)
-    private val solarDays=arrayOfNulls<SolarDay>(3)
+    // Values returned by the inverter over GET /details; no custom integrations.
+    private val nativeDetails=arrayOfNulls<JSONObject>(3)
+    private val nativeDetailsReceivedAt=LongArray(3)
     private var lastPoll=0L
     private var lastEnergyPoll=0L
     private var energyBusy=false
@@ -58,11 +59,32 @@ class VoltronicFleet(
                     .put("detail","Dernière mesure trop ancienne : "+(measuredAge/1000)+" s")
             }
         }
-        val solar=solarDays[slot-1]
-        if(result.optBoolean("fresh") && solar!=null &&
-            solar.utcDate==LocalDate.now(ZoneOffset.UTC).toString() &&
-            SystemClock.elapsedRealtime()-solar.receivedAtMs in 0L..1200000L)
-            result.put("pvDayKwh",solar.kwh)
+        val details=nativeDetails[slot-1]
+        val received=nativeDetailsReceivedAt[slot-1]
+        if(details!=null && received>0L) {
+            val detailsAge=(SystemClock.elapsedRealtime()-received).coerceAtLeast(0L)
+            val detailsFresh=detailsAge<=900000L
+            result.put("nativeDetails",details)
+                .put("nativeDetailsAgeMs",detailsAge)
+                .put("nativeDetailsFresh",detailsFresh)
+            if(detailsFresh) {
+                val mode=details.optString("operation_mode","")
+                if(mode.isNotEmpty())result.put("operationMode",mode)
+            }
+            if(detailsFresh && result.optBoolean("fresh")) {
+                fun nativeToday(source:String):Double? {
+                    val key=details.optJSONObject("energy_query_keys")
+                        ?.optJSONObject(source)?.optString("day_utc","")
+                    val today=LocalDate.now(ZoneOffset.UTC).toString().replace("-","")
+                    if(key!=today)return null
+                    return details.optJSONObject("energy_wh")?.optJSONObject(source)
+                        ?.optDouble("day_utc",Double.NaN)
+                        ?.takeIf{it.isFinite()&&it>=0.0}
+                }
+                nativeToday("pv")?.let{result.put("pvDayKwh",it/1000.0)}
+                nativeToday("load")?.let{result.put("loadDayKwh",it/1000.0)}
+            }
+        }
         return result
     }
     fun snapshot():JSONArray {
@@ -75,7 +97,8 @@ class VoltronicFleet(
         lastEnergyPoll=0L
         for(i in states.indices) {
             states[i]=JSONObject().put("configured",false)
-            solarDays[i]=null
+            nativeDetails[i]=null
+            nativeDetailsReceivedAt[i]=0L
             httpTotalErrors[i]=0
             lastHttpKinds[i]=null
         }
@@ -86,8 +109,9 @@ class VoltronicFleet(
             if(now-lastPoll>20000L) {lastPoll=now;updated()}
             return
         }
-        pollSolarDay(now,wifiNetwork)
-        if(busy || (lastPoll>0L && now-lastPoll<8000L))return
+        pollNativeDetails(now,wifiNetwork)
+        // Android UI tick is 2.5s; a 5s HTTP rate remains gentle on ESP32.
+        if(busy || (lastPoll>0L && now-lastPoll<5000L))return
         lastPoll=now
         val configs=(1..3).filter {configured(it)}.map { slot ->
             val kind=if(slot==1) prefs.getString("inverter_probe_type","voltronic")
@@ -179,9 +203,9 @@ class VoltronicFleet(
     private data class Config(val slot:Int,val kind:String,val host:String,
                               val port:Int,val code:String)
 
-    private fun pollSolarDay(now:Long,network:Network?) {
+    private fun pollNativeDetails(now:Long,network:Network?) {
         if(network==null || energyBusy ||
-            (lastEnergyPoll>0L && now-lastEnergyPoll<600000L))return
+            (lastEnergyPoll>0L && now-lastEnergyPoll<90000L))return
         val configs=(1..3).filter {configured(it)}.mapNotNull { slot ->
             val type=if(slot==1)prefs.getString("inverter_probe_type","voltronic")
                 else "voltronic"
@@ -199,20 +223,22 @@ class VoltronicFleet(
         lastEnergyPoll=now
         energyBusy=true
         energyWorker.execute {
-            val solar=mutableMapOf<Int,Double>()
+            val natives=mutableMapOf<Int,JSONObject>()
             for(config in configs) {
                 try {
                     val obj=VoltronicReadOnlyClient.details(
                         config.host,config.code,config.port,network)
-                    val wh=obj.optJSONObject("energy_wh")?.optJSONObject("pv")
-                        ?.optDouble("day_utc",Double.NaN)
-                    if(wh!=null && wh.isFinite() && wh>=0.0) solar[config.slot]=wh/1000.0
-                } catch(_:Exception) { /* Optional count: telemetry is independent. */ }
+                    natives[config.slot]=obj
+                } catch(_:Exception) {
+                    // Optional details; never block real-time QPIGS.
+                }
             }
             mainHandler.post {
-                val date=LocalDate.now(ZoneOffset.UTC).toString()
                 val stamp=SystemClock.elapsedRealtime()
-                for((slot,kwh) in solar)solarDays[slot-1]=SolarDay(date,kwh,stamp)
+                for((slot,detail) in natives) {
+                    nativeDetails[slot-1]=detail
+                    nativeDetailsReceivedAt[slot-1]=stamp
+                }
                 energyBusy=false
                 updated()
             }
@@ -233,15 +259,22 @@ class VoltronicFleet(
             num(k)?.takeIf { it in min..max }?.let {out.put(target,it)}
         }
         copy("output_w","loadW",0.0,30000.0)
+        copy("output_va","apparentPowerVa",0.0,30000.0)
+        copy("load_percent","loadPercent",0.0,100.0)
         copy("output_voltage_v","outputVoltageV",0.0,300.0)
         copy("output_current_a","outputCurrentA",0.0,200.0)
         copy("output_hz","outputHz",40.0,70.0)
         copy("grid_voltage_v","gridVoltageV",0.0,300.0)
+        copy("grid_hz","gridFrequencyHz",0.0,70.0)
         copy("battery_voltage_v","batteryVoltageV",0.0,80.0)
+        copy("battery_charge_a","batteryChargeCurrentA",0.0,400.0)
+        copy("battery_discharge_a","batteryDischargeCurrentA",0.0,400.0)
+        copy("battery_voltage_from_scc_v","batterySccVoltageV",0.0,80.0)
         copy("battery_net_current_a","batteryCurrentA",-400.0,400.0)
         copy("battery_soc_pct","inverterBatterySoc",0.0,100.0)
         copy("heatsink_temp_c","temperatureC",-40.0,140.0)
         copy("bus_voltage_v","busVoltageV",0.0,600.0)
+        copy("output_current_a","outputCurrentEstimateA",0.0,200.0)
         out.put("operationMode",raw.optString("operation_mode",""))
         val pv=JSONArray()
         val v1=num("pv1_voltage_v")?.takeIf {it in 0.0..900.0}
@@ -291,7 +324,12 @@ class VoltronicFleet(
             "wifi_rssi_dbm" to "s3WifiRssi",
             "free_heap_bytes" to "s3FreeHeapBytes",
             "minimum_free_heap_bytes" to "s3MinFreeHeapBytes",
-            "uptime_ms" to "s3UptimeMs")) {
+            "uptime_ms" to "s3UptimeMs",
+            "qpigs_requests" to "s3QpigsRequests",
+            "qpigs2_requests" to "s3Qpigs2Requests",
+            "qpigs_actual_request_interval_ms" to "s3QpigsIntervalMs",
+            "qpigs2_actual_request_interval_ms" to "s3Qpigs2IntervalMs",
+            "last_serial_exchange_ms" to "s3LastExchangeMs")) {
             if(raw.has(source) && !raw.isNull(source))
                 raw.optDouble(source,Double.NaN).takeIf{it.isFinite()}?.let{
                     out.put(target,it)
@@ -299,7 +337,7 @@ class VoltronicFleet(
         }
         if(raw.has("wifi_connected"))
             out.put("s3WifiConnected",raw.optBoolean("wifi_connected"))
-            .put("httpConsecutiveErrors",0)
+        out.put("httpConsecutiveErrors",0)
             .put("serialTimeouts",raw.optLong("timeouts",0L))
             .put("serialNoRxTimeouts",raw.optLong("no_rx_timeouts",0L))
             .put("serialCrcRejects",raw.optLong("crc_rejects",0L))
