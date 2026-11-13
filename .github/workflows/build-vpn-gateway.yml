@@ -207,9 +207,45 @@ jobs:
           if-no-files-found: error
           retention-days: 30
 
+  voltronic-s3-ota:
+    name: Build guarded dual-OTA Voltronic S3 migration images
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: ESP-IDF 5.3.2 custom dual-OTA layout
+        uses: espressif/esp-idf-ci-action@v1
+        with:
+          esp_idf_version: v5.3.2
+          target: esp32s3
+          path: firmware/voltronic-esp32
+          command: idf.py -B build_ota -D SDKCONFIG=sdkconfig_ota -D SDKCONFIG_DEFAULTS=sdkconfig.ota.defaults build
+      - name: Verify safe partitions and package separate-offset images
+        run: |
+          set -euo pipefail
+          mkdir -p firmware/voltronic-esp32/dist-ota
+          cp firmware/voltronic-esp32/build_ota/bootloader/bootloader.bin firmware/voltronic-esp32/dist-ota/voltronic-s3-ota-bootloader.bin
+          cp firmware/voltronic-esp32/build_ota/partition_table/partition-table.bin firmware/voltronic-esp32/dist-ota/voltronic-s3-ota-partition-table.bin
+          cp firmware/voltronic-esp32/build_ota/smart_energy_voltronic_s3.bin firmware/voltronic-esp32/dist-ota/voltronic-s3-ota-app.bin
+          python - <<'PY'
+          import sys
+          from pathlib import Path
+          sys.path.insert(0, "tools/windows-flasher")
+          from voltronic_ota_migration import validate_migration_images
+          b,t,a=validate_migration_images(Path("firmware/voltronic-esp32/dist-ota"))
+          print("USB migration safe partition ranges:", b.stat().st_size, t.stat().st_size, a.stat().st_size)
+          PY
+          grep -q '^CONFIG_PARTITION_TABLE_CUSTOM=y' firmware/voltronic-esp32/sdkconfig_ota
+      - name: Publish NON-MERGED USB migration images
+        uses: actions/upload-artifact@v4
+        with:
+          name: SmartEnergy-VOLTRONIC-S3-OTA-MIGRATION
+          path: firmware/voltronic-esp32/dist-ota/voltronic-s3-ota-*.bin
+          if-no-files-found: error
+          retention-days: 30
+
   windows-bundle:
     name: Build all-in-one Windows flasher with JK/VPN/S3 Voltronic
-    needs: [esp32, esp32s3, jk, voltronic-s3]
+    needs: [esp32, esp32s3, jk, voltronic-s3, voltronic-s3-ota]
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
@@ -229,6 +265,10 @@ jobs:
         with:
           name: SmartEnergy-VOLTRONIC-ESP32S3-N16R8-READONLY
           path: firmware/voltronic-esp32/dist
+      - uses: actions/download-artifact@v4
+        with:
+          name: SmartEnergy-VOLTRONIC-S3-OTA-MIGRATION
+          path: firmware/voltronic-esp32/dist-ota
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
@@ -242,7 +282,7 @@ jobs:
       - name: Package one EXE with both JK and VPN factory/update firmwares
         shell: pwsh
         run: |
-          python -m PyInstaller --clean --noconfirm --onefile --windowed --name SmartEnergyFlasher --collect-all esptool --hidden-import serial.tools.list_ports --hidden-import voltronic_usb --add-data "firmware/vpn-gateway/dist/smart-energy-vpn-USB-FACTORY-ESP32-0x0.bin;embedded_firmware" --add-data "firmware/vpn-gateway/dist/smart-energy-vpn-USB-APP-ESP32-0x10000.bin;embedded_firmware" --add-data "firmware/vpn-gateway/dist-s3/smart-energy-vpn-USB-FACTORY-ESP32S3-N16R8-0x0.bin;embedded_firmware" --add-data "firmware/vpn-gateway/dist-s3/smart-energy-vpn-USB-APP-ESP32S3-N16R8-0x10000.bin;embedded_firmware" --add-data "firmware/jk-esp32/dist/smart-jk-esp32-factory.bin;embedded_firmware" --add-data "firmware/jk-esp32/dist/smart-jk-esp32-app-only.bin;embedded_firmware" --add-data "firmware/voltronic-esp32/dist/smart-energy-voltronic-S3-FACTORY-0x0.bin;embedded_firmware" --add-data "firmware/voltronic-esp32/dist/smart-energy-voltronic-S3-APP-0x10000.bin;embedded_firmware" tools/windows-flasher/smart_energy_flasher.py
+          python -m PyInstaller --clean --noconfirm --onefile --windowed --name SmartEnergyFlasher --collect-all esptool --hidden-import serial.tools.list_ports --hidden-import voltronic_usb --hidden-import voltronic_ota_migration --add-data "firmware/vpn-gateway/dist/smart-energy-vpn-USB-FACTORY-ESP32-0x0.bin;embedded_firmware" --add-data "firmware/vpn-gateway/dist/smart-energy-vpn-USB-APP-ESP32-0x10000.bin;embedded_firmware" --add-data "firmware/vpn-gateway/dist-s3/smart-energy-vpn-USB-FACTORY-ESP32S3-N16R8-0x0.bin;embedded_firmware" --add-data "firmware/vpn-gateway/dist-s3/smart-energy-vpn-USB-APP-ESP32S3-N16R8-0x10000.bin;embedded_firmware" --add-data "firmware/jk-esp32/dist/smart-jk-esp32-factory.bin;embedded_firmware" --add-data "firmware/jk-esp32/dist/smart-jk-esp32-app-only.bin;embedded_firmware" --add-data "firmware/voltronic-esp32/dist/smart-energy-voltronic-S3-FACTORY-0x0.bin;embedded_firmware" --add-data "firmware/voltronic-esp32/dist/smart-energy-voltronic-S3-APP-0x10000.bin;embedded_firmware" --add-data "firmware/voltronic-esp32/dist-ota/voltronic-s3-ota-bootloader.bin;embedded_firmware" --add-data "firmware/voltronic-esp32/dist-ota/voltronic-s3-ota-partition-table.bin;embedded_firmware" --add-data "firmware/voltronic-esp32/dist-ota/voltronic-s3-ota-app.bin;embedded_firmware" tools/windows-flasher/smart_energy_flasher.py
           if ((Get-Item "dist/SmartEnergyFlasher.exe").Length -lt 3000000) { throw "All-in-one Windows EXE suspiciously small" }
       - name: Upload all-in-one Windows flasher
         uses: actions/upload-artifact@v4

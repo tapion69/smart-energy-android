@@ -481,7 +481,7 @@ class Flasher(tk.Tk):
     def _build_voltronic(self, root: ttk.Frame) -> None:
         ttk.Label(root,
             text="ESP32-S3 N16R8 uniquement · lecteur Voltronic RS232 2400 bauds. "
-                 "Firmware 0.2.0 : RX/CRC et requêtes éprouvées, lecture seule.",
+                 "Firmware Voltronic avec polling stable et OTA sous réserve de migration.",
             wraplength=690).grid(row=0,column=0,columnspan=3,sticky="w",padx=8,pady=8)
         modes=ttk.LabelFrame(root,text="Type de flash Voltronic S3",padding=8)
         modes.grid(row=1,column=0,columnspan=3,sticky="ew",padx=8,pady=8)
@@ -526,6 +526,13 @@ class Flasher(tk.Tk):
         ttk.Button(root,text="Configurer Voltronic via USB sans reflasher",
                    command=self._configure_voltronic_only).grid(
             row=7,column=0,columnspan=3,pady=6)
+        ttk.Button(root,text="EXPERT · Migration USB vers OTA (S3 de test uniquement)",
+                   command=self._migrate_voltronic_to_ota).grid(
+            row=9,column=0,columnspan=3,pady=8)
+        ttk.Label(root,text="Attention : cette opération modifie le bootloader et "
+                  "la table des partitions. Uniquement pour un S3 de réserve ; "
+                  "validation sur la carte de production en attente.",
+                  wraplength=690).grid(row=10,column=0,columnspan=3,pady=5)
 
     @staticmethod
     def _bundled_voltronic_image(mode: str) -> Path:
@@ -589,6 +596,38 @@ class Flasher(tk.Tk):
         self._progress_step(80,"Firmware S3 chargé, configuration USB…")
         provision_voltronic(port,values,self._log)
         self._progress_step(98,"Voltronic S3 : confirmation USB reçue.")
+
+    @staticmethod
+    def _bundled_voltronic_ota_folder()->Path:
+        base=Path(getattr(sys,"_MEIPASS",Path(__file__).resolve().parent))
+        from voltronic_ota_migration import validate_migration_images
+        folder=base/"embedded_firmware"
+        validate_migration_images(folder)
+        return folder
+
+    def _migrate_voltronic_to_ota(self)->None:
+        try:
+            from voltronic_ota_migration import flash_voltronic_ota_migration
+            port=self._assert_ready()
+            folder=self._bundled_voltronic_ota_folder()
+            if not messagebox.askyesno("Migration OTA EXPÉRIMENTALE",
+                "Cette opération est réservée à une carte ESP32-S3 de TEST !\n\n"
+                "Elle remplace le bootloader et le partitionnement, mais n'écrit "
+                "aucun octet sur la zone NVS. L'app doit être préparée pour OTA.\n"
+                "Une erreur de flash peut nécessiter une récupération par USB.\n"
+                "Confirmer la première étape ?"):
+                return
+            if not messagebox.askyesno("Dernière confirmation : carte S3 de TEST",
+                f"Le programme écrira séparément trois images sur {port} :\n"
+                "0x0000 bootloader, 0x8000 partitions, 0x10000 application.\n"
+                "Aucun erase_flash. Ne pas utiliser sur la passerelle JK/VPN.\n"
+                "Es-tu certain que le S3 est une carte de test ?"):
+                return
+            self._run_async(
+                lambda:flash_voltronic_ota_migration(port,folder,self._log),
+                mode="migration-ota")
+        except Exception as ex:
+            messagebox.showerror("Migration OTA",str(ex))
 
     def _configure_voltronic_only(self)->None:
         try:
