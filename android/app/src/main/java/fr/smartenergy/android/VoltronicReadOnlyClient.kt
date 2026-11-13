@@ -18,6 +18,9 @@ object VoltronicReadOnlyClient {
             else url.openConnection()) as HttpURLConnection
         return try {
             connection.requestMethod="GET"
+            connection.instanceFollowRedirects=false
+            connection.useCaches=false
+            connection.setRequestProperty("Connection","close")
             connection.connectTimeout=2500
             connection.readTimeout=3500
             connection.setRequestProperty("X-Setup-Code",accessCode)
@@ -40,8 +43,11 @@ object VoltronicReadOnlyClient {
             else url.openConnection()) as HttpURLConnection
         return try {
             connection.requestMethod="GET"
-            connection.connectTimeout=2200
-            connection.readTimeout=3200
+            connection.instanceFollowRedirects=false
+            connection.useCaches=false
+            connection.setRequestProperty("Connection","close")
+            connection.connectTimeout=3000
+            connection.readTimeout=4500
             connection.setRequestProperty("X-Setup-Code",accessCode)
             if(connection.responseCode!=200)
                 throw IllegalArgumentException("Voltronic détails HTTP "+connection.responseCode)
@@ -63,8 +69,11 @@ object VoltronicReadOnlyClient {
             else url.openConnection()) as HttpURLConnection
         return try {
             connection.requestMethod="GET"
-            connection.connectTimeout=2200
-            connection.readTimeout=3200
+            connection.instanceFollowRedirects=false
+            connection.useCaches=false
+            connection.setRequestProperty("Connection","close")
+            connection.connectTimeout=3000
+            connection.readTimeout=4500
             connection.setRequestProperty("X-Setup-Code",accessCode)
             if(connection.responseCode!=200)
                 throw IllegalArgumentException("Lecteur Voltronic HTTP " + connection.responseCode)

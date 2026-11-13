@@ -32,6 +32,7 @@ class VoltronicFleet(
     private var lastEnergyPoll=0L
     private var energyBusy=false
     private var busy=false
+    private val httpTotalErrors=IntArray(3)
 
     fun configured(slot:Int):Boolean {
         require(slot in 1..3)
@@ -48,10 +49,13 @@ class VoltronicFleet(
         // Cached values never become 'fresh' just because the screen redraws.
         val stamp=result.optLong("sampleAtMs",-1L)
         val age=result.optLong("qpigsAgeMs",-1L)
-        if(result.optBoolean("fresh") && stamp>0L && age>=0L &&
-           age+(SystemClock.elapsedRealtime()-stamp).coerceAtLeast(0L)>20000L) {
-            result.put("fresh",false).put("transportReachable",true)
-                .put("detail","Mesure QPIGS en retard")
+        if(result.optBoolean("fresh") && stamp>0L && age>=0L) {
+            val measuredAge=age+(SystemClock.elapsedRealtime()-stamp).coerceAtLeast(0L)
+            result.put("effectiveSampleAgeMs",measuredAge)
+            if(measuredAge>VoltronicHttpResilience.MAX_SAMPLE_AGE_MS) {
+                result.put("fresh",false).put("transientHttpError",false)
+                    .put("detail","Dernière mesure trop ancienne : "+(measuredAge/1000)+" s")
+            }
         }
         val solar=solarDays[slot-1]
         if(result.optBoolean("fresh") && solar!=null &&
@@ -71,6 +75,7 @@ class VoltronicFleet(
         for(i in states.indices) {
             states[i]=JSONObject().put("configured",false)
             solarDays[i]=null
+            httpTotalErrors[i]=0
         }
         updated()
     }
@@ -97,6 +102,7 @@ class VoltronicFleet(
         busy=true
         worker.execute {
             val results=Array(3){ previous[it] }
+            var needsShortRetry=false
             for(c in configs) {
                 val prior=previous[c.slot-1]
                 val next=when {
@@ -114,24 +120,40 @@ class VoltronicFleet(
                     else -> try {
                         val raw=VoltronicReadOnlyClient.telemetry(
                             c.host,c.code,c.port,wifiNetwork)
-                        if(raw.optBoolean("available") && raw.optJSONObject("values")!=null)
+                        val nextReading=if(raw.optBoolean("available") &&
+                            raw.optJSONObject("values")!=null)
                             mapTelemetry(c.slot,raw)
                         else JSONObject(prior.toString()).put("configured",true)
                             .put("slot",c.slot).put("fresh",false)
                             .put("transportReachable",true)
-                            .put("httpConsecutiveErrors",0)
                             .put("qpigsAgeMs",raw.optLong("age_ms",-1L))
                             .put("serialTimeouts",raw.optLong("timeouts",0L))
                             .put("serialNoRxTimeouts",raw.optLong("no_rx_timeouts",0L))
                             .put("serialCrcRejects",raw.optLong("crc_rejects",0L))
                             .put("detail","ESP32 joignable · QPIGS en retard")
-                    } catch(_:Exception) {
+                        nextReading.put("httpConsecutiveErrors",0)
+                            .put("httpErrorsTotal",httpTotalErrors[c.slot-1])
+                            .put("transientHttpError",false)
+                    } catch(ex:Exception) {
+                        val errors=prior.optInt("httpConsecutiveErrors",0)+1
+                        httpTotalErrors[c.slot-1]++
+                        val recent=VoltronicHttpResilience.recentOnFailure(
+                            errors,prior.optLong("sampleAtMs",-1L),
+                            prior.optLong("qpigsAgeMs",-1L),SystemClock.elapsedRealtime())
+                        if(VoltronicHttpResilience.quickRetry(errors))
+                            needsShortRetry=true
                         JSONObject(prior.toString()).put("configured",true)
-                            .put("slot",c.slot).put("fresh",false)
+                            .put("slot",c.slot).put("fresh",recent)
                             .put("transportReachable",false)
-                            .put("httpConsecutiveErrors",
-                                 prior.optInt("httpConsecutiveErrors",0)+1)
-                            .put("detail","HTTP ESP32 inaccessible · dernières valeurs conservées")
+                            .put("transientHttpError",recent)
+                            .put("httpConsecutiveErrors",errors)
+                            .put("httpErrorsTotal",httpTotalErrors[c.slot-1])
+                            .put("lastHttpErrorKind",VoltronicHttpResilience.errorKind(ex))
+                            .put("detail",if(recent)
+                                "HTTP instable · dernière mesure récente conservée"
+                                else if(errors<VoltronicHttpResilience.OFFLINE_AFTER)
+                                "HTTP instable · lecture en cours de reprise"
+                                else "ESP32 HTTP inaccessible · dernière mesure conservée")
                     }
                 }
                 results[c.slot-1]=next
@@ -139,6 +161,9 @@ class VoltronicFleet(
             mainHandler.post {
                 for(i in results.indices)states[i]=results[i]
                 busy=false
+                // Short bounded retry on next 2.5s UI tick after 1-2 misses.
+                if(needsShortRetry)
+                    lastPoll=SystemClock.elapsedRealtime()-6000L
                 updated()
             }
         }
