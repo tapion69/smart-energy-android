@@ -67,6 +67,9 @@ button{font:inherit;cursor:pointer}
 .battery-icon:before{content:'';position:absolute;top:-7px;left:17px;width:14px;height:5px;background:#54ed80}
 .battery-icon .fill{background:#50df76;opacity:.8;width:100%;height:85%;margin-top:4px}
 .battery-node strong{font-size:19px}.battery-node .small{font-size:10px}
+.native-section{border:1px solid #326477;border-radius:9px;margin:8px 0;padding:9px;background:#082735}
+.native-section summary{color:#97e7c5;font-weight:bold;cursor:pointer}
+.raw-params{max-height:235px;overflow-y:auto}
 .grid-home-summary{display:grid;grid-template-columns:1fr 1fr;gap:6px;margin:12px 0}
 .grid-home-summary .stat{background:#22282b;border:1px solid #434b4e;border-radius:8px;padding:8px}
 .grid-home-summary small{display:block;font-size:10px;color:#c2cdd3}
@@ -102,7 +105,11 @@ button{font:inherit;cursor:pointer}
 <div class="photoVal grid"><span class="cap">♧ Réseau</span><strong id="mGrid">— W</strong></div>
 <div class="photoVal bat"><span class="cap">▣ Batteries</span><strong id="mSoc">— %</strong></div>
 </section>
-<div class="note">Seuls les compteurs journaliers transmis et vérifiés sont affichés. Pas de calcul pendant les périodes sans mesure.</div>
+<div class="daily" id="nativeDayBlocks" style="display:none">
+<div class="item" id="nativePvDayBox"><small>☀ PV jour UTC · compteur natif</small><b id="nativePvDayValue">—</b></div>
+<div class="item" id="nativeLoadDayBox"><small>⌂ Charge AC jour UTC · compteur natif</small><b id="nativeLoadDayValue">—</b></div>
+</div>
+<div class="note">Compteurs natifs de l'onduleur uniquement. Aucun total journalier calculé par l'application.</div>
 </div>
 <div id="sun" class="view">
 <section class="sun">
@@ -152,7 +159,78 @@ function drawMppts(list){var host=el('mppts');host.replaceChildren();list.forEac
 if(!list.length){var none=document.createElement('div');none.className='mppt-empty';none.style.gridColumn='1/-1';none.textContent='MPPT indisponibles : aucune valeur mesurée fraîche';host.append(none)}requestAnimationFrame(wires)}
 function wires(){if(style!=='sunsynk'||active!=='home')return;var area=el('mpptArea'),box=el('mppts'),svg=el('mpptWires'),nodes=Array.from(box.querySelectorAll('.mppt-box'));var a=area.getBoundingClientRect();var cx=a.width/2,bus=a.height-23;svg.setAttribute('viewBox','0 0 '+a.width+' '+a.height);svg.replaceChildren();if(!nodes.length)return;function addPath(d){var p=document.createElementNS('http://www.w3.org/2000/svg','path');p.setAttribute('d',d);svg.append(p)};nodes.forEach(function(node){var r=node.getBoundingClientRect();var x=r.left-a.left+r.width/2,y=r.bottom-a.top;addPath('M '+x+' '+y+' V '+bus+' H '+cx)});addPath('M '+cx+' '+bus+' V '+(a.height-1));var dot=document.createElementNS('http://www.w3.org/2000/svg','circle');dot.setAttribute('cx',cx);dot.setAttribute('cy',bus);dot.setAttribute('r',3.6);svg.append(dot)}
 window.addEventListener('resize',function(){requestAnimationFrame(wires)});
-function renderInverters(){var root=el('tabs'),details=el('inverterDetails'),items=data.inverters||[];root.replaceChildren();details.replaceChildren();if(!items.length){row(details,'Aucun onduleur','Ajouter depuis Configuration');return}if(selected>=items.length)selected=0;items.forEach(function(inv,i){var b=document.createElement('button');b.className=i===selected?'active':'';b.textContent='INV'+inv.slot;b.onclick=function(){selected=i;renderInverters()};root.append(b)});var v=items[selected];var state=v.transientHttpError?'HTTP instable · dernière mesure récente':v.fresh?'Lecture fraîche':v.transportReachable===true?'ESP32 joignable · QPIGS en retard':(v.httpConsecutiveErrors||0)>0&&(v.httpConsecutiveErrors||0)<3?'Communication instable':n(v.sampleAtMs)!==null?'ESP32 inaccessible · dernière mesure conservée':'Lecture indisponible';row(details,'État',state);row(details,'Puissance solaire',fmt(v.pvPowerW,'W'));row(details,'Consommation AC',fmt(v.loadW,'W'));row(details,'Tension AC',fmt(v.outputVoltageV,'V',1));row(details,'Courant AC',fmt(v.outputCurrentA,'A',1));row(details,'Fréquence',fmt(v.outputHz,'Hz',2));row(details,'PV jour UTC',fmt(v.pvDayKwh,'kWh',2));row(details,'Batterie (onduleur)',fmt(v.batteryVoltageV,'V',1)+' · '+fmt(v.batteryCurrentA,'A',1));row(details,'Mode',v.operationMode||'—');row(details,'Dernier diagnostic',v.detail||'—');
+
+function section(container,title,open){var d=document.createElement('details');d.className='native-section';d.open=!!open;var label=document.createElement('summary');label.textContent=title;d.append(label);container.append(d);return d}
+function renderNativeDetails(container,v){
+ var d=v.nativeDetails;
+ if(!d)return;
+ var main=section(container,'Paramètres et données natives (lecture seule)',true);
+ row(main,'Données détaillées',v.nativeDetailsFresh?'Récentes':'Anciennes · consultables');
+ var id=d.identification||{},idBox=section(main,'Modèle, versions et numéro de série',false);
+ [['model','Modèle'],['firmware_main','Firmware onduleur'],['firmware_remote','Firmware secondaire'],['serial','Numéro de série (local seulement)']].forEach(function(x){if(id[x[0]])row(idBox,x[1],id[x[0]])});
+ var status=section(main,'Mode QMOD et alarmes QPIWS',true);
+ var modes={P:'Allumé',S:'Veille',L:'Réseau',B:'Batterie',F:'Défaut'};
+ row(status,'Mode',modes[d.operation_mode]||d.operation_mode||'—');
+ if(Array.isArray(d.faults))row(status,'Défauts',d.faults.join(', ')||'Aucun');
+ if(Array.isArray(d.warnings))row(status,'Avertissements',d.warnings.join(', ')||'Aucun');
+ var params=d.parameters||{},qpiri=params.qpiri,qdop=params.qdop;
+ var p1=section(main,'QPIRI : paramètres de l’onduleur',true);
+ if(!qpiri)row(p1,'QPIRI','Non reçu ou non pris en charge');
+ else{
+  [
+  ['battery_recharge_voltage_v','Retour réseau · tension','V'],
+  ['battery_under_voltage_v','Sous-tension batterie','V'],
+  ['battery_bulk_voltage_v','Tension bulk','V'],
+  ['battery_float_voltage_v','Tension float','V'],
+  ['max_ac_charging_current_a','Charge AC maximale','A'],
+  ['max_charging_current_a','Charge maximale totale','A'],
+  ['battery_re_discharge_voltage_v','Retour batterie · tension','V'],
+  ['max_discharging_current_a','Courant décharge maximal','A']
+  ].forEach(function(f){if(n(qpiri[f[0]])!==null)row(p1,f[1],fmt(qpiri[f[0]],f[2],2))});
+  var types={0:'AGM',1:'Flooded',2:'User',3:'Pylon',5:'Weco',6:'Soltaro',8:'Lib',9:'Lic'};
+  var output={0:'UtilitySolarBat',1:'SolarUtilityBat',2:'SolarBatUtility'};
+  var charge={1:'Solar first',2:'Solar + Utility',3:'Only solar'};
+  if(n(qpiri.battery_type_code)!==null)row(p1,'Type batterie',types[qpiri.battery_type_code]||'Code '+qpiri.battery_type_code);
+  if(n(qpiri.output_source_priority_code)!==null)row(p1,'Priorité sortie',output[qpiri.output_source_priority_code]||'Code '+qpiri.output_source_priority_code);
+  if(n(qpiri.charger_source_priority_code)!==null)row(p1,'Priorité charge',charge[qpiri.charger_source_priority_code]||'Code '+qpiri.charger_source_priority_code);
+ }
+ var p2=section(main,'QDOP : seuils de capacité batterie',true);
+ if(!qdop)row(p2,'QDOP','Non reçu ou non pris en charge');
+ else [
+  ['battery_recharge_capacity_pct','Retour réseau SOC'],
+  ['battery_redischarge_capacity_pct','Retour batterie SOC'],
+  ['battery_under_capacity_pct','Sous-capacité SOC']
+ ].forEach(function(f){if(n(qdop[f[0]])!==null)row(p2,f[1],fmt(qdop[f[0]],'%',0))});
+ var energies=section(main,'Compteurs directement renvoyés par l’onduleur',true);
+ var sources=[['pv','Solaire'],['load','Charge AC']];
+ var when=new Date().toISOString().slice(0,10).replace(/-/g,'');
+ var formats=[['day_utc','Jour UTC',when],['month_utc','Mois UTC',when.slice(0,6)],['year_utc','Année UTC',when.slice(0,4)],['total','Total',null]];
+ var added=0;
+ sources.forEach(function(src){var e=(d.energy_wh||{})[src[0]]||{},keys=(d.energy_query_keys||{})[src[0]]||{};
+  formats.forEach(function(p){var v=e[p[0]];if(n(v)===null)return;
+    if(p[2]!==null && keys[p[0]]!==p[2])return;
+    row(energies,src[1]+' · '+p[1],p[0]==='day_utc'?fmt(v/1000,'kWh',2):fmt(v,'valeur brute',0));added++;
+  });
+ });
+ if(!added)row(energies,'Énergies natives','Non disponibles (NAK, pas encore interrogées ou date non validée)');
+ var raw=section(main,'Tous les champs numériques QPIRI / QDOP (index 0-based)',false);
+ var holder=document.createElement('div');holder.className='raw-params';raw.append(holder);
+ [['QPIRI',qpiri],['QDOP',qdop]].forEach(function(type){if(!type[1]||!Array.isArray(type[1].raw_fields))return;
+  type[1].raw_fields.forEach(function(value,i){if(n(value)!==null)row(holder,type[0]+'['+i+']',String(value))});
+ });
+}
+function renderInverters(){var root=el('tabs'),details=el('inverterDetails'),items=data.inverters||[];root.replaceChildren();details.replaceChildren();if(!items.length){row(details,'Aucun onduleur','Ajouter depuis Configuration');return}if(selected>=items.length)selected=0;items.forEach(function(inv,i){var b=document.createElement('button');b.className=i===selected?'active':'';b.textContent='INV'+inv.slot;b.onclick=function(){selected=i;renderInverters()};root.append(b)});var v=items[selected];var state=v.transientHttpError?'HTTP instable · dernière mesure récente':v.fresh?'Lecture fraîche':v.transportReachable===true?'ESP32 joignable · QPIGS en retard':(v.httpConsecutiveErrors||0)>0&&(v.httpConsecutiveErrors||0)<3?'Communication instable':n(v.sampleAtMs)!==null?'ESP32 inaccessible · dernière mesure conservée':'Lecture indisponible';row(details,'État',state);row(details,'Puissance solaire',fmt(v.pvPowerW,'W'));row(details,'Consommation AC',fmt(v.loadW,'W'));row(details,'Tension AC',fmt(v.outputVoltageV,'V',1));row(details,'Courant AC',fmt(v.outputCurrentA,'A',1));row(details,'Fréquence',fmt(v.outputHz,'Hz',2));row(details,'PV jour UTC',fmt(v.pvDayKwh,'kWh',2));row(details,'Batterie (onduleur)',fmt(v.batteryVoltageV,'V',1)+' · '+fmt(v.batteryCurrentA,'A',1));row(details,'Mode',v.operationMode||'—');
+var extra=[
+['apparentPowerVa','Puissance apparente','VA'],['loadPercent','Charge sortie','%'],
+['gridVoltageV','Tension réseau','V'],['gridFrequencyHz','Fréquence réseau','Hz'],
+['batteryChargeCurrentA','Courant de charge batterie','A'],
+['batteryDischargeCurrentA','Courant de décharge batterie','A'],
+['batterySccVoltageV','Tension SCC batterie','V'],
+['temperatureC','Température dissipateur','°C'],
+['busVoltageV','Tension bus','V'],
+['loadDayKwh','Consommation AC jour (native)','kWh']];
+extra.forEach(function(x){if(n(v[x[0]])!==null)row(details,x[1],fmt(v[x[0]],x[2],2))});
+row(details,'Dernier diagnostic',v.detail||'—');
 if(n(v.qpigsAgeMs)!==null)row(details,'Âge QPIGS',fmt(v.qpigsAgeMs/1000,'s',1));
 if(n(v.serialTimeouts)!==null)row(details,'Timeouts série cumulés',String(v.serialTimeouts));
 if(n(v.serialNoRxTimeouts)!==null)row(details,'Sans retour série',String(v.serialNoRxTimeouts));
@@ -168,10 +246,21 @@ if(n(v.s3HttpTelemetryRequests)!==null)row(details,'Requêtes HTTP reçues par E
 if(n(v.s3HttpSendFailures)!==null)row(details,'Échecs HTTP envoyés côté ESP32',String(v.s3HttpSendFailures));
 if(n(v.s3FreeHeapBytes)!==null)row(details,'Mémoire libre ESP32',fmt(v.s3FreeHeapBytes/1024,'Ko',0));
 if(n(v.s3UptimeMs)!==null)row(details,'Durée de fonctionnement ESP32',fmt(v.s3UptimeMs/60000,'min',0));
-if(n(v.effectiveSampleAgeMs)!==null)row(details,'Âge de la dernière mesure',fmt(v.effectiveSampleAgeMs/1000,'s',1));(v.pvChannels||[]).forEach(function(c){row(details,'MPPT '+c.index+' · puissance',fmt(c.powerW,'W')+(c.derived?' (estimée)':''));row(details,'MPPT '+c.index+' · tension / courant',fmt(c.voltageV,'V',1)+' / '+fmt(c.currentA,'A',1))})}
-function render(){var items=data.inverters||[],live=fresh(),pvs=channels(live),p=sum(live,'pvPowerW'),l=sum(live,'loadW'),pvDay=(live.length===items.length&&live.length>0&&live.every(function(x){return n(x.pvDayKwh)!==null}))?sum(live,'pvDayKwh'):null,loadDay=null;var jk=data.jk||{},soc=n(jk.soc),bvol=null,bcur=null,batLabel='';if((jk.online||0)>0){batLabel='JK BMS'}else{var bat=live.find(function(x){return n(x.batteryVoltageV)!==null});if(bat){bvol=n(bat.batteryVoltageV);bcur=n(bat.batteryCurrentA);soc=n(bat.inverterBatterySoc);batLabel='Onduleur (estimation SOC)'}}var grid=null,gridInfo='Sens non vérifié';if(live.length===1){grid=n(live[0].gridPowerW);gridInfo=grid===null?'Mesure indisponible':'Puissance native, sens non validé'}else if(live.length>1){gridInfo='Multi-onduleurs : total réseau non mesurable'}
+if(n(v.effectiveSampleAgeMs)!==null)row(details,'Âge de la dernière mesure',fmt(v.effectiveSampleAgeMs/1000,'s',1));
+[['s3QpigsRequests','QPIGS interrogés',''],['s3Qpigs2Requests','QPIGS2 interrogés',''],
+ ['s3QpigsIntervalMs','Intervalle réel QPIGS','ms'],['s3Qpigs2IntervalMs','Intervalle réel QPIGS2','ms'],
+ ['s3LastExchangeMs','Durée du dernier échange série','ms']].forEach(function(x){
+ if(n(v[x[0]])!==null)row(details,x[1],fmt(v[x[0]],x[2],0))
+});(v.pvChannels||[]).forEach(function(c){row(details,'MPPT '+c.index+' · puissance',fmt(c.powerW,'W')+(c.derived?' (estimée)':''));row(details,'MPPT '+c.index+' · tension / courant',fmt(c.voltageV,'V',1)+' / '+fmt(c.currentA,'A',1))});
+renderNativeDetails(details,v)}
+function render(){var items=data.inverters||[],live=fresh(),pvs=channels(live),p=sum(live,'pvPowerW'),l=sum(live,'loadW'),pvDay=(live.length===items.length&&live.length>0&&live.every(function(x){return n(x.pvDayKwh)!==null}))?sum(live,'pvDayKwh'):null,loadDay=(live.length===items.length&&live.length>0&&live.every(function(x){return n(x.loadDayKwh)!==null}))?sum(live,'loadDayKwh'):null;var jk=data.jk||{},soc=n(jk.soc),bvol=null,bcur=null,batLabel='';if((jk.online||0)>0){batLabel='JK BMS'}else{var bat=live.find(function(x){return n(x.batteryVoltageV)!==null});if(bat){bvol=n(bat.batteryVoltageV);bcur=n(bat.batteryCurrentA);soc=n(bat.inverterBatterySoc);batLabel='Onduleur (estimation SOC)'}}var grid=null,gridInfo='Sens non vérifié';if(live.length===1){grid=n(live[0].gridPowerW);gridInfo=grid===null?'Mesure indisponible':'Puissance native, sens non validé'}else if(live.length>1){gridInfo='Multi-onduleurs : total réseau non mesurable'}
 el('setupHelp').style.display=items.length===0?'':'none';
-var stale=items.length>0&&live.length===0,reachable=items.some(function(v){return v.transportReachable===true}),unstable=items.some(function(v){return v.transientHttpError===true});el('state').textContent=items.length===0?'○ À configurer':unstable?'◷ HTTP instable':live.length===items.length&&live.length>0?'● Connecté':stale&&reachable?'◷ QPIGS en retard':stale?'○ Liaison indisponible':'◷ Partiel';el('state').className='status'+(stale?' old':live.length!==items.length?' off':'');el('hero').classList.toggle('paused',stale||unstable);txt('mPv',fmt(p,'W'));txt('mLoad',fmt(l,'W'));txt('mGrid',fmt(grid,'W'));txt('mSoc',fmt(soc,'%'));txt('mPvDay','PV jour UTC : '+fmt(pvDay,'kWh',2));el('mPvDay').style.display=pvDay===null?'none':'';txt('mInv',items.length+' / 3 INV');txt('sunPv',fmt(p,'W'));txt('sunPvDay','PV jour UTC : '+fmt(pvDay,'kWh',2));el('sunPvDay').style.display=pvDay===null?'none':'';txt('sunHome',fmt(l,'W'));txt('sunGrid',fmt(grid,'W'));txt('sunGridInfo',gridInfo);txt('sunInv',live.length+'/'+items.length+' onduleur(s)');txt('sunAc',live.length===1?fmt(live[0].outputVoltageV,'V',1)+' · '+fmt(live[0].outputHz,'Hz',2):'Voir onglets Onduleurs');txt('sunSoc',fmt(soc,'%'));txt('sunBattery',(batLabel||'Batterie sans mesure')+' · '+(bvol===null?'—':fmt(bvol,'V',1))+(bcur===null?'':' · '+fmt(bcur,'A',1)));drawMppts(pvs);
+var stale=items.length>0&&live.length===0,reachable=items.some(function(v){return v.transportReachable===true}),unstable=items.some(function(v){return v.transientHttpError===true});el('state').textContent=items.length===0?'○ À configurer':unstable?'◷ HTTP instable':live.length===items.length&&live.length>0?'● Connecté':stale&&reachable?'◷ QPIGS en retard':stale?'○ Liaison indisponible':'◷ Partiel';el('state').className='status'+(stale?' old':live.length!==items.length?' off':'');el('hero').classList.toggle('paused',stale||unstable);txt('mPv',fmt(p,'W'));txt('mLoad',fmt(l,'W'));txt('mGrid',fmt(grid,'W'));txt('mSoc',fmt(soc,'%'));txt('mPvDay','PV jour UTC : '+fmt(pvDay,'kWh',2));el('mPvDay').style.display=pvDay===null?'none':'';txt('mInv',items.length+' / 3 INV');txt('sunPv',fmt(p,'W'));txt('sunPvDay','PV jour UTC : '+fmt(pvDay,'kWh',2));el('sunPvDay').style.display=pvDay===null?'none':'';el('nativeDayBlocks').style.display=pvDay===null&&loadDay===null?'none':'grid';
+el('nativePvDayBox').style.display=pvDay===null?'none':'block';
+el('nativeLoadDayBox').style.display=loadDay===null?'none':'block';
+txt('nativePvDayValue',fmt(pvDay,'kWh',2));
+txt('nativeLoadDayValue',fmt(loadDay,'kWh',2));
+txt('sunHome',fmt(l,'W'));txt('sunGrid',fmt(grid,'W'));txt('sunGridInfo',gridInfo);txt('sunInv',live.length+'/'+items.length+' onduleur(s)');txt('sunAc',live.length===1?fmt(live[0].outputVoltageV,'V',1)+' · '+fmt(live[0].outputHz,'Hz',2):'Voir onglets Onduleurs');txt('sunSoc',fmt(soc,'%'));txt('sunBattery',(batLabel||'Batterie sans mesure')+' · '+(bvol===null?'—':fmt(bvol,'V',1))+(bcur===null?'':' · '+fmt(bcur,'A',1)));drawMppts(pvs);
 txt('route',data.route||'Local');txt('count',items.length+' INV · '+pvs.length+' MPPT frais');txt('updated',data.updated||'—');
 txt('qualityNote',items.length===0?'Ajoute un ESP32-S3 Voltronic dans Configuration pour obtenir des mesures. Aucune valeur fictive n’est affichée.':unstable?'HTTP momentanément instable : les dernières mesures sont récentes, les flux sont suspendus et une nouvelle tentative est prévue.':stale?'Les dernières mesures restent consultables dans Onduleurs mais ne sont pas considérées comme actuelles.':'Les totaux excluent les onduleurs sans mesure fraîche. Réseau : sens à vérifier, jamais assimilé à un achat EDF. MPPT non détectés non affichés.');
 renderInverters()}
