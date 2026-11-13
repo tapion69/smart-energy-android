@@ -212,13 +212,18 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - name: Set OTA-only sdkconfig for THIS build
+        run: |
+          cp firmware/voltronic-esp32/sdkconfig.ota.defaults firmware/voltronic-esp32/sdkconfig
+          grep -q '^CONFIG_PARTITION_TABLE_CUSTOM=y' firmware/voltronic-esp32/sdkconfig
+          grep -q '^CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions_ota.csv"' firmware/voltronic-esp32/sdkconfig
       - name: ESP-IDF 5.3.2 custom dual-OTA layout
         uses: espressif/esp-idf-ci-action@v1
         with:
           esp_idf_version: v5.3.2
           target: esp32s3
           path: firmware/voltronic-esp32
-          command: idf.py -B build_ota -D SDKCONFIG=sdkconfig_ota -D SDKCONFIG_DEFAULTS=sdkconfig.ota.defaults build
+          command: idf.py -B build_ota build
       - name: Verify safe partitions and package separate-offset images
         run: |
           set -euo pipefail
@@ -238,8 +243,8 @@ jobs:
           b,t,a=validate_migration_images(Path("firmware/voltronic-esp32/dist-ota"))
           print("USB migration safe partition ranges:", b.stat().st_size, t.stat().st_size, a.stat().st_size)
           PY
-          grep '^CONFIG_PARTITION_TABLE' firmware/voltronic-esp32/sdkconfig_ota || true
-          grep -q '^CONFIG_PARTITION_TABLE_CUSTOM=y' firmware/voltronic-esp32/sdkconfig_ota
+          grep '^CONFIG_PARTITION_TABLE' firmware/voltronic-esp32/sdkconfig || true
+          grep -q '^CONFIG_PARTITION_TABLE_CUSTOM=y' firmware/voltronic-esp32/sdkconfig
       - name: Publish NON-MERGED USB migration images
         uses: actions/upload-artifact@v4
         with:
