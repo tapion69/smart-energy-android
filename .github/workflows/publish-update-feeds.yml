@@ -1,0 +1,106 @@
+name: Publish verified Smart Energy update manifests
+
+# Publish a GitHub Release with the exact asset name below. Only the owner's
+# release event may update main/updates; no client request can write a manifest.
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: 'Existing published release tag: android-vX.Y.Z or voltronic-vX.Y.Z'
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+concurrency:
+  group: update-feeds-main
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Validate release tag and official published release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SELECTED_TAG: ${{ github.event_name == 'release' && github.event.release.tag_name || inputs.release_tag }}
+        run: |
+          set -euo pipefail
+          if [[ ! "$SELECTED_TAG" =~ ^(android|voltronic)-v[0-9]+\.[0-9]+\.[0-9]+(-[A-Za-z0-9.]+)?$ ]]; then
+            echo "::error::Unexpected release tag"
+            exit 1
+          fi
+          gh release view "$SELECTED_TAG" -R "${{ github.repository }}" --json isDraft,isPrerelease \
+            --jq 'if .isDraft then error("Draft release") else . end' >/dev/null
+          echo "RELEASE_TAG=$SELECTED_TAG" >> "$GITHUB_ENV"
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          persist-credentials: true
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Test release publication policy
+        run: python -m unittest discover -s tools/releases -p 'test_*.py'
+      - name: Download, verify, and prepare official manifest
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ANDROID_CERT_SHA256: ${{ secrets.SMART_ENERGY_ANDROID_CERT_SHA256 }}
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/smart-energy-release
+          VERSION="${RELEASE_TAG#*-v}"
+          if [[ "$RELEASE_TAG" == android-* ]]; then
+            if [[ -z "$ANDROID_CERT_SHA256" || ! "$ANDROID_CERT_SHA256" =~ ^[a-fA-F0-9]{64}$ ]]; then
+              echo "::error::Set SMART_ENERGY_ANDROID_CERT_SHA256 to the trusted permanent APK signing certificate digest."
+              exit 1
+            fi
+            gh release download "$RELEASE_TAG" -R "${{ github.repository }}" \
+              --pattern 'SmartEnergy-Android.apk' --dir /tmp/smart-energy-release
+            FILE=/tmp/smart-energy-release/SmartEnergy-Android.apk
+            test -s "$FILE"
+            APKSIGNER=$(find "$ANDROID_HOME/build-tools" -name apksigner -type f | sort -V | tail -n 1)
+            AAPT=$(find "$ANDROID_HOME/build-tools" -name aapt -type f | sort -V | tail -n 1)
+            "$APKSIGNER" verify "$FILE"
+            ACTUAL=$("$APKSIGNER" verify --print-certs "$FILE" |
+              sed -n 's/.*Signer #1 certificate SHA-256 digest: //p' | head -n 1 | tr '[:upper:]' '[:lower:]')
+            TRUSTED=$(printf '%s' "$ANDROID_CERT_SHA256" | tr '[:upper:]' '[:lower:]')
+            test -n "$ACTUAL" && test "$ACTUAL" = "$TRUSTED" || {
+              echo "::error::APK signer differs from permanent trusted certificate"
+              exit 1
+            }
+            BADGING=$("$AAPT" dump badging "$FILE" | head -n 1)
+            echo "$BADGING" | grep -q "name='fr.smartenergy.android'"
+            APK_CODE=$(echo "$BADGING" | sed -n "s/.*versionCode='\([0-9]*\)'.*/\1/p")
+            APK_NAME=$(echo "$BADGING" | sed -n "s/.*versionName='\([^']*\)'.*/\1/p")
+            test -n "$APK_CODE" && test "$APK_NAME" = "$VERSION"
+            python tools/releases/publish_update_manifest.py \
+              --tag "$RELEASE_TAG" --asset "$FILE" --version "$VERSION" \
+              --version-code "$APK_CODE"
+          else
+            gh release download "$RELEASE_TAG" -R "${{ github.repository }}" \
+              --pattern 'smart-energy-voltronic-S3-OTA.bin' --dir /tmp/smart-energy-release
+            FILE=/tmp/smart-energy-release/smart-energy-voltronic-S3-OTA.bin
+            test -s "$FILE"
+            python tools/releases/publish_update_manifest.py \
+              --tag "$RELEASE_TAG" --asset "$FILE" --version "$VERSION"
+          fi
+      - name: Update the manifest on main only
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add updates/android.json updates/voltronic-esp32.json
+          if git diff --cached --quiet; then
+            echo "Manifest already up to date"
+            exit 0
+          fi
+          git commit -m "chore(updates): publish verified $RELEASE_TAG manifest"
+          git pull --rebase origin main
+          git push origin HEAD:main
