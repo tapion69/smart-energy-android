@@ -166,7 +166,8 @@ class MainActivity : Activity() {
     private lateinit var energyDashboard: EnergyDashboardV3
     // Lazy: no change to JK telemetry, associations, BMS cards or settings.
     private val voltronicFleet by lazy {
-        VoltronicFleet(prefs,::auxiliaryCode,inverterWorker,inverterEnergyWorker,::voltronicWifiNetwork) {
+        VoltronicFleet(prefs,::auxiliaryCode,inverterWorker,inverterEnergyWorker,
+            ::voltronicWifiNetwork,::voltronicVpnRoute) {
             publishPremiumDashboard()
         }
     }
@@ -186,6 +187,22 @@ class MainActivity : Activity() {
             connectivity.activeNetwork?.takeIf(::wifi)
                 ?: connectivity.allNetworks.firstOrNull(::wifi)
         } catch (_:Exception) { null }
+    private fun voltronicVpnRoute():VoltronicVpnRoute?=try {
+        if(!prefs.getBoolean("remote_voltronic_enabled",false) || !vpnConnected())
+            null
+        else {
+            val gateway=prefs.getString("remote_gateway_ip","") ?: ""
+            val token=storedGatewayToken()
+            val vpn=connectivity.allNetworks.firstOrNull { network ->
+                connectivity.getNetworkCapabilities(network)?.hasTransport(
+                    NetworkCapabilities.TRANSPORT_VPN)==true
+            }
+            if(vpn==null || !VoltronicVpnReadOnlyClient.isTailnetIpv4(gateway) ||
+                token.length !in 20..128)null
+            else VoltronicVpnRoute(gateway,token,vpn)
+        }
+    } catch(_:Exception){null}
+
     // A saved JK reader or BMS is sufficient even if its measurements are stale.
     private fun hasAnyConfiguredJk():Boolean =
         (1..3).any { slot ->
@@ -1067,6 +1084,40 @@ class MainActivity : Activity() {
                 }
             }
         },8)
+        val voltVpn=section(advanced,"Accès VPN Voltronic · ESP32 Tailscale")
+        add(voltVpn,label("Depuis Internet : Tailscale Android vers l'ESP32 VPN, "+
+            "puis uniquement les lectures de INV1/INV2/INV3 sur le réseau local. "+
+            "L'ESP32 VPN doit être configuré dans le flasher avec les IP et "+
+            "codes Voltronic. Aucune écriture n'est relayée.",12f,color=subdued))
+        val vpnVoltEnabled=CheckBox(this).apply {
+            text="Utiliser le relais VPN Voltronic quand Tailscale est actif"
+            setTextColor(normal)
+            isChecked=prefs.getBoolean("remote_voltronic_enabled",false)
+            setOnCheckedChangeListener { _,checked ->
+                prefs.edit().putBoolean("remote_voltronic_enabled",checked).apply()
+                voltronicFleet.changed()
+            }
+        }
+        add(voltVpn,vpnVoltEnabled)
+        add(voltVpn,label("Réutilise l'adresse et le token du menu VPN JK. "+
+            "Si aucune passerelle n'est enregistrée, configure-la d'abord "+
+            "dans « Batteries JK → Accès extérieur ». Le Wi-Fi local "+
+            "reste utilisé lorsque Tailscale est coupé.",12f,color=subdued))
+        add(voltVpn,action("Tester le relais VPN Voltronic INV1") {
+            val gateway=voltronicVpnRoute()
+            if(gateway==null)state("Active Tailscale, configure le token et coche VPN Voltronic.")
+            else inverterWorker.execute {
+                val result=try {
+                    val obj=VoltronicVpnReadOnlyClient.read(1,false,gateway)
+                    if(obj.optBoolean("available"))
+                        "INV1 : télémétrie Voltronic reçue par VPN."
+                    else "INV1 : relais joint, mesure QPIGS indisponible."
+                }catch(ex:Exception){
+                    "VPN INV1 : "+(ex.message?:"lecture impossible").take(100)
+                }
+                runOnUiThread { state(result) }
+            }
+        })
         // Independent Voltronic slots INV2/INV3: never modify JK configuration.
         for(slot in 2..3) {
             val panel=section(advanced,"Onduleur INV$slot · Voltronic (lecture seule)")

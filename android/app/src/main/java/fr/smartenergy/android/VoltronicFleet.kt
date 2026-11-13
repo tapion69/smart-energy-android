@@ -22,6 +22,7 @@ class VoltronicFleet(
     private val worker:ExecutorService,
     private val energyWorker:ExecutorService,
     private val localWifiNetwork:()->Network?,
+    private val vpnRoute:()->VoltronicVpnRoute?,
     private val updated:()->Unit
 ) {
     private val mainHandler=Handler(Looper.getMainLooper())
@@ -109,7 +110,8 @@ class VoltronicFleet(
             if(now-lastPoll>20000L) {lastPoll=now;updated()}
             return
         }
-        pollNativeDetails(now,wifiNetwork)
+        val privateGateway=vpnRoute()
+        pollNativeDetails(now,wifiNetwork,privateGateway)
         // Android UI tick is 2.5s; a 5s HTTP rate remains gentle on ESP32.
         if(busy || (lastPoll>0L && now-lastPoll<5000L))return
         lastPoll=now
@@ -136,15 +138,18 @@ class VoltronicFleet(
                         .put("slot",c.slot).put("fresh",false)
                         .put("name","SunSpec INV${c.slot}")
                         .put("detail","Découverte seulement : aucune mesure disponible")
-                    wifiNetwork==null || !SunSpecReadOnly.isPrivateIPv4(c.host) ||
+                    (wifiNetwork==null && privateGateway==null) ||
+                        (privateGateway==null && !SunSpecReadOnly.isPrivateIPv4(c.host)) ||
                         c.port !in 1..65535 || c.code.length !in 8..32 ->
                         JSONObject(prior.toString()).put("configured",true)
                             .put("slot",c.slot).put("fresh",false)
-                            .put("detail",if(wifiNetwork==null)
-                                "Wi-Fi local requis · VPN Voltronic non relayé"
+                            .put("detail",if(wifiNetwork==null && privateGateway==null)
+                                "Wi-Fi local requis · VPN Voltronic non configuré"
                                 else "Lecteur à associer")
                     else -> try {
-                        val raw=VoltronicReadOnlyClient.telemetry(
+                        val raw=if(privateGateway!=null)
+                            VoltronicVpnReadOnlyClient.read(c.slot,false,privateGateway)
+                        else VoltronicReadOnlyClient.telemetry(
                             c.host,c.code,c.port,wifiNetwork)
                         val nextReading=if(raw.optBoolean("available") &&
                             raw.optJSONObject("values")!=null)
@@ -160,6 +165,7 @@ class VoltronicFleet(
                         nextReading.put("httpConsecutiveErrors",0)
                             .put("httpErrorsTotal",httpTotalErrors[c.slot-1])
                             .put("transientHttpError",false)
+                            .put("voltronicTransport",if(privateGateway!=null)"VPN Tailscale" else "Wi-Fi local")
                         lastHttpKinds[c.slot-1]?.let {
                             nextReading.put("lastHttpErrorKind",it)
                         }
@@ -203,8 +209,8 @@ class VoltronicFleet(
     private data class Config(val slot:Int,val kind:String,val host:String,
                               val port:Int,val code:String)
 
-    private fun pollNativeDetails(now:Long,network:Network?) {
-        if(network==null || energyBusy ||
+    private fun pollNativeDetails(now:Long,network:Network?,gateway:VoltronicVpnRoute?) {
+        if((network==null && gateway==null) || energyBusy ||
             (lastEnergyPoll>0L && now-lastEnergyPoll<90000L))return
         val configs=(1..3).filter {configured(it)}.mapNotNull { slot ->
             val type=if(slot==1)prefs.getString("inverter_probe_type","voltronic")
@@ -216,8 +222,10 @@ class VoltronicFleet(
                 else prefs.getInt("inverter_"+slot+"_port",18081)
             val code=readCode(if(slot==1)"premium_voltronic_code_cipher"
                 else "premium_voltronic_"+slot+"_code_cipher")
-            if(!SunSpecReadOnly.isPrivateIPv4(host) || port !in 1..65535 ||
-                code.length !in 8..32) null else Config(slot,"voltronic",host,port,code)
+            if((gateway==null && !SunSpecReadOnly.isPrivateIPv4(host)) ||
+                port !in 1..65535 ||
+                (gateway==null && code.length !in 8..32))
+                null else Config(slot,"voltronic",host,port,code)
         }
         if(configs.isEmpty())return
         lastEnergyPoll=now
@@ -226,7 +234,9 @@ class VoltronicFleet(
             val natives=mutableMapOf<Int,JSONObject>()
             for(config in configs) {
                 try {
-                    val obj=VoltronicReadOnlyClient.details(
+                    val obj=if(gateway!=null)
+                        VoltronicVpnReadOnlyClient.read(config.slot,true,gateway)
+                    else VoltronicReadOnlyClient.details(
                         config.host,config.code,config.port,network)
                     natives[config.slot]=obj
                 } catch(_:Exception) {
