@@ -231,9 +231,14 @@ jobs:
           from pathlib import Path
           sys.path.insert(0, "tools/windows-flasher")
           from voltronic_ota_migration import validate_migration_images
+          from voltronic_ota_migration import EXPECTED,parse_partition_table
+          actual=parse_partition_table(Path("firmware/voltronic-esp32/dist-ota/voltronic-s3-ota-partition-table.bin").read_bytes())
+          print("Build partition table:",actual,flush=True)
+          print("Expected safe table:",EXPECTED,flush=True)
           b,t,a=validate_migration_images(Path("firmware/voltronic-esp32/dist-ota"))
           print("USB migration safe partition ranges:", b.stat().st_size, t.stat().st_size, a.stat().st_size)
           PY
+          grep '^CONFIG_PARTITION_TABLE' firmware/voltronic-esp32/sdkconfig_ota || true
           grep -q '^CONFIG_PARTITION_TABLE_CUSTOM=y' firmware/voltronic-esp32/sdkconfig_ota
       - name: Publish NON-MERGED USB migration images
         uses: actions/upload-artifact@v4
