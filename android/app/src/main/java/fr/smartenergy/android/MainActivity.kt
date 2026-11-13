@@ -740,19 +740,58 @@ class MainActivity : Activity() {
         add(dashboardPage, label("Mesures expérimentales. Les réglages du BMS ne peuvent être modifiés qu'après un déverrouillage explicite.", 12f, color = subdued), 8)
         val advanced=configurationPage
         add(advanced,label("Configuration et associations",25f,true),18)
-        val readers=section(advanced,"Mes passerelles ESP32 JK (2 BMS maximum chacune)")
-        add(readers,label("Trois lecteurs JK indépendants, soit jusqu'à six BMS. Sélectionne un lecteur avant de l'associer, le configurer ou choisir ses batteries.",12f,color=subdued))
+        // All JK settings live in one group with one ESP 1/2/3 selector.
+        // Existing pairings, per-reader preferences and BMS registry are preserved.
+        val jkConfiguration=section(advanced,"Batteries JK · ESP 1 / ESP 2 / ESP 3",true)
+        val readers=jkConfiguration
+        add(readers,label("Sélectionne ESP 1, ESP 2 ou ESP 3. L'adresse, le code et les BMS enregistrés restent propres à chaque lecteur.",12f,color=subdued))
         readerSelector=LinearLayout(this).apply { orientation=LinearLayout.HORIZONTAL }
         add(readers,readerSelector,6)
         readerHeader=label("",13f,false,normal)
         add(readers,readerHeader,8)
         refreshReaderSelector()
 
+        val lan = section(jkConfiguration, "Connexion quotidienne · IP et code ESP32 JK",true)
+        add(lan, label("Pour un lecteur déjà préparé dans le flasher, saisis son IP et son code, puis connecte-le. L'association BOOT n'est pas nécessaire dans ce cas.",12f,color=subdued))
+        lanIp = input("Adresse IP locale de l'ESP32 (ex. 192.168.1.50)")
+        lanIp.setText(prefs.getString("local_ip", "") ?: "")
+        add(lan, lanIp)
+        setupCode = input("Code ESP32 JK (vide s'il est déjà mémorisé)",true)
+        add(lan,setupCode,6)
+        lanConnectBtn = action("Se connecter à ma passerelle") {
+            // Manual local is an explicit override for JK setup/writes.
+            remoteCheck.isChecked=false
+            prefs.edit().putString("connection_preference","local")
+                .putBoolean("remote_gateway_enabled",false).apply()
+            connectHomeLan()
+        }
+        add(lan, lanConnectBtn)
+        lanDiscoverBtn = action("Rechercher sur mon Wi-Fi") { discoverHomeLan() }
+        add(lan, lanDiscoverBtn)
+        add(lan, label("Le code est chiffré dans l'application après une connexion réussie. Pour le remplacer sur l'ESP32, utilise l'option ci-dessous.",12f,color=subdued))
+
+        val access = section(lan, "Changer le code ESP32 JK · optionnel")
+        add(access, label("Après connexion locale, définis un nouveau code de 8 à 32 caractères. L'application sauvegarde le changement pour l'ESP sélectionné.", 13f, color = subdued))
+        accessCodeNew = input("Nouveau code ESP32 (8 à 32 caractères)", true)
+        add(access, accessCodeNew)
+        accessCodeBtn = action("Changer le code de ma passerelle") { changeDeviceCode() }
+        add(access, accessCodeBtn)
+
+        val b = section(jkConfiguration, "Gérer les BMS enregistrés · lecteur sélectionné")
+        add(b, label("Chaque lecteur accepte deux BMS dans l'application. Décoche un BMS puis sauvegarde pour le retirer ; son adresse reste connue pour le réassocier. Utilise Renommer pour personnaliser chaque batterie.",13f,color=subdued))
+        add(b, action("Afficher mes BMS enregistrés") { loadSavedBms() }, 8)
+        scanBtn = action("Rechercher de nouveaux appareils Bluetooth") { scanBle() }
+        add(b, scanBtn)
+        scanPanel = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        add(b, scanPanel)
+        saveBtn = action("Sauvegarder les batteries choisies") { saveSelection() }
+        add(b, saveBtn)
+        add(b, label("Une case décochée ne prend effet qu'après « Sauvegarder ». La suppression retire seulement l'adresse de la liste ESP32 et termine cette connexion BLE ; les paramètres physiques du BMS ne sont jamais effacés. Les anciennes MAC restent connues de cette application pour être réactivées.",12f,color=subdued))
+
         // Keep the pairing controls together, immediately under the reader
         // selector. Both the scan and BOOT pairing act on the chosen slot.
-        val assistant=section(advanced,"Associer le lecteur sélectionné")
-        add(assistant,label("1. Choisis ESP 1, ESP 2 ou ESP 3 ci-dessus. "+
-            "Chaque lecteur garde son propre code, Wi-Fi et ses deux batteries.",12f,color=subdued))
+        val assistant=section(jkConfiguration,"Association BOOT · nouveau lecteur ou récupération")
+        add(assistant,label("Réservé aux lecteurs non encore provisionnés ou à un accès oublié. Un lecteur déjà configuré dans le flasher se connecte directement par IP + code ci-dessus.",12f,color=subdued))
         autoEspBtn=action("1 · Rechercher mon ESP32") { findNearbyEsp32() }
         add(assistant,autoEspBtn,8)
         apName=input("SmartJK-Setup-XXXXXX (réseau du lecteur choisi)")
@@ -778,43 +817,7 @@ class MainActivity : Activity() {
         }
         add(assistant,bootCommitBtn,8)
 
-        val diagnosticSection=section(advanced,"Debug et diagnostics")
-        val diagnosticSwitch=CheckBox(this).apply {
-            text="Afficher les diagnostics avancés (BLE, radio, Wi-Fi, mémoire)"
-            setTextColor(normal)
-            isChecked=debugEnabled
-            setOnCheckedChangeListener { _,checked ->
-                debugEnabled=checked
-                prefs.edit().putBoolean("debug_enabled",checked).apply()
-                refreshDebugVisibility()
-                mountedTab=-1 // Recreate details so debug-only rows also disappear.
-                lastTelemetry?.let { showTelemetry(it) }
-            }
-        }
-        add(diagnosticSection,diagnosticSwitch)
-        add(diagnosticSection,label("Désactivé par défaut. Les alertes réelles du BMS restent visibles sur les cartes.",12f,color=subdued))
-        renderFleetOverview()
-
-        val lan = section(advanced, "Connexion quotidienne — Wi-Fi maison")
-        add(lan, label("L’application mémorise le code après association. Si une réinstallation l’a effacé, renseigne le code dans la section 2 puis clique ici : pas besoin de reconfigurer la box.", color = subdued))
-        lanIp = input("Adresse IP locale de l'ESP32 (ex. 192.168.1.50)")
-        lanIp.setText(prefs.getString("local_ip", "") ?: "")
-        add(lan, lanIp)
-        lanConnectBtn = action("Se connecter à ma passerelle") {
-            // Manual local is an explicit override for JK setup/writes.
-            remoteCheck.isChecked=false
-            prefs.edit().putString("connection_preference","local")
-                .putBoolean("remote_gateway_enabled",false).apply()
-            connectHomeLan()
-        }
-        add(lan, lanConnectBtn)
-        lanDiscoverBtn = action("Rechercher sur mon Wi-Fi") { discoverHomeLan() }
-        add(lan, lanDiscoverBtn)
-        add(lan, label("Ce bouton retrouve un lecteur déjà connecté à ta box. "+
-            "Pour associer un ESP32 neuf, utilise les étapes 1, 2 et 3 juste "+
-            "sous le choix ESP 1 / ESP 2 / ESP 3.",12f,color=subdued))
-
-        val remote = section(advanced, "Accès extérieur — ESP32 VPN")
+        val remote = section(jkConfiguration, "Accès extérieur · ESP32 VPN / Tailscale")
         add(remote, label("Notre deuxième ESP32 relaie les lectures JK via le VPN Tailscale. Aucun mini-PC, aucun serveur Smart Energy et aucun port à ouvrir sur la box.", 13f, color = subdued))
         remoteStatus = label(if (vpnConnected()) "Tailscale / VPN Android détecté" else
             "VPN Android inactif : active Tailscale sur ton téléphone.", 12f, color = subdued)
@@ -868,37 +871,13 @@ class MainActivity : Activity() {
             }
         }, 8)
 
-        val a = section(advanced, "2. Première association / dépannage")
+        val a = section(jkConfiguration, "Dépannage · anciens lecteurs JK")
 
-        add(a, label("Méthode normale : choisis ton ESP en haut, recherche son "+
-            "Wi-Fi puis lance l'association BOOT. Cette section sert seulement "+
-            "aux anciens lecteurs avec un code déjà connu.",color=subdued))
-        setupCode = input("Ancien code ESP32 (vide = code mémorisé)",true)
-        add(a, setupCode)
+        add(a, label("Uniquement pour un ancien lecteur encore en point d'accès SmartJK-Setup. Le code actuel se saisit dans Connexion quotidienne, à côté de l'IP.",color=subdued))
         add(a, action("Connecter l'ESP32") { connectSetupAp() }, 12)
         add(a, label("Avec le mode BOOT 0.3.1, l'application rejoint automatiquement le Wi-Fi temporaire et demande une seconde confirmation physique ; il reste ouvert au maximum 2 minutes.", 12f, color = subdued))
 
-        val b = section(advanced, "3. Gérer les JK BMS enregistrés")
-        add(b, label("Chaque lecteur accepte deux BMS dans l'application. Décoche un BMS puis sauvegarde pour le retirer ; son adresse reste connue pour le réassocier. Utilise Renommer pour personnaliser chaque batterie.",13f,color=subdued))
-        add(b, action("Afficher mes BMS enregistrés") { loadSavedBms() }, 8)
-        scanBtn = action("Rechercher de nouveaux appareils Bluetooth") { scanBle() }
-        add(b, scanBtn)
-        scanPanel = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
-        add(b, scanPanel)
-        saveBtn = action("Sauvegarder les batteries choisies") { saveSelection() }
-        add(b, saveBtn)
-        add(b, label("Une case décochée ne prend effet qu'après « Sauvegarder ». La suppression retire seulement l'adresse de la liste ESP32 et termine cette connexion BLE ; les paramètres physiques du BMS ne sont jamais effacés. Les anciennes MAC restent connues de cette application pour être réactivées.",12f,color=subdued))
-
-        val wifiMaintenance=LinearLayout(this).apply {
-            orientation=LinearLayout.VERTICAL
-            visibility=View.GONE
-        }
-        add(advanced, action("Changer le Wi-Fi de l'ESP32 (dépannage)") {
-            wifiMaintenance.visibility=
-                if(wifiMaintenance.visibility==View.VISIBLE) View.GONE else View.VISIBLE
-        }, 12)
-        advanced.addView(wifiMaintenance)
-        val c = section(wifiMaintenance, "Modifier le Wi-Fi 2,4 GHz de l'ESP32")
+        val c = section(jkConfiguration, "Dépannage · modifier le Wi-Fi 2,4 GHz")
         wifiScanBtn = action("Rechercher les réseaux Wi-Fi disponibles") { scanRouterWifi() }
         add(c, wifiScanBtn)
         wifiNetworks = RadioGroup(this).apply { orientation = RadioGroup.VERTICAL }
@@ -918,12 +897,22 @@ class MainActivity : Activity() {
         add(c, wifiStatus)
         add(c, label("À utiliser seulement en cas de changement de box, SSID ou mot de passe. La première association BOOT configure déjà le Wi-Fi. Réseau local de confiance uniquement ; ne jamais exposer l'API ESP32 sur Internet.", 12f, color = subdued))
 
-        val access = section(advanced, "Code d'accès de l'ESP32")
-        add(access, label("Modifie le code personnel de la passerelle après association. Minimum 8 caractères pour protéger aussi son point d'accès Wi-Fi.", 13f, color = subdued))
-        accessCodeNew = input("Nouveau code ESP32 (8 à 32 caractères)", true)
-        add(access, accessCodeNew)
-        accessCodeBtn = action("Changer le code de ma passerelle") { changeDeviceCode() }
-        add(access, accessCodeBtn)
+        val diagnosticSection=section(jkConfiguration,"Diagnostics avancés JK")
+        val diagnosticSwitch=CheckBox(this).apply {
+            text="Afficher les diagnostics avancés (BLE, radio, Wi-Fi, mémoire)"
+            setTextColor(normal)
+            isChecked=debugEnabled
+            setOnCheckedChangeListener { _,checked ->
+                debugEnabled=checked
+                prefs.edit().putBoolean("debug_enabled",checked).apply()
+                refreshDebugVisibility()
+                mountedTab=-1 // Recreate details so debug-only rows also disappear.
+                lastTelemetry?.let { showTelemetry(it) }
+            }
+        }
+        add(diagnosticSection,diagnosticSwitch)
+        add(diagnosticSection,label("Désactivé par défaut. Les alertes réelles du BMS restent visibles sur les cartes.",12f,color=subdued))
+        renderFleetOverview()
 
         // First inverter interoperability test: authenticated Voltronic GET or
         // SunSpec Modbus/TCP FC03 discovery, never changes inverter settings.
@@ -2816,6 +2805,8 @@ class MainActivity : Activity() {
         lanIp.setText(localHost)
         apName.setText(prefs.getString("setup_ssid","") ?: "")
         setupCode.text.clear()
+        setupCode.hint="Code ESP $target (vide si mémorisé)"
+        if(::accessCodeNew.isInitialized)accessCodeNew.text.clear()
         refreshReaderSelector()
         if(selectedDeviceId.isNotBlank() && storedCode().isNotBlank()) {
             when(selectedRoute()) {
