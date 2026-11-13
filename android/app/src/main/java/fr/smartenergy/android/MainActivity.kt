@@ -1223,6 +1223,19 @@ class MainActivity : Activity() {
         add(firmwareUpdates,action("Vérifier les versions firmware publiées") {
             checkSmartEnergyUpdates(true)
         })
+        add(firmwareUpdates,action("Installer OTA Voltronic depuis GitHub (si compatible)") {
+            val slots=(1..3).filter {voltronicFleet.configured(it)}
+            if(slots.isEmpty()) {
+                updateFeedback.text="Configure d'abord un ESP32-S3 Voltronic."
+            }else {
+                val titles=slots.map{"INV$it"}.toTypedArray()
+                AlertDialog.Builder(this)
+                    .setTitle("Choisir le lecteur Voltronic")
+                    .setItems(titles) { _,which ->
+                        checkVoltronicOtaForSlot(slots[which])
+                    }.show()
+            }
+        },7)
         updateFeedback=label("Aucune vérification effectuée.",13f,false,subdued)
         add(updatesPage,updateFeedback,8)
         add(updatesPage,action("Voir les publications Smart Energy sur GitHub") {
@@ -3819,6 +3832,74 @@ class MainActivity : Activity() {
                             voltronicProfileFeedback.text="Import refusé : "+
                                 (ex.message?:"fichier invalide")
                     }
+                }
+            }
+        }
+    }
+
+    private fun checkVoltronicOtaForSlot(slot:Int) {
+        if(slot !in 1..3 || !voltronicFleet.configured(slot))return
+        val host=if(slot==1)prefs.getString("inverter_probe_ip","")?:""
+            else prefs.getString("inverter_${slot}_ip","")?:""
+        val port=if(slot==1)prefs.getInt("inverter_probe_port",18081)
+            else prefs.getInt("inverter_${slot}_port",18081)
+        val code=auxiliaryCode(if(slot==1)"premium_voltronic_code_cipher"
+            else "premium_voltronic_${slot}_code_cipher")
+        val network=voltronicWifiNetwork()
+        if(network==null) {
+            updateFeedback.text="OTA réservée au Wi-Fi local. Connecte-toi à ta box."
+            return
+        }
+        if(!SunSpecReadOnly.isPrivateIPv4(host) || code.length !in 8..32) {
+            updateFeedback.text="Configure d'abord l'IP et le code du lecteur INV$slot."
+            return
+        }
+        updateFeedback.text="Vérification OTA du S3 INV$slot…"
+        settingsWorker.execute {
+            val result=try {
+                val status=VoltronicLocalOta.status(host,code,port,network)
+                if(!status.optBoolean("ota_supported")) {
+                    runOnUiThread {
+                        updateFeedback.text="INV$slot : partitions OTA absentes. "+
+                            "Migration USB nécessaire ; aucune écriture effectuée."
+                    }
+                    return@execute
+                }
+                val feed=SmartEnergyUpdateFeed.parseVoltronic(
+                    SmartEnergyUpdateFeed.fetchPublicManifest(
+                        SmartEnergyUpdateFeed.VOLTRONIC_MANIFEST),
+                    voltronicFleet.snapshotFor(slot).optString("firmwareVersion",""))
+                    ?:throw IllegalStateException("Aucune version S3 plus récente publiée")
+                require(feed.compatible){"Image non compatible ESP32-S3 N16R8"}
+                runOnUiThread {
+                    AlertDialog.Builder(this)
+                        .setTitle("OTA INV$slot — ${feed.version}")
+                        .setMessage("Le firmware vient de GitHub, avec contrôle SHA-256. "+
+                            "Le transfert utilisera uniquement le Wi-Fi local. "+
+                            "Le S3 redémarrera ; les données NVS et les réglages "+
+                            "des BMS ne sont pas modifiés. Continuer ?")
+                        .setNegativeButton("Annuler",null)
+                        .setPositiveButton("Installer") { _,_ ->
+                            updateFeedback.text="OTA INV$slot en cours…"
+                            settingsWorker.execute {
+                                val message=try {
+                                    VoltronicLocalOta.install(this,feed,host,code,port,
+                                        network){statusText->
+                                            runOnUiThread {updateFeedback.text=statusText}
+                                        }
+                                    "INV$slot : OTA reçue et validée, redémarrage du S3."
+                                }catch(ex:Exception){
+                                    "OTA INV$slot refusée : "+
+                                        (ex.message?:ex.javaClass.simpleName).take(150)
+                                }
+                                runOnUiThread{updateFeedback.text=message}
+                            }
+                        }.show()
+                }
+            }catch(ex:Exception) {
+                runOnUiThread{
+                    updateFeedback.text="OTA INV$slot : "+
+                        (ex.message?:ex.javaClass.simpleName).take(150)
                 }
             }
         }
