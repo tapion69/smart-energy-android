@@ -162,6 +162,7 @@ class MainActivity : Activity() {
     private var homeBatteryMode:Boolean?=null
     private var navigateNative:((Int)->Unit)?=null
     private lateinit var connectionBadge:TextView
+    private lateinit var updateFeedback:TextView
     private lateinit var premiumDashboard: PremiumEnergyDashboard
     private lateinit var energyDashboard: EnergyDashboardV3
     // Lazy: no change to JK telemetry, associations, BMS cards or settings.
@@ -670,6 +671,7 @@ class MainActivity : Activity() {
         val dashboardPage=LinearLayout(this).apply {orientation=LinearLayout.VERTICAL}
         val configurationPage=LinearLayout(this).apply {orientation=LinearLayout.VERTICAL}
         val settingsPage=LinearLayout(this).apply {orientation=LinearLayout.VERTICAL}
+        val updatesPage=LinearLayout(this).apply {orientation=LinearLayout.VERTICAL}
         val navButtons=linkedMapOf<Int,TextView>()
         fun showPage(page:Int) {
             currentRootPage=page
@@ -683,6 +685,7 @@ class MainActivity : Activity() {
             dashboardPage.visibility=if(batteryVisible)View.VISIBLE else View.GONE
             configurationPage.visibility=if(page==2)View.VISIBLE else View.GONE
             settingsPage.visibility=if(page==3)View.VISIBLE else View.GONE
+            updatesPage.visibility=if(page==6)View.VISIBLE else View.GONE
             // Never show the obsolete premium scene on a JK-only installation.
             if(::premiumDashboard.isInitialized)premiumDashboard.visibility=View.GONE
             if(::energyDashboard.isInitialized) {
@@ -710,10 +713,11 @@ class MainActivity : Activity() {
         }
         navigateNative={ page -> showPage(page) }
         val navigation=LinearLayout(this).apply {
-            orientation=LinearLayout.HORIZONTAL
+            orientation=LinearLayout.VERTICAL
             gravity=Gravity.CENTER_VERTICAL
         }
-        // Six consistent destinations: short Config is never hidden.
+        // Seven destinations in two rows: Config and MÀJ always visible.
+        // Unlike a horizontal carousel, the menu cannot hide Configuration.
         // TextView (instead of platform Button) avoids forced min-width.
         val items=listOf(
             Triple("⌂ Accueil",0,"Accueil"),
@@ -721,8 +725,18 @@ class MainActivity : Activity() {
             Triple("▣ Batteries",1,"Batteries"),
             Triple("⇄ Énergie",5,"Énergie"),
             Triple("⚙ Config",2,"Configuration"),
-            Triple("Réglages",3,"Réglages"))
-        for((title,page,description) in items) {
+            Triple("Réglages",3,"Réglages"),
+            Triple("↻ MÀJ",6,"Mises à jour"))
+        var navRow:LinearLayout?=null
+        for((index,entry) in items.withIndex()) {
+            val (title,page,description)=entry
+            if(index%4==0) {
+                navRow=LinearLayout(this).apply {
+                    orientation=LinearLayout.HORIZONTAL
+                    gravity=Gravity.CENTER_VERTICAL
+                }
+                navigation.addView(navRow,LinearLayout.LayoutParams(-1,d(49)))
+            }
             val item=label(title,if(resources.configuration.screenWidthDp<375)9f else 10f,
                 true,normal).apply {
                 gravity=Gravity.CENTER
@@ -733,7 +747,7 @@ class MainActivity : Activity() {
                 setOnClickListener {showPage(page)}
             }
             navButtons[page]=item
-            navigation.addView(item,LinearLayout.LayoutParams(0,d(52),1f).apply {
+            navRow!!.addView(item,LinearLayout.LayoutParams(0,d(46),1f).apply {
                 leftMargin=d(2);rightMargin=d(2)
             })
         }
@@ -742,6 +756,7 @@ class MainActivity : Activity() {
         root.addView(dashboardPage)
         root.addView(configurationPage)
         root.addView(settingsPage)
+        root.addView(updatesPage)
         premiumDashboard=PremiumEnergyDashboard(this)
         premiumDashboard.onNavigate={ destination ->
             when(destination) {
@@ -1184,6 +1199,36 @@ class MainActivity : Activity() {
             "sur Accueil. Les mesures absentes restent indisponibles, sans valeur "+
             "fictive.",12f,color=subdued))
         add(advanced, label("BLE multi-batteries, OTA et accès distant : fonctions en développement.", 12f, color = subdued), 12)
+
+        add(updatesPage,label("Mises à jour Smart Energy",23f,true),12)
+        add(updatesPage,label("Même principe que WaterVan : publication GitHub, "+
+            "notification de version et téléchargement volontaire. "+
+            "Les mises à jour de l'application préservent les réglages "+
+            "uniquement si le nom du paquet et le certificat de signature "+
+            "restent identiques.",12f,color=subdued))
+        val appUpdates=section(updatesPage,"APK Android · versions GitHub",true)
+        add(appUpdates,label("Une version plus récente sera proposée si "+
+            "un manifeste officiel et une APK signée sont publiés sur GitHub. "+
+            "La mise à jour s'effectue par-dessus l'application existante, "+
+            "sans désinstallation, si la signature correspond.",12f,color=subdued))
+        add(appUpdates,action("Vérifier les mises à jour Android") {
+            checkSmartEnergyUpdates(true)
+        })
+        val firmwareUpdates=section(updatesPage,"Firmware ESP32-S3 Voltronic · OTA",true)
+        add(firmwareUpdates,label("Le lecteur Voltronic actuel utilise une "+
+            "partition unique. L'OTA directe est désactivée tant qu'une "+
+            "migration USB sécurisée vers deux partitions OTA "+
+            "n'a pas été effectuée. Aucune écriture flash automatique.",12f,
+            color=subdued))
+        add(firmwareUpdates,action("Vérifier les versions firmware publiées") {
+            checkSmartEnergyUpdates(true)
+        })
+        updateFeedback=label("Aucune vérification effectuée.",13f,false,subdued)
+        add(updatesPage,updateFeedback,8)
+        add(updatesPage,action("Voir les publications Smart Energy sur GitHub") {
+            startActivity(Intent(Intent.ACTION_VIEW,
+                Uri.parse("https://github.com/tapion69/smart-energy-android/releases")))
+        },6)
 
         add(settingsPage,label("Réglages de l'application",25f,true),16)
         val voltProfiles=section(settingsPage,
@@ -3779,8 +3824,73 @@ class MainActivity : Activity() {
         }
     }
 
+    private fun checkSmartEnergyUpdates(manual:Boolean) {
+        if(!::updateFeedback.isInitialized)return
+        val now=System.currentTimeMillis()
+        if(!manual && now-prefs.getLong("updates_last_check_ms",0L)<86400000L)return
+        prefs.edit().putLong("updates_last_check_ms",now).apply()
+        if(manual)updateFeedback.text="Vérification des publications GitHub…"
+        settingsWorker.execute {
+            val code=if(Build.VERSION.SDK_INT>=28)
+                packageManager.getPackageInfo(packageName,0).longVersionCode
+                else @Suppress("DEPRECATION")
+                    packageManager.getPackageInfo(packageName,0).versionCode.toLong()
+            var apk:SmartEnergyUpdateFeed.AndroidRelease?=null
+            var fw:SmartEnergyUpdateFeed.FirmwareRelease?=null
+            var appFailure:String?=null
+            var fwFailure:String?=null
+            try {
+                apk=SmartEnergyUpdateFeed.parseAndroid(
+                    SmartEnergyUpdateFeed.fetchPublicManifest(
+                        SmartEnergyUpdateFeed.ANDROID_MANIFEST),code)
+            } catch(ex:Exception){appFailure=ex.javaClass.simpleName}
+            try {
+                val firmwareVersion=voltronicFleet.snapshotFor(1)
+                    .optString("firmwareVersion","")
+                fw=SmartEnergyUpdateFeed.parseVoltronic(
+                    SmartEnergyUpdateFeed.fetchPublicManifest(
+                        SmartEnergyUpdateFeed.VOLTRONIC_MANIFEST),firmwareVersion)
+            }catch(ex:Exception){fwFailure=ex.javaClass.simpleName}
+            runOnUiThread {
+                if(isFinishing || !::updateFeedback.isInitialized)return@runOnUiThread
+                val appSummary=when {
+                    apk!=null -> "APK Android ${apk!!.version} disponible."
+                    appFailure!=null -> "Android : GitHub indisponible ($appFailure)."
+                    else -> "Android : aucune nouvelle version publiée."
+                }
+                val fwSummary=when {
+                    fw!=null -> "S3 ${fw!!.version} publiée ; OTA non activée sur les lecteurs actuels."
+                    fwFailure!=null -> "Firmware : vérification impossible ($fwFailure)."
+                    else -> "S3 : aucune nouvelle version publiée."
+                }
+                updateFeedback.text=appSummary+"\n"+fwSummary
+                val release=apk
+                if(release!=null &&
+                    prefs.getLong("updates_last_alert_code",0L)<release.versionCode) {
+                    AlertDialog.Builder(this)
+                        .setTitle("Smart Energy ${release.version} disponible")
+                        .setMessage("Une nouvelle APK est publiée sur GitHub. "+
+                            "Télécharge-la puis installe-la sur la version actuelle "+
+                            "sans désinstaller l'application. "+
+                            "Une signature identique est indispensable.")
+                        .setNegativeButton("Plus tard") { _,_ ->
+                            prefs.edit().putLong("updates_last_alert_code",
+                                release.versionCode).apply()
+                        }
+                        .setPositiveButton("Télécharger") { _,_ ->
+                            prefs.edit().putLong("updates_last_alert_code",
+                                release.versionCode).apply()
+                            startActivity(Intent(Intent.ACTION_VIEW,
+                                Uri.parse(release.downloadUrl)))
+                        }.show()
+                }
+            }
+        }
+    }
+
     override fun onResume() {
         super.onResume()
+        checkSmartEnergyUpdates(false)
         // Already-seen values appear immediately, never re-stamped as fresh.
         lastTelemetry?.let { showTelemetry(it) }
         uiHandler.removeCallbacks(telemetryTicker)
