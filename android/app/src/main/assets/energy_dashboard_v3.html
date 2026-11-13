@@ -1,0 +1,159 @@
+<!doctype html>
+<html lang="fr"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Smart Energy · Dashboard énergie</title>
+<style>
+:root{color-scheme:dark;--bg:#06131e;--panel:#102c3a;--ink:#eaf8ff;--muted:#a6bfcb;--gold:#f8c044;--green:#3deb9a;--blue:#59bdf5}
+*{box-sizing:border-box}
+html{background:var(--bg)}
+body{margin:0;padding:0 0 12px;background:radial-gradient(circle at 50% 0,#103b4e,#05121d 58%);color:var(--ink);font:12px/1.4 Roboto,Arial,sans-serif}
+button{font:inherit;cursor:pointer}
+.wrap{width:100%;max-width:860px;margin:auto;padding:10px 8px}
+.header{display:flex;align-items:center;justify-content:space-between;padding:8px 3px 12px;gap:10px}
+.brand{font-size:20px;font-weight:950;letter-spacing:-.7px}.brand b{color:#48e8cb}
+.sub{color:var(--muted);font-size:10px}
+.status{color:#6af1b5;border:1px solid #357e69;background:#103c37;padding:5px 8px;border-radius:20px;max-width:120px;text-align:center;font-size:10px}
+.status.old{color:#ffdc87;border-color:#ab833c}.status.off{color:#ffa8b4;border-color:#9e4b5b}
+.nav,.styles{display:flex;gap:6px;margin:4px 0 12px}
+.nav button,.styles button{flex:1;min-width:0;padding:9px 4px;background:#133242;border:1px solid #326173;color:#b3d0df;border-radius:9px;font-weight:bold}
+.nav button.active,.styles button.active{background:#205660;color:#e6fff6;border-color:#5ddabd}
+.nav button{font-size:11px}
+.note{padding:8px;background:#3c3018;border:1px solid #77633c;color:#ffe0a3;border-radius:8px;font-size:10px;margin:8px 0}
+.panel{background:linear-gradient(135deg,#113546,#0a1e2b);border:1px solid #315b6b;border-radius:14px;padding:12px;margin:9px 0}
+.panel h3{margin:0 0 10px;font-size:14px}.muted{color:var(--muted)}
+.view{display:none}.view.show{display:block}
+.hero{position:relative;height:455px;border:1px solid #4c7881;border-radius:18px;overflow:hidden;background-color:#102d3e;background-image:linear-gradient(180deg,#0013238c,transparent 29%,#001626ae 100%),url('energy_modern_photo.webp'),url('energy_house.webp');background-size:cover; background-position:center}
+.hero-title{position:absolute;top:12px;left:11px;font-size:11px;font-weight:900;background:#001b2db8;border-radius:6px;padding:6px 8px}
+.photoVal{position:absolute;z-index:2;min-width:90px;padding:8px;background:#051e30e9;border:1px solid #7ac6d1;border-radius:9px;box-shadow:0 5px 19px #0009}
+.photoVal .cap{display:block;color:#b2d5e5;font-size:10px}.photoVal strong{display:block;font-size:18px;white-space:nowrap}.photoVal .day{font-size:10px;display:block;margin-top:3px;color:#e1f4f5}
+.photoVal.pv{left:28%;top:13%;border-color:#e2b85e}.photoVal.pv strong{color:#ffe080}
+.photoVal.home{left:35%;top:53%}.photoVal.grid{left:3%;bottom:5%;border-color:#659bdc}.photoVal.bat{right:3%;bottom:5%;border-color:#45ca96}.photoVal.bat strong{color:#94ffc3}
+.photoVal.inv{right:3%;top:37%;font-size:10px}.photoVal.inv strong{font-size:14px}
+.hero-lines{position:absolute;inset:0;width:100%;height:100%;pointer-events:none;filter:drop-shadow(0 0 4px #000);opacity:.9}
+.hero-lines path{fill:none;stroke-width:3;stroke-dasharray:6 9;animation:flow 1.3s linear infinite}
+.hero-lines .solar{stroke:#f1c14b}.hero-lines .house{stroke:#4ee7f2}.hero-lines .store{stroke:#58ec9f}.hero-lines .utility{stroke:#78b6ff}
+.paused .hero-lines path{animation:none;opacity:.14}
+@keyframes flow{to{stroke-dashoffset:-30}}
+.daily{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:7px;margin-top:8px}
+.daily .item{padding:9px;background:#11303b;border:1px solid #2d6470;border-radius:9px;min-width:0}
+.daily small{display:block;color:#adc6d0}.daily b{display:block;margin-top:3px;font-size:15px}
+.sun{background:#191b1d;border:1px solid #45494b;border-radius:15px;padding:12px 9px 16px;color:#e8edf0;overflow:hidden}
+.sun-title{display:flex;justify-content:space-between;align-items:center;gap:8px;border-bottom:1px solid #3d4143;padding-bottom:10px}
+.sun-title b{font-size:13px}.sun-title .total{color:#ffc34b;font-size:17px;white-space:nowrap}
+.mppt-area{position:relative;margin-top:14px;padding-bottom:42px}
+.mppt-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:9px 6px;position:relative;z-index:1}
+.mppt-box{border:1px solid #b69048;border-radius:8px;background:#29251e;padding:7px 4px;text-align:center;min-width:0}
+.mppt-box .name{color:#ffcb50;font-size:10px;font-weight:900}
+.mppt-box strong{display:block;color:#ffcb4c;font-size:18px;margin:3px 0}
+.mppt-box .detail{font-size:10px;color:#fbd181}
+.mppt-box .quality{font-size:9px;color:#aa9f87}
+.mppt-wire-svg{position:absolute;inset:0;z-index:0;pointer-events:none;overflow:visible;width:100%;height:100%}
+.mppt-wire-svg path{fill:none;stroke:#eeb13e;stroke-width:2.1;stroke-linecap:round;stroke-linejoin:round}
+.mppt-wire-svg circle{fill:#ffd05b}
+.flow-main{position:relative;display:grid;grid-template-columns:minmax(0,1fr) 98px minmax(0,1fr);align-items:center;gap:9px;margin:3px 0}
+.flow-main .node{text-align:center;min-width:0}.flow-main .node strong{display:block;font-size:17px;color:#b9d8ff}
+.flow-main .node.home strong{color:#a6f0ff}
+.flow-main .node span{display:block;font-size:10px;color:#c0cbd0}
+.flow-main .center{text-align:center;position:relative}
+.flow-main .inv{height:72px;background:#a9b2b7;border:2px solid #e2e8eb;border-radius:9px;color:#1c292e;display:grid;place-items:center;font-size:32px;font-weight:900}
+.flow-main .center .subtitle{font-size:10px;margin-top:5px;color:#afc7d0}
+.flow-main .join{position:absolute;top:27px;width:13px;height:2px;background:#55becd}.flow-main .join.left{right:100%}.flow-main .join.right{left:100%}
+.flow-main .join:after{content:'';position:absolute;right:-3px;top:-3px;width:7px;height:7px;background:#50dfbf;border-radius:100%}
+.flow-main .join.left:after{right:auto;left:-3px;background:#65bbf7}
+.sun-small{font-size:10px;margin-top:6px;line-height:1.3;color:#9eb9c8}
+.battery-branch{width:2px;height:26px;background:#4cee8d;margin:0 auto;position:relative}.battery-branch:after{content:'';position:absolute;bottom:-3px;left:-3px;width:8px;height:8px;background:#4cee8d;border-radius:100%}
+.battery-node{display:flex;align-items:center;justify-content:center;gap:14px;flex-wrap:wrap;color:#64f28e}
+.battery-icon{width:55px;height:78px;border:3px solid #54ed80;border-radius:8px;position:relative;padding:8px 6px}
+.battery-icon:before{content:'';position:absolute;top:-7px;left:17px;width:14px;height:5px;background:#54ed80}
+.battery-icon .fill{background:#50df76;opacity:.8;width:100%;height:85%;margin-top:4px}
+.battery-node strong{font-size:19px}.battery-node .small{font-size:10px}
+.grid-home-summary{display:grid;grid-template-columns:1fr 1fr;gap:6px;margin:12px 0}
+.grid-home-summary .stat{background:#22282b;border:1px solid #434b4e;border-radius:8px;padding:8px}
+.grid-home-summary small{display:block;font-size:10px;color:#c2cdd3}
+.grid-home-summary b{display:block;margin-top:4px;color:#c4f0ff;font-size:14px}
+.tabs{display:flex;gap:7px;overflow-x:auto}
+.tabs button{flex:1;background:#12313c;border:1px solid #386577;color:#b6d6e2;border-radius:9px;padding:10px 5px;font-weight:800;min-width:0}
+.tabs button.active{background:#1b6659;border-color:#58e4a8;color:white}
+.kpis{display:grid;grid-template-columns:1fr 1fr;gap:7px}
+.kpis>div{background:#153545;border:1px solid #2f5a69;border-radius:8px;padding:10px}
+.kpis small{font-size:10px;color:#bbd0dd;display:block}.kpis strong{font-size:17px;display:block;margin:5px 0}
+.row{display:flex;justify-content:space-between;gap:9px;padding:8px 0;border-bottom:1px solid #274c59}
+.row:last-child{border:0}.row span{color:#b2cbd7}.row b{text-align:right}
+@media(max-width:390px){.wrap{padding:8px 5px}.hero{height:420px}.photoVal{padding:6px;min-width:78px}.photoVal strong{font-size:15px}.photoVal.pv{left:22%}.photoVal.home{left:33%;top:50%}.mppt-box .detail{font-size:9px}}
+</style></head>
+<body><main class="wrap">
+<header class="header"><div><div class="brand">SMART <b>ENERGY</b></div><div class="sub">Onduleurs Voltronic · Énergie en lecture seule</div></div><span class="status" id="state">En attente</span></header>
+<nav class="nav"><button type="button" class="active" id="navHome">⌂ Accueil</button><button type="button" id="navInv">▣ Onduleurs</button><button type="button" id="navJk">▣ Batteries</button><button type="button" id="navSettings">⚙ Réglages</button></nav>
+<div id="pageHome">
+<div class="styles"><button type="button" id="modernBtn" class="active">Moderne</button><button type="button" id="sunBtn">Sunsynk</button></div>
+<div id="modern" class="view show">
+<section class="hero" id="hero"><div class="hero-title">⚡ ÉNERGIE DE LA MAISON</div>
+<svg class="hero-lines" viewBox="0 0 360 450" preserveAspectRatio="none" aria-hidden="true">
+<path class="solar" d="M125 105 Q182 134 171 230"/><path class="house" d="M184 248 Q228 219 298 210"/><path class="store" d="M196 276 Q254 310 303 355"/><path class="utility" d="M66 356 Q104 330 144 274"/>
+</svg>
+<div class="photoVal pv"><span class="cap">☀ Solaire</span><strong id="mPv">— W</strong><span class="day" id="mPvDay">Jour : —</span></div>
+<div class="photoVal home"><span class="cap">⌂ Maison</span><strong id="mLoad">— W</strong><span class="day" id="mLoadDay">Jour : —</span></div>
+<div class="photoVal inv"><span class="cap">⚡ Onduleurs</span><strong id="mInv">—</strong></div>
+<div class="photoVal grid"><span class="cap">♧ Réseau</span><strong id="mGrid">— W</strong><span class="day" id="mGridDay">Achat jour : —</span></div>
+<div class="photoVal bat"><span class="cap">▣ Batteries</span><strong id="mSoc">— %</strong><span class="day" id="mBat">Charge jour : —</span></div>
+</section>
+<div class="daily"><div class="item"><small>☀ PV jour (UTC)</small><b id="mDailyPv">— kWh</b></div><div class="item"><small>⌂ Maison jour (UTC)</small><b id="mDailyLoad">— kWh</b></div><div class="item"><small>▣ Charge / décharge jour</small><b>— / — kWh</b></div><div class="item"><small>♧ Import / export jour</small><b>— / — kWh</b></div></div>
+</div>
+<div id="sun" class="view">
+<section class="sun">
+<div class="sun-title"><b>☀ MPPT INDIVIDUELS</b><div><span class="total" id="sunPv">— W</span><div class="sun-small" id="sunPvDay">PV jour UTC : —</div></div></div>
+<div class="mppt-area" id="mpptArea"><div class="mppt-grid" id="mppts"></div><svg class="mppt-wire-svg" id="mpptWires" aria-hidden="true"></svg></div>
+<div class="flow-main">
+<div class="node grid"><span>⚡ Réseau</span><strong id="sunGrid">— W</strong><span id="sunGridInfo">Sens non vérifié</span><span class="sun-small">Import jour : —</span></div>
+<div class="center"><i class="join left"></i><div class="inv">⇄</div><i class="join right"></i><div class="subtitle" id="sunInv">Onduleur</div><div class="sun-small" id="sunAc">AC : —</div></div>
+<div class="node home"><span>⌂ Maison</span><strong id="sunHome">— W</strong><span class="sun-small" id="sunHomeDay">Conso jour : —</span></div>
+</div>
+<div class="battery-branch"></div>
+<div class="battery-node"><div class="battery-icon"><div class="fill"></div></div><div><strong id="sunSoc">— %</strong><div class="small" id="sunBattery">Tension : — · Courant : —</div><div class="small">Charge jour : — · Décharge jour : —</div></div></div>
+<div class="grid-home-summary">
+<div class="stat"><small>☀ Production jour UTC</small><b id="sunPvDaySmall">— kWh</b></div>
+<div class="stat"><small>⌂ Consommation jour UTC</small><b id="sunLoadDaySmall">— kWh</b></div>
+</div>
+</section></div>
+<div class="note" id="qualityNote">Valeurs indisponibles = « — ». Une puissance réseau native n'indique pas à elle seule un import EDF.</div>
+</div>
+<div id="pageInverters" style="display:none">
+<section class="panel"><h3>Onduleurs configurés</h3><div class="tabs" id="tabs"></div><div id="inverterDetails"></div></section>
+<div class="note">Seuls les MPPT remontés par les ESP32-S3 sont affichés. Les puissances PV1 déduites de tension × courant sont identifiées comme estimées.</div>
+</div>
+<div class="panel"><div class="row"><span>Accès</span><b id="route">—</b></div><div class="row"><span>Équipements</span><b id="count">—</b></div><div class="row"><span>Dernière lecture</span><b id="updated">—</b></div></div>
+</main>
+<script>
+(function(){
+'use strict';
+var data={inverters:[],jk:{}}, active='home', style='modern', selected=0;
+function el(id){return document.getElementById(id)}
+function txt(id,val){var e=el(id);if(e)e.textContent=val}
+function n(x){return typeof x==='number'&&Number.isFinite(x)?x:null}
+function fmt(x,u,d){var v=n(x);return v==null?'—'+(u?' '+u:''):v.toLocaleString('fr-FR',{maximumFractionDigits:d||0})+(u?' '+u:'')}
+function sum(items,k){var valid=items.map(function(x){return n(x[k])}).filter(function(x){return x!==null});return valid.length?valid.reduce(function(a,b){return a+b},0):null}
+function fresh(){return (data.inverters||[]).filter(function(x){return x&&x.fresh===true})}
+function channels(items){var all=[];items.forEach(function(inv){(inv.pvChannels||[]).forEach(function(c){all.push({slot:inv.slot,index:c.index,voltageV:c.voltageV,currentA:c.currentA,powerW:c.powerW,derived:c.derived})})});return all}
+function appNav(destination){if(window.SmartEnergyApp&&window.SmartEnergyApp.navigate)window.SmartEnergyApp.navigate(destination)}
+function setPage(page){active=page;el('pageHome').style.display=page==='home'?'':'none';el('pageInverters').style.display=page==='inverters'?'':'none';el('navHome').classList.toggle('active',page==='home');el('navInv').classList.toggle('active',page==='inverters');if(page==='inverters')renderInverters()}
+function setStyle(s,notify){style=s==='sunsynk'?'sunsynk':'modern';el('modern').classList.toggle('show',style==='modern');el('sun').classList.toggle('show',style==='sunsynk');el('modernBtn').classList.toggle('active',style==='modern');el('sunBtn').classList.toggle('active',style==='sunsynk');if(notify&&window.SmartEnergyApp&&window.SmartEnergyApp.style)window.SmartEnergyApp.style(style);if(style==='sunsynk')requestAnimationFrame(wires)}
+el('navHome').onclick=function(){setPage('home')};
+el('navInv').onclick=function(){setPage('inverters')};
+el('navJk').onclick=function(){appNav('batteries')};
+el('navSettings').onclick=function(){appNav('settings')};
+el('modernBtn').onclick=function(){setStyle('modern',true)};
+el('sunBtn').onclick=function(){setStyle('sunsynk',true)};
+function row(parent,a,b){var wrap=document.createElement('div');wrap.className='row';var x=document.createElement('span');x.textContent=a;var y=document.createElement('b');y.textContent=b;wrap.append(x,y);parent.append(wrap)}
+function drawMppts(list){var host=el('mppts');host.replaceChildren();list.forEach(function(c){var b=document.createElement('div');b.className='mppt-box';var name=document.createElement('div');name.className='name';name.textContent='☀ INV'+c.slot+' · MPPT'+c.index;var val=document.createElement('strong');val.textContent=fmt(c.powerW,'W');var detail=document.createElement('div');detail.className='detail';detail.textContent=fmt(c.currentA,'A',1)+' · '+fmt(c.voltageV,'V',1);var quality=document.createElement('div');quality.className='quality';quality.textContent=c.derived?'Puissance estimée':'Lecture native';b.append(name,val,detail,quality);host.append(b)});
+if(!list.length){var none=document.createElement('div');none.className='mppt-box';none.style.gridColumn='1/-1';none.textContent='MPPT indisponibles : aucune valeur mesurée fraîche';host.append(none)}requestAnimationFrame(wires)}
+function wires(){if(style!=='sunsynk'||active!=='home')return;var area=el('mpptArea'),box=el('mppts'),svg=el('mpptWires'),nodes=Array.from(box.querySelectorAll('.mppt-box'));var a=area.getBoundingClientRect();var cx=a.width/2,bus=a.height-23;svg.setAttribute('viewBox','0 0 '+a.width+' '+a.height);svg.replaceChildren();function addPath(d){var p=document.createElementNS('http://www.w3.org/2000/svg','path');p.setAttribute('d',d);svg.append(p)};nodes.forEach(function(node){var r=node.getBoundingClientRect();var x=r.left-a.left+r.width/2,y=r.bottom-a.top;addPath('M '+x+' '+y+' V '+bus+' H '+cx)});addPath('M '+cx+' '+bus+' V '+(a.height-1));var dot=document.createElementNS('http://www.w3.org/2000/svg','circle');dot.setAttribute('cx',cx);dot.setAttribute('cy',bus);dot.setAttribute('r',3.6);svg.append(dot)}
+window.addEventListener('resize',function(){requestAnimationFrame(wires)});
+function renderInverters(){var root=el('tabs'),details=el('inverterDetails'),items=data.inverters||[];root.replaceChildren();details.replaceChildren();if(!items.length){row(details,'Aucun onduleur','Ajouter depuis Configuration');return}if(selected>=items.length)selected=0;items.forEach(function(inv,i){var b=document.createElement('button');b.className=i===selected?'active':'';b.textContent='INV'+inv.slot;b.onclick=function(){selected=i;renderInverters()};root.append(b)});var v=items[selected];var state=v.fresh?'Lecture fraîche':(n(v.sampleAtMs)!==null?'Mesure ancienne':'Hors ligne');row(details,'État',state);row(details,'Puissance solaire',fmt(v.pvPowerW,'W'));row(details,'Consommation AC',fmt(v.loadW,'W'));row(details,'Tension AC',fmt(v.outputVoltageV,'V',1));row(details,'Courant AC',fmt(v.outputCurrentA,'A',1));row(details,'Fréquence',fmt(v.outputHz,'Hz',2));row(details,'PV jour UTC',fmt(v.pvDayKwh,'kWh',2));row(details,'Charge jour UTC',fmt(v.loadDayKwh,'kWh',2));row(details,'Batterie (onduleur)',fmt(v.batteryVoltageV,'V',1)+' · '+fmt(v.batteryCurrentA,'A',1));row(details,'Mode',v.operationMode||'—');row(details,'Dernier diagnostic',v.detail||'—');(v.pvChannels||[]).forEach(function(c){row(details,'MPPT '+c.index+' · puissance',fmt(c.powerW,'W')+(c.derived?' (estimée)':''));row(details,'MPPT '+c.index+' · tension / courant',fmt(c.voltageV,'V',1)+' / '+fmt(c.currentA,'A',1))})}
+function render(){var items=data.inverters||[],live=fresh(),pvs=channels(live),p=sum(live,'pvPowerW'),l=sum(live,'loadW'),pvDay=sum(live,'pvDayKwh'),loadDay=sum(live,'loadDayKwh');var jk=data.jk||{},soc=n(jk.soc),bvol=null,bcur=null,batLabel='';if((jk.online||0)>0){batLabel='JK BMS'}else{var bat=live.find(function(x){return n(x.batteryVoltageV)!==null});if(bat){bvol=n(bat.batteryVoltageV);bcur=n(bat.batteryCurrentA);soc=n(bat.inverterBatterySoc);batLabel='Onduleur (estimation SOC)'}}var grid=null,gridInfo='Sens non vérifié';if(live.length===1){grid=n(live[0].gridPowerW);gridInfo=grid===null?'Mesure indisponible':'Puissance native, sens non validé'}else if(live.length>1){gridInfo='Multi-onduleurs : total réseau non mesurable'}
+var stale=items.length>0&&live.length===0;el('state').textContent=live.length===items.length&&live.length>0?'● Connecté':stale?'● Données anciennes / hors ligne':'◷ Partiel';el('state').className='status'+(stale?' old':live.length!==items.length?' off':'');el('hero').classList.toggle('paused',stale);txt('mPv',fmt(p,'W'));txt('mLoad',fmt(l,'W'));txt('mGrid',fmt(grid,'W'));txt('mSoc',fmt(soc,'%'));txt('mPvDay','Jour UTC : '+fmt(pvDay,'kWh',2));txt('mLoadDay','Jour UTC : '+fmt(loadDay,'kWh',2));txt('mGridDay','Import jour : —');txt('mBat','Charge jour : —');txt('mInv',items.length+' / 3 INV');txt('mDailyPv',fmt(pvDay,'kWh',2));txt('mDailyLoad',fmt(loadDay,'kWh',2));txt('sunPv',fmt(p,'W'));txt('sunPvDay','Production jour UTC : '+fmt(pvDay,'kWh',2));txt('sunPvDaySmall',fmt(pvDay,'kWh',2));txt('sunLoadDaySmall',fmt(loadDay,'kWh',2));txt('sunHome',fmt(l,'W'));txt('sunHomeDay','Consommation jour UTC : '+fmt(loadDay,'kWh',2));txt('sunGrid',fmt(grid,'W'));txt('sunGridInfo',gridInfo);txt('sunInv',live.length+'/'+items.length+' onduleur(s)');txt('sunAc',live.length===1?fmt(live[0].outputVoltageV,'V',1)+' · '+fmt(live[0].outputHz,'Hz',2):'Voir onglets Onduleurs');txt('sunSoc',fmt(soc,'%'));txt('sunBattery',(batLabel||'Batterie sans mesure')+' · '+(bvol===null?'—':fmt(bvol,'V',1))+(bcur===null?'':' · '+fmt(bcur,'A',1)));drawMppts(pvs);
+txt('route',data.route||'Local');txt('count',items.length+' INV · '+pvs.length+' MPPT frais');txt('updated',data.updated||'—');
+txt('qualityNote',stale?'Les dernières mesures restent consultables dans les onglets Onduleurs, mais ne sont plus prises pour des valeurs en direct.': 'Les totaux excluent les onduleurs sans mesure fraîche. Réseau : sens à vérifier, jamais assimilé à un achat EDF. MPPT non détectés non affichés.');
+renderInverters()}
+window.updateSmartEnergy=function(d){if(!d||typeof d!=='object')return;data=d;setStyle(d.style||style,false);render()};
+window.updateSmartEnergy(data);
+})();
+</script></body></html>

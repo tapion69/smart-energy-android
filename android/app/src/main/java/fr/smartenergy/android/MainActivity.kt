@@ -156,6 +156,13 @@ class MainActivity : Activity() {
     private val settingsWorker=Executors.newSingleThreadExecutor()
     private val inverterWorker=Executors.newSingleThreadExecutor()
     private lateinit var premiumDashboard: PremiumEnergyDashboard
+    private lateinit var energyDashboard: EnergyDashboardV3
+    // Lazy: no change to JK telemetry, associations, BMS cards or settings.
+    private val voltronicFleet by lazy {
+        VoltronicFleet(prefs,::auxiliaryCode,inverterWorker) {
+            publishPremiumDashboard()
+        }
+    }
     private var premiumJk = JSONObject()
     private var premiumInverter = JSONObject().put("configured",false)
     @Volatile private var voltronicReadBusy=false
@@ -640,6 +647,25 @@ class MainActivity : Activity() {
         homePage.addView(premiumDashboard,LinearLayout.LayoutParams(-1,d(940)).apply {
             topMargin=d(7)
         })
+        energyDashboard=EnergyDashboardV3(this)
+        energyDashboard.visibility=View.GONE
+        energyDashboard.onNavigate={ destination ->
+            when(destination) {
+                "batteries" -> showPage(1)
+                "settings" -> showPage(3)
+                "configuration" -> showPage(2)
+                else -> showPage(0)
+            }
+        }
+        energyDashboard.onStyleChanged={ style ->
+            if(style=="modern" || style=="sunsynk") {
+                prefs.edit().putString("energy_dashboard_style",style).apply()
+                publishPremiumDashboard()
+            }
+        }
+        homePage.addView(energyDashboard,LinearLayout.LayoutParams(-1,d(1100)).apply {
+            topMargin=d(7)
+        })
         add(dashboardPage, label("Batteries JK · Détails et paramètres", 23f, true), 12)
         // Connection/setup feedback remains accessible in Configuration.
         // Its mirror on the dashboard is shown ONLY in Debug mode.
@@ -951,12 +977,83 @@ class MainActivity : Activity() {
                 }
             }
         },8)
+        // Independent Voltronic slots INV2/INV3: never modify JK configuration.
+        for(slot in 2..3) {
+            val panel=section(advanced,"Onduleur INV$slot · Voltronic (lecture seule)")
+            add(panel,label("ESP32-S3 Voltronic indépendant. Le code est conservé "+
+                "avec la protection Android Keystore.",12f,color=subdued))
+            val ip=input("Adresse IP privée INV$slot")
+            ip.setText(prefs.getString("inverter_${slot}_ip","") ?: "")
+            add(panel,ip,6)
+            val port=input("Port HTTP · 18081")
+            port.inputType=android.text.InputType.TYPE_CLASS_NUMBER
+            port.setText(prefs.getInt("inverter_${slot}_port",18081).toString())
+            add(panel,port,6)
+            val code=input("Code ESP32-S3 (8 à 32 caractères)",true)
+            add(panel,code,6)
+            val feedback=label(
+                if(voltronicFleet.configured(slot)) "INV$slot : enregistré"
+                else "INV$slot : non configuré",12f,false,subdued)
+            add(panel,feedback,6)
+            add(panel,action("Tester et enregistrer INV$slot") {
+                val host=ip.text.toString().trim()
+                val tcpPort=port.text.toString().trim().toIntOrNull()
+                val secret=code.text.toString()
+                if(!SunSpecReadOnly.isPrivateIPv4(host) || tcpPort==null ||
+                   tcpPort !in 1..65535 || secret.length !in 8..32) {
+                    feedback.text="Vérifie IP privée, port et code de lecture."
+                } else {
+                    feedback.text="Lecture de contrôle en cours…"
+                    inverterWorker.execute {
+                        val response=try {
+                            VoltronicReadOnlyClient.probe(host,secret,tcpPort)
+                            saveAuxiliaryCode("premium_voltronic_${slot}_code_cipher",secret)
+                            prefs.edit().putString("inverter_${slot}_ip",host)
+                                .putInt("inverter_${slot}_port",tcpPort)
+                                .putBoolean("inverter_${slot}_validated",true).apply()
+                            "INV$slot : lecture seule vérifiée, équipement enregistré"
+                        } catch(ex:Exception) {
+                            "INV$slot : " + (ex.message?.take(110) ?: "connexion impossible")
+                        }
+                        runOnUiThread {
+                            feedback.text=response
+                            voltronicFleet.changed()
+                        }
+                    }
+                }
+            },8)
+            add(panel,action("Retirer INV$slot") {
+                AlertDialog.Builder(this).setTitle("Retirer INV$slot ?")
+                    .setMessage("Cette action retire uniquement cet onduleur de la "+
+                        "configuration. Les JK et leurs associations restent inchangés.")
+                    .setNegativeButton("Annuler",null)
+                    .setPositiveButton("Retirer") { _,_ ->
+                        prefs.edit().putBoolean("inverter_${slot}_validated",false)
+                            .remove("inverter_${slot}_ip")
+                            .remove("inverter_${slot}_port")
+                            .remove("premium_voltronic_${slot}_code_cipher").apply()
+                        feedback.text="INV$slot : non configuré"
+                        voltronicFleet.changed()
+                    }.show()
+            },6)
+        }
         add(inverter,label("Cette première étape vérifie le protocole. "+
             "L'affichage des mesures dans le tableau de bord sera ajouté "+
             "après validation du modèle réel.",12f,color=subdued))
         add(advanced, label("BLE multi-batteries, OTA et accès distant : fonctions en développement.", 12f, color = subdued), 12)
 
         add(settingsPage,label("Réglages de l'application",25f,true),16)
+        val energyStyle=section(settingsPage,"Affichage du dashboard énergie")
+        add(energyStyle,label("Le tableau de bord JK seul reste strictement identique "+
+            "à celui de la version précédente.",12f,color=subdued))
+        add(energyStyle,action("Vue Moderne / Premium") {
+            prefs.edit().putString("energy_dashboard_style","modern").apply()
+            publishPremiumDashboard()
+        },6)
+        add(energyStyle,action("Vue Sunsynk") {
+            prefs.edit().putString("energy_dashboard_style","sunsynk").apply()
+            publishPremiumDashboard()
+        },6)
         val alerts=section(settingsPage,"Notifications et seuils JK",true)
         add(alerts,label(
             "Surveillance de tous les BMS configurés sur ESP 1, 2 et 3, "+
@@ -3395,57 +3492,27 @@ class MainActivity : Activity() {
             lanVerified -> "Wi-Fi local"
             else -> "Hors ligne"
         }
+        premiumInverter=voltronicFleet.snapshotFor(1)
         val payload=JSONObject()
             .put("jk",premiumJk)
             .put("inverter",premiumInverter)
+            .put("inverters",voltronicFleet.snapshot())
+            .put("style",prefs.getString("energy_dashboard_style","modern"))
             .put("route",route)
             .put("updated",java.text.SimpleDateFormat(
                 "'Actualisé à' HH:mm:ss",Locale.FRANCE).format(java.util.Date()))
         premiumDashboard.showSnapshot(payload)
+        if(::energyDashboard.isInitialized) {
+            energyDashboard.showSnapshot(payload)
+            // EXACT pre-existing JK cockpit for configurations without inverter.
+            val displayEnergy=voltronicFleet.hasInverters()
+            premiumDashboard.visibility=if(displayEnergy)View.GONE else View.VISIBLE
+            energyDashboard.visibility=if(displayEnergy)View.VISIBLE else View.GONE
+        }
     }
 
     private fun pollPremiumVoltronic(now:Long) {
-        val type=prefs.getString("inverter_probe_type","") ?: ""
-        val valid=prefs.getBoolean("inverter_probe_validated",false)
-        if(!valid || type!="voltronic") {
-            premiumInverter=JSONObject()
-                .put("configured",valid && type=="sunspec")
-                .put("name",if(type=="sunspec")"SunSpec · découverte seule" else "Onduleur")
-                .put("fresh",false)
-            if(now-lastVoltronicReadAt>20000L) {
-                lastVoltronicReadAt=now
-                publishPremiumDashboard()
-            }
-            return
-        }
-        if(voltronicReadBusy || now-lastVoltronicReadAt<7000L)return
-        lastVoltronicReadAt=now
-        val host=prefs.getString("inverter_probe_ip","") ?: ""
-        val port=prefs.getInt("inverter_probe_port",18081)
-        val code=auxiliaryCode("premium_voltronic_code_cipher")
-        if(!SunSpecReadOnly.isPrivateIPv4(host) || code.length !in 8..32 ||
-            vpnConnected()) {
-            premiumInverter=JSONObject().put("configured",true)
-                .put("name","Voltronic / Axpert").put("fresh",false)
-                .put("pvDetail",if(vpnConnected())"VPN Voltronic non encore relayé"
-                     else "Lecteur non associé")
-            publishPremiumDashboard()
-            return
-        }
-        voltronicReadBusy=true
-        inverterWorker.execute {
-            val reading=try {
-                premiumVoltronicSnapshot(VoltronicReadOnlyClient.telemetry(host,code,port))
-            }catch(_:Exception) {
-                JSONObject().put("configured",true).put("name","Voltronic / Axpert")
-                    .put("fresh",false).put("pvDetail","Lecteur momentanément indisponible")
-            }
-            runOnUiThread {
-                premiumInverter=reading
-                voltronicReadBusy=false
-                publishPremiumDashboard()
-            }
-        }
+        voltronicFleet.poll(now,vpnConnected())
     }
 
     override fun onResume() {
