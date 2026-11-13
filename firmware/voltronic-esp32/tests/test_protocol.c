@@ -16,6 +16,7 @@ static void test_command_crc_and_whitelist(void) {
     uint8_t out[VT_MAX_COMMAND]={0};
     const uint8_t expected[]={'Q','P','I','G','S',0xb7,0xa9,13};
     assert(vt_make_command("QPIGS",out)==sizeof(expected));
+    /* Host regression on command legality: polling must never introduce SET. */
     assert(memcmp(out,expected,sizeof(expected))==0);
     assert(vt_make_command("QMOD",out)==7);
     assert(vt_make_command("QPIWS",out)>0);

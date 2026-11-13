@@ -30,7 +30,7 @@
 #include "cJSON.h"
 #include "voltronic_protocol.h"
 
-#define VT_VERSION "0.3.0-dev-complete-native-read-only"
+#define VT_VERSION "0.3.1-dev-flow-poll-read-only"
 #define VT_UART UART_NUM_1
 #define VT_TX GPIO_NUM_17
 #define VT_RX GPIO_NUM_16
@@ -68,6 +68,11 @@ typedef struct {
     uint32_t rx_bytes, rx_frames, no_rx_timeouts, partial_frames;
     uint32_t malformed_frames, overflow_frames, parse_rejects;
     uint32_t tx_commands, last_request_rx_bytes;
+    /* Requested and actual real-time timing: no buffered queue on S3. */
+    uint32_t qpigs_requests, qpigs2_requests, secondary_requests;
+    uint32_t qpigs_request_interval_ms, qpigs2_request_interval_ms;
+    uint32_t last_qpigs_request_ms, last_qpigs2_request_ms;
+    uint32_t last_serial_exchange_ms, max_serial_exchange_ms;
     char last_command[VT_MAX_COMMAND];
 } vol_state_t;
 typedef struct {
@@ -375,6 +380,14 @@ static esp_err_t telemetry_handler(httpd_req_t *r){
     cJSON_AddNumberToObject(root,"rx_bytes_total",snap.rx_bytes);
     cJSON_AddNumberToObject(root,"no_rx_timeouts",snap.no_rx_timeouts);
     cJSON_AddNumberToObject(root,"partial_frames",snap.partial_frames);
+    cJSON_AddNumberToObject(root,"qpigs_requests",snap.qpigs_requests);
+    cJSON_AddNumberToObject(root,"qpigs2_requests",snap.qpigs2_requests);
+    cJSON_AddNumberToObject(root,"qpigs_actual_request_interval_ms",
+        snap.qpigs_request_interval_ms);
+    cJSON_AddNumberToObject(root,"qpigs2_actual_request_interval_ms",
+        snap.qpigs2_request_interval_ms);
+    cJSON_AddNumberToObject(root,"last_serial_exchange_ms",
+        snap.last_serial_exchange_ms);
     add_runtime_net_diag(root);
     if(live){
         cJSON *v=cJSON_AddObjectToObject(root,"values");
@@ -568,6 +581,17 @@ static esp_err_t diagnostics_handler(httpd_req_t *r) {
     cJSON_AddNumberToObject(root,"overflow_frames",snap.overflow_frames);
     cJSON_AddNumberToObject(root,"parse_rejects",snap.parse_rejects);
     cJSON_AddNumberToObject(root,"naks",snap.naks);
+    cJSON_AddNumberToObject(root,"qpigs_requests",snap.qpigs_requests);
+    cJSON_AddNumberToObject(root,"qpigs2_requests",snap.qpigs2_requests);
+    cJSON_AddNumberToObject(root,"secondary_requests",snap.secondary_requests);
+    cJSON_AddNumberToObject(root,"qpigs_actual_request_interval_ms",
+        snap.qpigs_request_interval_ms);
+    cJSON_AddNumberToObject(root,"qpigs2_actual_request_interval_ms",
+        snap.qpigs2_request_interval_ms);
+    cJSON_AddNumberToObject(root,"last_serial_exchange_ms",
+        snap.last_serial_exchange_ms);
+    cJSON_AddNumberToObject(root,"max_serial_exchange_ms",
+        snap.max_serial_exchange_ms);
     cJSON_AddBoolToObject(root,"qpigs_available",snap.have_qpigs);
     cJSON_AddNumberToObject(root,"last_good_age_ms",
         snap.last_valid_ms ?
@@ -655,6 +679,12 @@ static vt_exchange_t exchange(const char *command) {
     out.timeout=true;
     return out;
 }
+/* Flow schedules a command every 0.5s, alternating QPIGS / QPIGS2.
+ * Each channel is therefore due about once per second. The serial exchange
+ * must finish before another command begins, so actual cadence is naturally
+ * slower when the inverter needs more time. */
+#define VT_FAST_CHANNEL_MS 1000U
+#define VT_FLOW_MODE_MS 300000U
 typedef struct {
     const char *command;
     uint32_t interval_ms;
@@ -664,7 +694,7 @@ typedef struct {
 } vt_job_t;
 #define VT_JOBS 18
 static vt_job_t jobs[VT_JOBS]={
-    {"QMOD",12000,0,0,false},
+    {"QMOD",VT_FLOW_MODE_MS,0,0,false},
     {"QPIRI",300000,0,0,false},
     {"QDOP",300000,0,0,false},
     {"QPIWS",300000,0,0,false},
@@ -680,8 +710,8 @@ static vt_job_t jobs[VT_JOBS]={
     {"QLM",21600000,0,0,true},
     {"QEY",86400000,0,0,true},
     {"QLY",86400000,0,0,true},
-    {"QPIGS",2500,0,0,false},
-    {"QPIGS2",4000,0,0,false}
+    {"QPIGS",VT_FAST_CHANNEL_MS,0,0,false},
+    {"QPIGS2",VT_FAST_CHANNEL_MS,0,0,false}
 };
 static bool job_command(const vt_job_t *job,char *dst,size_t dst_len) {
     if(!job->dated) {
@@ -706,17 +736,21 @@ static bool job_command(const vt_job_t *job,char *dst,size_t dst_len) {
     return true;
 }
 static vt_job_t *next_due_job(uint32_t now,bool secondary) {
-    /* Avoid starvation: alternate QPIGS / QPIGS2 with one queued background
-       query. Intervals are independent; never send concurrent commands. */
-    static size_t round=0;
+    /* Distinct round-robin cursors are required. The original single cursor
+       mixed a 16-command background rotation with a two-command real-time
+       rotation, so the MPPT selection could repeat unpredictably.
+       No queue, no overlap, and at most one background request per three
+       exchanges. This mirrors the Node-RED single in-flight Queue Pump. */
+    static size_t slow_round=0,fast_round=0;
+    size_t *cursor=secondary?&slow_round:&fast_round;
     size_t low=secondary?0:16;
     size_t high=secondary?16:VT_JOBS;
     for(size_t k=0;k<high-low;k++) {
-        size_t idx=low+(round+k)%(high-low);
+        size_t idx=low+(*cursor+k)%(high-low);
         vt_job_t *j=&jobs[idx];
         if((int32_t)(now-j->next_ms)>=0 &&
            (int32_t)(now-j->deferred_until_ms)>=0) {
-            round=(idx-low+1)%(high-low);
+            *cursor=(idx-low+1)%(high-low);
             return j;
         }
     }
@@ -825,10 +859,12 @@ static void polling_task(void *unused) {
     serial_start();
     uint32_t start=esp_log_timestamp();
     for(size_t i=0;i<VT_JOBS;i++) {
-        jobs[i].next_ms=start+(uint32_t)(i%16)*4200U;
+        /* First-run burst as in Node-RED, but stagger its background jobs.
+           Never enqueue 16 serial commands ahead of the live updates. */
+        jobs[i].next_ms=start+(uint32_t)(i%16)*900U;
     }
     jobs[16].next_ms=start;       /* QPIGS first. */
-    jobs[17].next_ms=start+1300;  /* MPPT2 next. */
+    jobs[17].next_ms=start+500;   /* Flow alternating tick (500 ms). */
     uint32_t iterations=0;
     while(true) {
         uint32_t now=esp_log_timestamp();
@@ -851,6 +887,23 @@ static void polling_task(void *unused) {
         uint32_t end=esp_log_timestamp();
         xSemaphoreTake(state_lock,portMAX_DELAY);
         state.tx_commands++;
+        uint32_t duration_ms=(uint32_t)(end-now);
+        state.last_serial_exchange_ms=duration_ms;
+        if(duration_ms>state.max_serial_exchange_ms)
+            state.max_serial_exchange_ms=duration_ms;
+        if(strcmp(cmd,"QPIGS")==0) {
+            if(state.last_qpigs_request_ms)
+                state.qpigs_request_interval_ms=(uint32_t)(
+                    now-state.last_qpigs_request_ms);
+            state.last_qpigs_request_ms=now;
+            state.qpigs_requests++;
+        } else if(strcmp(cmd,"QPIGS2")==0) {
+            if(state.last_qpigs2_request_ms)
+                state.qpigs2_request_interval_ms=(uint32_t)(
+                    now-state.last_qpigs2_request_ms);
+            state.last_qpigs2_request_ms=now;
+            state.qpigs2_requests++;
+        } else state.secondary_requests++;
         /* Publish only whitelisted command name. No raw serial data or ID. */
         snprintf(state.last_command,sizeof(state.last_command),"%s",cmd);
         state.rx_bytes+=rx.rx_bytes;
