@@ -1484,8 +1484,10 @@ class MainActivity : Activity() {
         gatewaySecret = ""
         val savedCode = storedCode()
         val typedCode = setupCode.text.toString().trim()
-        val recovering = savedCode.isBlank()
-        val code = if (recovering) typedCode else savedCode
+        // Explicitly typed code takes precedence over an old saved code.
+        // Persist it only after a successful identity + BMS authentication.
+        val recovering = savedCode.isBlank() || typedCode.isNotBlank()
+        val code = if (typedCode.isNotBlank()) typedCode else savedCode
         if (code.length !in 8..32) {
             lanConnectionPending = false
             state("Code ESP32 manquant : réassocie une fois sur ton réseau local avant l'accès distant.")
