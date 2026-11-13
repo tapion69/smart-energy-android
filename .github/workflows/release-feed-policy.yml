@@ -1,0 +1,35 @@
+name: Smart Energy release-feed safety tests
+on:
+  push:
+    branches: [dev, main]
+    paths:
+      - 'tools/releases/**'
+      - '.github/workflows/publish-update-feeds.yml'
+      - '.github/workflows/release-feed-policy.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  manifest-policy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Check manifest publication policy
+        run: python -m unittest discover -s tools/releases -p 'test_*.py' -v
+      - name: Check publish workflow security invariants
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          w=Path(".github/workflows/publish-update-feeds.yml").read_text()
+          assert "SMART_ENERGY_ANDROID_CERT_SHA256" in w
+          assert '"$ACTUAL" = "$TRUSTED"' in w
+          assert 'git push origin HEAD:main' in w
+          assert 'gh release download "$RELEASE_TAG"' in w
+          assert "github.event_name == 'release'" in w
+          print("Release publication gated by official GitHub asset and trusted APK signer")
+          PY
