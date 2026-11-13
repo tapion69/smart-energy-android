@@ -16,6 +16,14 @@ int main(void) {
     assert(se_route_get("/api/v1/jk/4/telemetry", true) == SE_ROUTE_DENIED);
     assert(se_route_get("/api/v1/jk/2/bms", true) == SE_ROUTE_DENIED);
     assert(se_route_get("/api/v1/voltronic/status", true) == SE_ROUTE_VOLT_STATUS);
+    assert(se_route_get("/api/v1/voltronic/1/telemetry", true)==SE_ROUTE_VOLT_STATUS);
+    assert(se_route_get("/api/v1/voltronic/1/details", true)==SE_ROUTE_VOLT1_DETAILS);
+    assert(se_route_get("/api/v1/voltronic/2/telemetry", true)==SE_ROUTE_VOLT2_TELEMETRY);
+    assert(se_route_get("/api/v1/voltronic/2/details", true)==SE_ROUTE_VOLT2_DETAILS);
+    assert(se_route_get("/api/v1/voltronic/3/telemetry", true)==SE_ROUTE_VOLT3_TELEMETRY);
+    assert(se_route_get("/api/v1/voltronic/3/details", true)==SE_ROUTE_VOLT3_DETAILS);
+    assert(se_route_get("/api/v1/voltronic/4/details", true)==SE_ROUTE_DENIED);
+    assert(se_route_get("/api/v1/voltronic/1/details", false)==SE_ROUTE_DENIED);
     assert(se_route_get("/api/v1/jk/telemetry", false) == SE_ROUTE_DENIED);
     assert(se_route_get("/api/v1/wifi", true) == SE_ROUTE_DENIED);
     assert(se_route_get("/api/v1/bms", true) == SE_ROUTE_DENIED);

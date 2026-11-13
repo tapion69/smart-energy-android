@@ -11,6 +11,8 @@ typedef struct {
     char gateway_token[129];
     char jk_ip[3][16];
     char jk_code[3][33];
+    char voltronic_ip[3][16];
+    char voltronic_code[3][33];
 } se_vpn_config_t;
 
 // Loads complete credentials, else remains in local physical USB provisioning.

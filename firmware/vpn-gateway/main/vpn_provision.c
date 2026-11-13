@@ -97,18 +97,35 @@ static bool parse_config(const char *line,se_vpn_config_t *out) {
        text_field(doc,"tailscale_key",result.tailscale_key,sizeof(result.tailscale_key),true,12) &&
        text_field(doc,"gateway_token",result.gateway_token,sizeof(result.gateway_token),true,20);
     if(ok && strncmp(result.tailscale_key,"tskey-auth-",11)!=0)ok=false;
-    // Reject optional half-defined readers. JK1 is mandatory for now.
+    // Individual targets optional; require at least one JK or Voltronic target.
+    bool any_target=false;
     for(int i=0;i<3 && ok;++i) {
         char ipkey[12],codekey[12];
         snprintf(ipkey,sizeof ipkey,"jk%d_ip",i+1);
         snprintf(codekey,sizeof codekey,"jk%d_code",i+1);
-        ok=text_field(doc,ipkey,result.jk_ip[i],sizeof(result.jk_ip[i]),i==0,7) &&
-           text_field(doc,codekey,result.jk_code[i],sizeof(result.jk_code[i]),i==0,8);
+        ok=text_field(doc,ipkey,result.jk_ip[i],sizeof(result.jk_ip[i]),false,0) &&
+           text_field(doc,codekey,result.jk_code[i],sizeof(result.jk_code[i]),false,0);
         if(!ok)break;
         bool has_ip=result.jk_ip[i][0]!=0, has_code=result.jk_code[i][0]!=0;
         if(has_ip!=has_code || (has_ip && (!se_is_private_ipv4(result.jk_ip[i]) ||
             strlen(result.jk_code[i])<8)))ok=false;
+        if(has_ip)any_target=true;
     }
+    for(int i=0;i<3 && ok;++i) {
+        char ipkey[16],codekey[16];
+        snprintf(ipkey,sizeof ipkey,"volt%d_ip",i+1);
+        snprintf(codekey,sizeof codekey,"volt%d_code",i+1);
+        ok=text_field(doc,ipkey,result.voltronic_ip[i],sizeof(result.voltronic_ip[i]),false,0) &&
+           text_field(doc,codekey,result.voltronic_code[i],sizeof(result.voltronic_code[i]),false,0);
+        if(!ok)break;
+        bool has_ip=result.voltronic_ip[i][0]!=0,has_code=result.voltronic_code[i][0]!=0;
+        if(has_ip!=has_code || (has_ip &&
+           (!se_is_private_ipv4(result.voltronic_ip[i]) ||
+            strlen(result.voltronic_code[i])<8 ||
+            strlen(result.voltronic_code[i])>32)))ok=false;
+        if(has_ip)any_target=true;
+    }
+    if(!any_target)ok=false;
     cJSON_Delete(doc);
     if(ok)*out=result;
     return ok;

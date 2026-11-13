@@ -35,7 +35,7 @@
 #include "gateway_policy.h"
 #include "vpn_provision.h"
 
-#define GATEWAY_VERSION "0.3.1-dev-relay-diagnostics"
+#define GATEWAY_VERSION "0.3.2-dev-voltronic-relay"
 #define GATEWAY_PORT 18767
 #define MAX_JSON_BYTES 32768
 
@@ -220,13 +220,15 @@ static esp_err_t health_handler(httpd_req_t *req) {
         "\"version\":\"" GATEWAY_VERSION "\","
         "\"vpn_connected\":true,"
         "\"vpn_only\":true,"
-        "\"read_only\":true,\"jk_reader_slots\":3}");
+        "\"read_only\":true,\"jk_reader_slots\":3,"
+        "\"voltronic_reader_slots\":3}");
 }
 
 typedef struct {
     const char *host;
     const char *path;
     const char *access_code;
+    int port;
 } lan_target_t;
 
 static bool get_target(se_route_t route, lan_target_t *out) {
@@ -245,14 +247,26 @@ static bool get_target(se_route_t route, lan_target_t *out) {
                              route == SE_ROUTE_JK2_DETAILS ||
                              route == SE_ROUTE_JK3_DETAILS;
         out->path = details ? "/api/v1/details" : "/api/v1/telemetry";
+        out->port=80;
         // No dynamic host, URL or credentials ever accepted from VPN callers.
         return se_is_private_ipv4(out->host) &&
                strlen(out->access_code) >= 8;
     }
-    if (route == SE_ROUTE_VOLT_STATUS) {
-        // Fail-closed until the Voltronic protocol and target are verified.
-        // The generic USB schema must NOT accept a user-supplied arbitrary URL.
-        return false;
+    if(route == SE_ROUTE_VOLT_STATUS || route == SE_ROUTE_VOLT1_DETAILS ||
+       route == SE_ROUTE_VOLT2_TELEMETRY || route == SE_ROUTE_VOLT2_DETAILS ||
+       route == SE_ROUTE_VOLT3_TELEMETRY || route == SE_ROUTE_VOLT3_DETAILS) {
+        const int slot=(route==SE_ROUTE_VOLT3_TELEMETRY ||
+            route==SE_ROUTE_VOLT3_DETAILS)?2:
+            (route==SE_ROUTE_VOLT2_TELEMETRY ||
+             route==SE_ROUTE_VOLT2_DETAILS)?1:0;
+        const bool details=(route==SE_ROUTE_VOLT1_DETAILS ||
+            route==SE_ROUTE_VOLT2_DETAILS || route==SE_ROUTE_VOLT3_DETAILS);
+        out->host=personal ? personal->voltronic_ip[slot]:"";
+        out->access_code=personal ? personal->voltronic_code[slot]:"";
+        out->path=details?"/api/v1/details":"/api/v1/telemetry";
+        out->port=18081;
+        return se_is_private_ipv4(out->host) &&
+            strlen(out->access_code)>=8 && strlen(out->access_code)<=32;
     }
     return false;
 }
@@ -275,7 +289,7 @@ static esp_err_t relay_read(httpd_req_t *req) {
     // The LAN target and GET path are fixed in this build's local settings.
     esp_http_client_config_t client_cfg = {
         .host = target.host,
-        .port = 80,
+        .port = target.port,
         .path = target.path,
         .transport_type = HTTP_TRANSPORT_OVER_TCP,
         .timeout_ms = 4500,
@@ -359,7 +373,7 @@ static esp_err_t relay_read(httpd_req_t *req) {
 static void start_private_http(void) {
     httpd_config_t cfg = HTTPD_DEFAULT_CONFIG();
     cfg.server_port = GATEWAY_PORT;
-    cfg.max_uri_handlers = 10;
+    cfg.max_uri_handlers = 18;
     cfg.stack_size = 8192;
     cfg.max_open_sockets = 4;
     cfg.lru_purge_enable = true;
@@ -379,6 +393,12 @@ static void start_private_http(void) {
         {.uri="/api/v1/jk/3/telemetry", .method=HTTP_GET, .handler=relay_read},
         {.uri="/api/v1/jk/3/details", .method=HTTP_GET, .handler=relay_read},
         {.uri="/api/v1/voltronic/status", .method=HTTP_GET, .handler=relay_read},
+        {.uri="/api/v1/voltronic/1/telemetry",.method=HTTP_GET,.handler=relay_read},
+        {.uri="/api/v1/voltronic/1/details",.method=HTTP_GET,.handler=relay_read},
+        {.uri="/api/v1/voltronic/2/telemetry",.method=HTTP_GET,.handler=relay_read},
+        {.uri="/api/v1/voltronic/2/details",.method=HTTP_GET,.handler=relay_read},
+        {.uri="/api/v1/voltronic/3/telemetry",.method=HTTP_GET,.handler=relay_read},
+        {.uri="/api/v1/voltronic/3/details",.method=HTTP_GET,.handler=relay_read},
     };
     for (size_t i=0; i<sizeof(uris)/sizeof(uris[0]); ++i)
         ESP_ERROR_CHECK(httpd_register_uri_handler(http_server, &uris[i]));
