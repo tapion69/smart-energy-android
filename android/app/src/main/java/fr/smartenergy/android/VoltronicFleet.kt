@@ -1,6 +1,7 @@
 package fr.smartenergy.android
 
 import android.content.SharedPreferences
+import android.net.Network
 import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
@@ -17,6 +18,7 @@ class VoltronicFleet(
     private val prefs:SharedPreferences,
     private val readCode:(String)->String,
     private val worker:ExecutorService,
+    private val localWifiNetwork:()->Network?,
     private val updated:()->Unit
 ) {
     private val mainHandler=Handler(Looper.getMainLooper())
@@ -43,7 +45,7 @@ class VoltronicFleet(
         return out
     }
     fun changed() { lastPoll=0L; updated() }
-    fun poll(now:Long,vpnBlocked:Boolean) {
+    fun poll(now:Long,wifiNetwork:Network?) {
         if(!hasInverters()) {
             if(now-lastPoll>20000L) {lastPoll=now;updated()}
             return
@@ -72,15 +74,15 @@ class VoltronicFleet(
                         .put("slot",c.slot).put("fresh",false)
                         .put("name","SunSpec INV${c.slot}")
                         .put("detail","Découverte seulement : aucune mesure disponible")
-                    vpnBlocked || !SunSpecReadOnly.isPrivateIPv4(c.host) ||
+                    wifiNetwork==null || !SunSpecReadOnly.isPrivateIPv4(c.host) ||
                         c.port !in 1..65535 || c.code.length !in 8..32 ->
                         JSONObject(prior.toString()).put("configured",true)
                             .put("slot",c.slot).put("fresh",false)
-                            .put("detail",if(vpnBlocked)
-                                "L'accès VPN Voltronic n'est pas encore relayé"
+                            .put("detail",if(wifiNetwork==null)
+                                "Wi-Fi local requis · VPN Voltronic non relayé"
                                 else "Lecteur à associer")
                     else -> try {
-                        mapTelemetry(c.slot,VoltronicReadOnlyClient.telemetry(c.host,c.code,c.port))
+                        mapTelemetry(c.slot,VoltronicReadOnlyClient.telemetry(c.host,c.code,c.port,wifiNetwork))
                     } catch(_:Exception) {
                         JSONObject(prior.toString()).put("configured",true)
                             .put("slot",c.slot).put("fresh",false)

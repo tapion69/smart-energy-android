@@ -159,10 +159,30 @@ class MainActivity : Activity() {
     private lateinit var energyDashboard: EnergyDashboardV3
     // Lazy: no change to JK telemetry, associations, BMS cards or settings.
     private val voltronicFleet by lazy {
-        VoltronicFleet(prefs,::auxiliaryCode,inverterWorker) {
+        VoltronicFleet(prefs,::auxiliaryCode,inverterWorker,::voltronicWifiNetwork) {
             publishPremiumDashboard()
         }
     }
+    // Bound to a physical Wi-Fi transport, not to an active Tailscale tunnel.
+    // Voltronic is read-only and must never expose its setup code to a VPN proxy.
+    private fun voltronicWifiNetwork():android.net.Network? =
+        try {
+            connectivity.allNetworks.firstOrNull { network ->
+                connectivity.getNetworkCapabilities(network)?.let { cap ->
+                    cap.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) &&
+                        !cap.hasTransport(NetworkCapabilities.TRANSPORT_VPN)
+                } == true
+            }
+        } catch (_:Exception) { null }
+    // A saved JK reader or BMS is sufficient even if its measurements are stale.
+    private fun hasAnyConfiguredJk():Boolean =
+        (1..3).any { slot ->
+            registeredMacs(slot).isNotEmpty() ||
+            (if(slot==activeReaderSlot)
+                prefs.getString("device_id","") else
+                prefs.getString(slotKey(slot,"device_id"),"")).orEmpty().isNotBlank()
+        }
+
     private var premiumJk = JSONObject()
     private var premiumInverter = JSONObject().put("configured",false)
     @Volatile private var voltronicReadBusy=false
@@ -666,6 +686,13 @@ class MainActivity : Activity() {
         homePage.addView(energyDashboard,LinearLayout.LayoutParams(-1,d(1100)).apply {
             topMargin=d(7)
         })
+        // Do not display the old cockpit at startup for an unconfigured test
+        // installation: old JK-only UI remains unchanged once JK is configured.
+        val startEnergy=EnergyDashboardSelection.showEnergy(
+            voltronicFleet.hasInverters(),hasAnyConfiguredJk())
+        premiumDashboard.visibility=if(startEnergy)View.GONE else View.VISIBLE
+        energyDashboard.visibility=if(startEnergy)View.VISIBLE else View.GONE
+
         add(dashboardPage, label("Batteries JK · Détails et paramètres", 23f, true), 12)
         // Connection/setup feedback remains accessible in Configuration.
         // Its mirror on the dashboard is shown ONLY in Debug mode.
@@ -958,7 +985,9 @@ class MainActivity : Activity() {
                                 "${found.models.size} modèle(s) (IDs : "+
                                 found.models.joinToString(",") { it.modelId.toString() }+")."
                         }else{
-                            val found=VoltronicReadOnlyClient.probe(ip,code,port)
+                            val wifi=voltronicWifiNetwork()
+                                ?: throw IllegalStateException("Connecte le téléphone au Wi-Fi local de l'ESP32-S3")
+                            val found=VoltronicReadOnlyClient.probe(ip,code,port,wifi)
                             saveAuxiliaryCode("premium_voltronic_code_cipher",code)
                             prefs.edit().putBoolean("inverter_probe_validated",true).apply()
                             "Lecteur Voltronic reconnu : "+
@@ -1006,7 +1035,9 @@ class MainActivity : Activity() {
                     feedback.text="Lecture de contrôle en cours…"
                     inverterWorker.execute {
                         val response=try {
-                            VoltronicReadOnlyClient.probe(host,secret,tcpPort)
+                            val wifi=voltronicWifiNetwork()
+                                ?: throw IllegalStateException("Wi-Fi local requis pour INV$slot")
+                            VoltronicReadOnlyClient.probe(host,secret,tcpPort,wifi)
                             saveAuxiliaryCode("premium_voltronic_${slot}_code_cipher",secret)
                             prefs.edit().putString("inverter_${slot}_ip",host)
                                 .putInt("inverter_${slot}_port",tcpPort)
@@ -3505,14 +3536,15 @@ class MainActivity : Activity() {
         if(::energyDashboard.isInitialized) {
             energyDashboard.showSnapshot(payload)
             // EXACT pre-existing JK cockpit for configurations without inverter.
-            val displayEnergy=voltronicFleet.hasInverters()
+            val displayEnergy=EnergyDashboardSelection.showEnergy(
+                voltronicFleet.hasInverters(),hasAnyConfiguredJk())
             premiumDashboard.visibility=if(displayEnergy)View.GONE else View.VISIBLE
             energyDashboard.visibility=if(displayEnergy)View.VISIBLE else View.GONE
         }
     }
 
     private fun pollPremiumVoltronic(now:Long) {
-        voltronicFleet.poll(now,vpnConnected())
+        voltronicFleet.poll(now,voltronicWifiNetwork())
     }
 
     override fun onResume() {

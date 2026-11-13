@@ -2,6 +2,6 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
           xmlns:tools="http://schemas.android.com/tools">
     <!-- Trial build is installed alongside an existing Smart Energy instance. -->
-    <application android:label="Smart Energy TEST 0.3.24"
+    <application android:label="Smart Energy TEST 0.3.26"
                  tools:replace="android:label" />
 </manifest>
