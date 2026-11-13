@@ -160,99 +160,184 @@ if(!list.length){var none=document.createElement('div');none.className='mppt-emp
 function wires(){if(style!=='sunsynk'||active!=='home')return;var area=el('mpptArea'),box=el('mppts'),svg=el('mpptWires'),nodes=Array.from(box.querySelectorAll('.mppt-box'));var a=area.getBoundingClientRect();var cx=a.width/2,bus=a.height-23;svg.setAttribute('viewBox','0 0 '+a.width+' '+a.height);svg.replaceChildren();if(!nodes.length)return;function addPath(d){var p=document.createElementNS('http://www.w3.org/2000/svg','path');p.setAttribute('d',d);svg.append(p)};nodes.forEach(function(node){var r=node.getBoundingClientRect();var x=r.left-a.left+r.width/2,y=r.bottom-a.top;addPath('M '+x+' '+y+' V '+bus+' H '+cx)});addPath('M '+cx+' '+bus+' V '+(a.height-1));var dot=document.createElementNS('http://www.w3.org/2000/svg','circle');dot.setAttribute('cx',cx);dot.setAttribute('cy',bus);dot.setAttribute('r',3.6);svg.append(dot)}
 window.addEventListener('resize',function(){requestAnimationFrame(wires)});
 
-function section(container,title,open){var d=document.createElement('details');d.className='native-section';d.open=!!open;var label=document.createElement('summary');label.textContent=title;d.append(label);container.append(d);return d}
-function renderNativeDetails(container,v){
- var d=v.nativeDetails;
- if(!d)return;
- var main=section(container,'Paramètres et données natives (lecture seule)',true);
- row(main,'Données détaillées',v.nativeDetailsFresh?'Récentes':'Anciennes · consultables');
- var id=d.identification||{},idBox=section(main,'Modèle, versions et numéro de série',false);
- [['model','Modèle'],['firmware_main','Firmware onduleur'],['firmware_remote','Firmware secondaire'],['serial','Numéro de série (local seulement)']].forEach(function(x){if(id[x[0]])row(idBox,x[1],id[x[0]])});
- var status=section(main,'Mode QMOD et alarmes QPIWS',true);
- var modes={P:'Allumé',S:'Veille',L:'Réseau',B:'Batterie',F:'Défaut'};
- row(status,'Mode',modes[d.operation_mode]||d.operation_mode||'—');
- if(Array.isArray(d.faults))row(status,'Défauts',d.faults.join(', ')||'Aucun');
- if(Array.isArray(d.warnings))row(status,'Avertissements',d.warnings.join(', ')||'Aucun');
- var params=d.parameters||{},qpiri=params.qpiri,qdop=params.qdop;
- var p1=section(main,'QPIRI : paramètres de l’onduleur',true);
- if(!qpiri)row(p1,'QPIRI','Non reçu ou non pris en charge');
- else{
-  [
-  ['battery_recharge_voltage_v','Retour réseau · tension','V'],
-  ['battery_under_voltage_v','Sous-tension batterie','V'],
-  ['battery_bulk_voltage_v','Tension bulk','V'],
-  ['battery_float_voltage_v','Tension float','V'],
-  ['max_ac_charging_current_a','Charge AC maximale','A'],
-  ['max_charging_current_a','Charge maximale totale','A'],
-  ['battery_re_discharge_voltage_v','Retour batterie · tension','V'],
-  ['max_discharging_current_a','Courant décharge maximal','A']
-  ].forEach(function(f){if(n(qpiri[f[0]])!==null)row(p1,f[1],fmt(qpiri[f[0]],f[2],2))});
-  var types={0:'AGM',1:'Flooded',2:'User',3:'Pylon',5:'Weco',6:'Soltaro',8:'Lib',9:'Lic'};
-  var output={0:'UtilitySolarBat',1:'SolarUtilityBat',2:'SolarBatUtility'};
-  var charge={1:'Solar first',2:'Solar + Utility',3:'Only solar'};
-  if(n(qpiri.battery_type_code)!==null)row(p1,'Type batterie',types[qpiri.battery_type_code]||'Code '+qpiri.battery_type_code);
-  if(n(qpiri.output_source_priority_code)!==null)row(p1,'Priorité sortie',output[qpiri.output_source_priority_code]||'Code '+qpiri.output_source_priority_code);
-  if(n(qpiri.charger_source_priority_code)!==null)row(p1,'Priorité charge',charge[qpiri.charger_source_priority_code]||'Code '+qpiri.charger_source_priority_code);
- }
- var p2=section(main,'QDOP : seuils de capacité batterie',true);
- if(!qdop)row(p2,'QDOP','Non reçu ou non pris en charge');
- else [
-  ['battery_recharge_capacity_pct','Retour réseau SOC'],
-  ['battery_redischarge_capacity_pct','Retour batterie SOC'],
-  ['battery_under_capacity_pct','Sous-capacité SOC']
- ].forEach(function(f){if(n(qdop[f[0]])!==null)row(p2,f[1],fmt(qdop[f[0]],'%',0))});
- var energies=section(main,'Compteurs directement renvoyés par l’onduleur',true);
- var sources=[['pv','Solaire'],['load','Charge AC']];
- var when=new Date().toISOString().slice(0,10).replace(/-/g,'');
- var formats=[['day_utc','Jour UTC',when],['month_utc','Mois UTC',when.slice(0,6)],['year_utc','Année UTC',when.slice(0,4)],['total','Total',null]];
- var added=0;
- sources.forEach(function(src){var e=(d.energy_wh||{})[src[0]]||{},keys=(d.energy_query_keys||{})[src[0]]||{};
-  formats.forEach(function(p){var v=e[p[0]];if(n(v)===null)return;
-    if(p[2]!==null && keys[p[0]]!==p[2])return;
-    row(energies,src[1]+' · '+p[1],p[0]==='day_utc'?fmt(v/1000,'kWh',2):fmt(v,'valeur brute',0));added++;
-  });
- });
- if(!added)row(energies,'Énergies natives','Non disponibles (NAK, pas encore interrogées ou date non validée)');
- var raw=section(main,'Tous les champs numériques QPIRI / QDOP (index 0-based)',false);
- var holder=document.createElement('div');holder.className='raw-params';raw.append(holder);
- [['QPIRI',qpiri],['QDOP',qdop]].forEach(function(type){if(!type[1]||!Array.isArray(type[1].raw_fields))return;
-  type[1].raw_fields.forEach(function(value,i){if(n(value)!==null)row(holder,type[0]+'['+i+']',String(value))});
+// Keep the expanded sections stable across 2.5s telemetry updates and
+// independently for each inverter. No native data or polling is modified.
+var savedSections={},renderedInverterSlot=null;
+function captureExpandedSections(root){
+ if(renderedInverterSlot===null)return;
+ root.querySelectorAll('details[data-section-id]').forEach(function(node){
+   savedSections[String(renderedInverterSlot)+'|'+node.dataset.sectionId]=node.open;
  });
 }
-function renderInverters(){var root=el('tabs'),details=el('inverterDetails'),items=data.inverters||[];root.replaceChildren();details.replaceChildren();if(!items.length){row(details,'Aucun onduleur','Ajouter depuis Configuration');return}if(selected>=items.length)selected=0;items.forEach(function(inv,i){var b=document.createElement('button');b.className=i===selected?'active':'';b.textContent='INV'+inv.slot;b.onclick=function(){selected=i;renderInverters()};root.append(b)});var v=items[selected];var state=v.transientHttpError?'HTTP instable · dernière mesure récente':v.fresh?'Lecture fraîche':v.transportReachable===true?'ESP32 joignable · QPIGS en retard':(v.httpConsecutiveErrors||0)>0&&(v.httpConsecutiveErrors||0)<3?'Communication instable':n(v.sampleAtMs)!==null?'ESP32 inaccessible · dernière mesure conservée':'Lecture indisponible';row(details,'État',state);row(details,'Puissance solaire',fmt(v.pvPowerW,'W'));row(details,'Consommation AC',fmt(v.loadW,'W'));row(details,'Tension AC',fmt(v.outputVoltageV,'V',1));row(details,'Courant AC',fmt(v.outputCurrentA,'A',1));row(details,'Fréquence',fmt(v.outputHz,'Hz',2));row(details,'PV jour UTC',fmt(v.pvDayKwh,'kWh',2));row(details,'Batterie (onduleur)',fmt(v.batteryVoltageV,'V',1)+' · '+fmt(v.batteryCurrentA,'A',1));row(details,'Mode',v.operationMode||'—');
-var extra=[
-['apparentPowerVa','Puissance apparente','VA'],['loadPercent','Charge sortie','%'],
-['gridVoltageV','Tension réseau','V'],['gridFrequencyHz','Fréquence réseau','Hz'],
-['batteryChargeCurrentA','Courant de charge batterie','A'],
-['batteryDischargeCurrentA','Courant de décharge batterie','A'],
-['batterySccVoltageV','Tension SCC batterie','V'],
-['temperatureC','Température dissipateur','°C'],
-['busVoltageV','Tension bus','V'],
-['loadDayKwh','Consommation AC jour (native)','kWh']];
-extra.forEach(function(x){if(n(v[x[0]])!==null)row(details,x[1],fmt(v[x[0]],x[2],2))});
-row(details,'Dernier diagnostic',v.detail||'—');
-if(n(v.qpigsAgeMs)!==null)row(details,'Âge QPIGS',fmt(v.qpigsAgeMs/1000,'s',1));
-if(n(v.serialTimeouts)!==null)row(details,'Timeouts série cumulés',String(v.serialTimeouts));
-if(n(v.serialNoRxTimeouts)!==null)row(details,'Sans retour série',String(v.serialNoRxTimeouts));
-if(n(v.serialCrcRejects)!==null)row(details,'Rejets CRC cumulés',String(v.serialCrcRejects));
-if(n(v.httpConsecutiveErrors)!==null)row(details,'Échecs HTTP consécutifs',String(v.httpConsecutiveErrors));
-if(n(v.httpErrorsTotal)!==null)row(details,'Échecs HTTP depuis ouverture',String(v.httpErrorsTotal));
-if(v.lastHttpErrorKind)row(details,'Dernier incident HTTP (même après reprise)',v.lastHttpErrorKind);
-if(v.firmwareVersion)row(details,'Firmware ESP32-S3',v.firmwareVersion);
-if(n(v.s3WifiDisconnects)!==null)row(details,'Coupures Wi-Fi ESP32 depuis démarrage',String(v.s3WifiDisconnects));
-if(n(v.s3WifiLastReason)!==null && v.s3WifiDisconnects>0)row(details,'Dernier code de coupure Wi-Fi S3',String(v.s3WifiLastReason));
-if(n(v.s3WifiRssi)!==null)row(details,'Signal Wi-Fi ESP32',fmt(v.s3WifiRssi,'dBm'));
-if(n(v.s3HttpTelemetryRequests)!==null)row(details,'Requêtes HTTP reçues par ESP32',String(v.s3HttpTelemetryRequests));
-if(n(v.s3HttpSendFailures)!==null)row(details,'Échecs HTTP envoyés côté ESP32',String(v.s3HttpSendFailures));
-if(n(v.s3FreeHeapBytes)!==null)row(details,'Mémoire libre ESP32',fmt(v.s3FreeHeapBytes/1024,'Ko',0));
-if(n(v.s3UptimeMs)!==null)row(details,'Durée de fonctionnement ESP32',fmt(v.s3UptimeMs/60000,'min',0));
-if(n(v.effectiveSampleAgeMs)!==null)row(details,'Âge de la dernière mesure',fmt(v.effectiveSampleAgeMs/1000,'s',1));
-[['s3QpigsRequests','QPIGS interrogés',''],['s3Qpigs2Requests','QPIGS2 interrogés',''],
- ['s3QpigsIntervalMs','Intervalle réel QPIGS','ms'],['s3Qpigs2IntervalMs','Intervalle réel QPIGS2','ms'],
- ['s3LastExchangeMs','Durée du dernier échange série','ms']].forEach(function(x){
- if(n(v[x[0]])!==null)row(details,x[1],fmt(v[x[0]],x[2],0))
-});(v.pvChannels||[]).forEach(function(c){row(details,'MPPT '+c.index+' · puissance',fmt(c.powerW,'W')+(c.derived?' (estimée)':''));row(details,'MPPT '+c.index+' · tension / courant',fmt(c.voltageV,'V',1)+' / '+fmt(c.currentA,'A',1))});
-renderNativeDetails(details,v)}
+function section(container,title,opened,key){
+ var id=key||title;
+ var full=String(renderedInverterSlot)+'|'+id;
+ var d=document.createElement('details');d.className='native-section';
+ d.dataset.sectionId=id;
+ d.open=Object.prototype.hasOwnProperty.call(savedSections,full)?savedSections[full]:!!opened;
+ var label=document.createElement('summary');label.textContent=title;d.append(label);
+ container.append(d);return d;
+}
+function showNumber(target,label,value,unit,digits){
+ if(n(value)!==null)row(target,label,fmt(value,unit,digits||0));
+}
+function nativeEnergy(target,details,source,label){
+ if(!details)return;
+ var values=(details.energy_wh||{})[source]||{};
+ var keys=(details.energy_query_keys||{})[source]||{};
+ var today=new Date().toISOString().slice(0,10).replace(/-/g,'');
+ [['day_utc','Jour UTC',today],['month_utc','Mois UTC',today.slice(0,6)],
+  ['year_utc','Année UTC',today.slice(0,4)],['total','Total',null]
+ ].forEach(function(p){
+  var raw=values[p[0]];
+  if(n(raw)===null)return;
+  if(p[2]!==null&&keys[p[0]]!==p[2])return;
+  // Values are Wh from the inverter. Conversion to kWh is only a unit change.
+  row(target,label+' · '+p[1],fmt(raw/1000,'kWh',2));
+ });
+}
+function renderNativeIdentification(target,d){
+ var id=d&&d.identification||{},box=section(target,'Modèle, versions et numéro de série',false,'identity');
+ [['model','Modèle'],['firmware_main','Firmware principal'],
+  ['firmware_remote','Firmware secondaire'],['serial','Numéro de série · local']
+ ].forEach(function(p){if(id[p[0]])row(box,p[1],id[p[0]])});
+ if(!Object.keys(id).length)row(box,'Identification','En attente de la réponse native');
+}
+function renderNativeParameters(target,d){
+ var params=d&&d.parameters||{},qpiri=params.qpiri,qdop=params.qdop;
+ var p1=section(target,'QPIRI · tensions, courants et priorités',true,'qpiri');
+ if(!qpiri)row(p1,'QPIRI','Pas encore reçu ou non pris en charge');
+ else{
+  [
+   ['battery_recharge_voltage_v','Retour réseau · tension','V'],
+   ['battery_under_voltage_v','Sous-tension batterie','V'],
+   ['battery_bulk_voltage_v','Tension bulk','V'],
+   ['battery_float_voltage_v','Tension float','V'],
+   ['max_ac_charging_current_a','Courant charge AC maximal','A'],
+   ['max_charging_current_a','Courant charge total maximal','A'],
+   ['battery_re_discharge_voltage_v','Retour batterie · tension','V'],
+   ['max_discharging_current_a','Courant décharge maximal','A']
+  ].forEach(function(p){showNumber(p1,p[1],qpiri[p[0]],p[2],2)});
+  var types={0:'AGM',1:'Flooded',2:'User',3:'Pylon',5:'Weco',6:'Soltaro',8:'Lib',9:'Lic'};
+  var priority={0:'UtilitySolarBat',1:'SolarUtilityBat',2:'SolarBatUtility'};
+  var charger={1:'Solar first',2:'Solar + Utility',3:'Solar only'};
+  if(n(qpiri.battery_type_code)!==null)row(p1,'Type de batterie',types[qpiri.battery_type_code]||'Code '+qpiri.battery_type_code);
+  if(n(qpiri.output_source_priority_code)!==null)row(p1,'Priorité sortie',priority[qpiri.output_source_priority_code]||'Code '+qpiri.output_source_priority_code);
+  if(n(qpiri.charger_source_priority_code)!==null)row(p1,'Priorité charge',charger[qpiri.charger_source_priority_code]||'Code '+qpiri.charger_source_priority_code);
+ }
+ var p2=section(target,'QDOP · seuils SOC',true,'qdop');
+ if(!qdop)row(p2,'QDOP','Pas encore reçu ou non pris en charge');
+ else{
+  [
+   ['battery_recharge_capacity_pct','Retour réseau · SOC'],
+   ['battery_redischarge_capacity_pct','Retour batterie · SOC'],
+   ['battery_under_capacity_pct','SOC minimum']
+  ].forEach(function(p){showNumber(p2,p[1],qdop[p[0]],'%',0)});
+ }
+ var raw=section(target,'Valeurs brutes QPIRI / QDOP · index 0-based',false,'raw');
+ var holder=document.createElement('div');holder.className='raw-params';raw.append(holder);
+ [['QPIRI',qpiri],['QDOP',qdop]].forEach(function(p){
+  var items=p[1]&&p[1].raw_fields;
+  if(!Array.isArray(items))return;
+  items.forEach(function(value,i){if(n(value)!==null)row(holder,p[0]+' ['+i+']',String(value))});
+ });
+ if(!holder.children.length)row(holder,'Champs bruts','Non disponibles');
+}
+function renderInverters(){
+ var tabs=el('tabs'),details=el('inverterDetails'),items=data.inverters||[];
+ captureExpandedSections(details);
+ tabs.replaceChildren();details.replaceChildren();
+ if(!items.length){renderedInverterSlot=null;row(details,'Aucun onduleur','Ajouter depuis Configuration');return}
+ if(selected>=items.length)selected=0;
+ items.forEach(function(inv,i){
+  var b=document.createElement('button');b.className=i===selected?'active':'';
+  b.textContent='INV'+inv.slot;
+  b.onclick=function(){selected=i;renderInverters()};
+  tabs.append(b);
+ });
+ var v=items[selected];
+ renderedInverterSlot=v.slot;
+ var state=v.transientHttpError?'HTTP instable · mesure récente conservée':
+  v.fresh?'Lecture fraîche':
+  v.transportReachable===true?'ESP32 joignable · QPIGS en retard':
+  (v.httpConsecutiveErrors||0)>0&&(v.httpConsecutiveErrors||0)<3?'Communication instable':
+  n(v.sampleAtMs)!==null?'ESP32 inaccessible · dernière mesure conservée':'Lecture indisponible';
+ row(details,'État de INV'+v.slot,state);
+ var d=v.nativeDetails,detailState=d?(v.nativeDetailsFresh?'Données détaillées récentes':'Données détaillées anciennes'):'Détails non encore reçus';
+ var solar=section(details,'☀ Solaire / MPPT',true,'solar');
+ showNumber(solar,'Production photovoltaïque',v.pvPowerW,'W',0);
+ if(v.pvPartial)row(solar,'Mesure PV','Partielle : un MPPT manque');
+ showNumber(solar,'PV jour UTC · compteur onduleur',v.pvDayKwh,'kWh',2);
+ nativeEnergy(solar,d,'pv','Production PV native');
+ (v.pvChannels||[]).forEach(function(ch){
+  var box=section(solar,'MPPT '+ch.index,true,'mppt-'+ch.index);
+  showNumber(box,'Puissance'+(ch.derived?' · estimée V × A':''),ch.powerW,'W',0);
+  showNumber(box,'Tension',ch.voltageV,'V',1);
+  showNumber(box,'Courant',ch.currentA,'A',2);
+ });
+ if(!(v.pvChannels||[]).length)row(solar,'MPPT','Aucun canal disponible');
+ var output=section(details,'⚡ Onduleur',true,'inverter');
+ row(output,'Mode',v.operationMode||d&&d.operation_mode||'—');
+ showNumber(output,'Tension sortie AC',v.outputVoltageV,'V',1);
+ showNumber(output,'Fréquence sortie AC',v.outputHz,'Hz',2);
+ showNumber(output,'Courant sortie estimé',v.outputCurrentEstimateA,'A',1);
+ showNumber(output,'Température dissipateur',v.temperatureC,'°C',0);
+ showNumber(output,'Tension du bus',v.busVoltageV,'V',0);
+ renderNativeIdentification(output,d);
+ var warnings=section(output,'Avertissements et défauts QPIWS',false,'qpiws');
+ if(d){
+  if(Array.isArray(d.warnings))row(warnings,'Avertissements',d.warnings.join(', ')||'Aucun');
+  if(Array.isArray(d.faults))row(warnings,'Défauts',d.faults.join(', ')||'Aucun');
+  if(!Array.isArray(d.warnings)&&!Array.isArray(d.faults))row(warnings,'QPIWS','Pas encore reçu');
+ }else row(warnings,'QPIWS','En attente de lecture');
+ var house=section(details,'⌂ Maison / consommation',true,'house');
+ showNumber(house,'Puissance active AC',v.loadW,'W',0);
+ showNumber(house,'Puissance apparente',v.apparentPowerVa,'VA',0);
+ showNumber(house,'Charge de sortie',v.loadPercent,'%',0);
+ showNumber(house,'Courant AC (estimation)',v.outputCurrentA,'A',1);
+ showNumber(house,'Consommation jour UTC · native',v.loadDayKwh,'kWh',2);
+ nativeEnergy(house,d,'load','Consommation native');
+ var grid=section(details,'♧ Réseau électrique',false,'grid');
+ showNumber(grid,'Tension réseau',v.gridVoltageV,'V',1);
+ showNumber(grid,'Fréquence réseau',v.gridFrequencyHz,'Hz',2);
+ showNumber(grid,'Puissance native · sens non vérifié',v.gridPowerW,'W',0);
+ var battery=section(details,'▣ Batterie vue par l’onduleur',false,'battery');
+ showNumber(battery,'Tension',v.batteryVoltageV,'V',2);
+ showNumber(battery,'SOC estimé par onduleur',v.inverterBatterySoc,'%',0);
+ showNumber(battery,'Courant net calculé',v.batteryCurrentA,'A',1);
+ showNumber(battery,'Courant de charge',v.batteryChargeCurrentA,'A',1);
+ showNumber(battery,'Courant de décharge',v.batteryDischargeCurrentA,'A',1);
+ showNumber(battery,'Tension SCC',v.batterySccVoltageV,'V',2);
+ var params=section(details,'⚙ Tous les paramètres · lecture seule',false,'parameters');
+ row(params,'QPIRI / QDOP',detailState);
+ renderNativeParameters(params,d);
+ var diag=section(details,'▤ Diagnostics et communication',false,'diagnostics');
+ row(diag,'Dernier diagnostic',v.detail||'—');
+ [
+  ['qpigsAgeMs','Âge QPIGS','ms',0],
+  ['effectiveSampleAgeMs','Âge réel dernière mesure','ms',0],
+  ['serialTimeouts','Timeouts série cumulés','',0],
+  ['serialNoRxTimeouts','Absence de réponse série','',0],
+  ['serialCrcRejects','Rejets CRC','',0],
+  ['httpConsecutiveErrors','Échecs HTTP consécutifs','',0],
+  ['httpErrorsTotal','Échecs HTTP depuis ouverture','',0],
+  ['s3QpigsRequests','QPIGS interrogés','',0],
+  ['s3Qpigs2Requests','QPIGS2 interrogés','',0],
+  ['s3QpigsIntervalMs','Intervalle réel QPIGS','ms',0],
+  ['s3Qpigs2IntervalMs','Intervalle réel QPIGS2','ms',0],
+  ['s3LastExchangeMs','Dernier échange série','ms',0],
+  ['s3WifiDisconnects','Coupures Wi-Fi ESP32','',0],
+  ['s3WifiLastReason','Dernier code coupure Wi-Fi','',0],
+  ['s3WifiRssi','Signal Wi-Fi','dBm',0],
+  ['s3HttpTelemetryRequests','Requêtes reçues sur ESP32','',0],
+  ['s3HttpSendFailures','Erreurs d’envoi HTTP ESP32','',0],
+  ['s3FreeHeapBytes','Mémoire libre ESP32','octets',0],
+  ['s3UptimeMs','Durée de fonctionnement ESP32','ms',0],
+  ['nativeDetailsAgeMs','Âge des paramètres détaillés','ms',0]
+ ].forEach(function(x){showNumber(diag,x[1],v[x[0]],x[2],x[3])});
+ if(v.lastHttpErrorKind)row(diag,'Dernier incident HTTP',v.lastHttpErrorKind);
+ if(v.firmwareVersion)row(diag,'Firmware ESP32-S3',v.firmwareVersion);
+}
 function render(){var items=data.inverters||[],live=fresh(),pvs=channels(live),p=sum(live,'pvPowerW'),l=sum(live,'loadW'),pvDay=(live.length===items.length&&live.length>0&&live.every(function(x){return n(x.pvDayKwh)!==null}))?sum(live,'pvDayKwh'):null,loadDay=(live.length===items.length&&live.length>0&&live.every(function(x){return n(x.loadDayKwh)!==null}))?sum(live,'loadDayKwh'):null;var jk=data.jk||{},soc=n(jk.soc),bvol=null,bcur=null,batLabel='';if((jk.online||0)>0){batLabel='JK BMS'}else{var bat=live.find(function(x){return n(x.batteryVoltageV)!==null});if(bat){bvol=n(bat.batteryVoltageV);bcur=n(bat.batteryCurrentA);soc=n(bat.inverterBatterySoc);batLabel='Onduleur (estimation SOC)'}}var grid=null,gridInfo='Sens non vérifié';if(live.length===1){grid=n(live[0].gridPowerW);gridInfo=grid===null?'Mesure indisponible':'Puissance native, sens non validé'}else if(live.length>1){gridInfo='Multi-onduleurs : total réseau non mesurable'}
 el('setupHelp').style.display=items.length===0?'':'none';
 var stale=items.length>0&&live.length===0,reachable=items.some(function(v){return v.transportReachable===true}),unstable=items.some(function(v){return v.transientHttpError===true});el('state').textContent=items.length===0?'○ À configurer':unstable?'◷ HTTP instable':live.length===items.length&&live.length>0?'● Connecté':stale&&reachable?'◷ QPIGS en retard':stale?'○ Liaison indisponible':'◷ Partiel';el('state').className='status'+(stale?' old':live.length!==items.length?' off':'');el('hero').classList.toggle('paused',stale||unstable);txt('mPv',fmt(p,'W'));txt('mLoad',fmt(l,'W'));txt('mGrid',fmt(grid,'W'));txt('mSoc',fmt(soc,'%'));txt('mPvDay','PV jour UTC : '+fmt(pvDay,'kWh',2));el('mPvDay').style.display=pvDay===null?'none':'';txt('mInv',items.length+' / 3 INV');txt('sunPv',fmt(p,'W'));txt('sunPvDay','PV jour UTC : '+fmt(pvDay,'kWh',2));el('sunPvDay').style.display=pvDay===null?'none':'';el('nativeDayBlocks').style.display=pvDay===null&&loadDay===null?'none':'grid';
