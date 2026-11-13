@@ -13,7 +13,7 @@ import java.security.MessageDigest
  * verifies SHA256, then uploads to the ESP32-S3 only when it reports an
  * available OTA partition. NEVER sends OTA through the VPN gateway.
  */
-object VoltronicLocalOta {
+internal object VoltronicLocalOta {
     private fun otaConnection(host:String,code:String,port:Int,
                               network:Network,path:String):HttpURLConnection {
         require(SunSpecReadOnly.isPrivateIPv4(host))
@@ -90,29 +90,29 @@ object VoltronicLocalOta {
                     }
                 }
                 require(received>=16384){"Image incomplète"}
-                val digest=md.digest().joinToString("") {"%02x".format(it)}
+                val digest=md.digest().joinToString("") {"%02x".format(it.toInt() and 0xff)}
                 require(digest.equals(release.sha256,true)){
                     "Empreinte SHA-256 différente : installation refusée"
                 }
             }finally{c.disconnect()}
             onProgress("Empreinte vérifiée · transfert local au S3…")
-            val c=otaConnection(host,code,port,network,"image")
+            val otaUpload=otaConnection(host,code,port,network,"image")
             try {
-                c.requestMethod="POST"
-                c.doOutput=true
-                c.connectTimeout=7000
-                c.readTimeout=30000
-                c.setFixedLengthStreamingMode(temporary.length())
-                c.setRequestProperty("Content-Type","application/octet-stream")
-                c.setRequestProperty("X-Image-SHA256",release.sha256)
-                c.setRequestProperty("X-OTA-Confirmed","yes")
-                c.outputStream.use { out ->
+                otaUpload.requestMethod="POST"
+                otaUpload.doOutput=true
+                otaUpload.connectTimeout=7000
+                otaUpload.readTimeout=30000
+                otaUpload.setFixedLengthStreamingMode(temporary.length())
+                otaUpload.setRequestProperty("Content-Type","application/octet-stream")
+                otaUpload.setRequestProperty("X-Image-SHA256",release.sha256)
+                otaUpload.setRequestProperty("X-OTA-Confirmed","yes")
+                otaUpload.outputStream.use { out ->
                     temporary.inputStream().use { data->data.copyTo(out,4096) }
                 }
-                require(c.responseCode==200){
-                    "Le firmware a refusé l'OTA (HTTP ${c.responseCode})"
+                require(otaUpload.responseCode==200){
+                    "Le firmware a refusé l'OTA (HTTP ${otaUpload.responseCode})"
                 }
-                val result=c.inputStream.bufferedReader().use {
+                val result=otaUpload.inputStream.bufferedReader().use {
                     JSONObject(it.readText().take(2048))
                 }
                 require(result.optBoolean("accepted") && result.optBoolean("rebooting")){
@@ -120,7 +120,7 @@ object VoltronicLocalOta {
                 }
                 onProgress("OTA acceptée · redémarrage du S3")
                 return result
-            }finally{c.disconnect()}
+            }finally{otaUpload.disconnect()}
         }finally{temporary.delete()}
     }
 }
