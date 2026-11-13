@@ -139,6 +139,7 @@ class VoltronicFleet(
                         lastHttpKinds[c.slot-1]?.let {
                             nextReading.put("lastHttpErrorKind",it)
                         }
+                        nextReading
                     } catch(ex:Exception) {
                         val errors=prior.optInt("httpConsecutiveErrors",0)+1
                         httpTotalErrors[c.slot-1]++
