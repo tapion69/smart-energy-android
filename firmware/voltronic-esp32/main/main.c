@@ -935,7 +935,7 @@ static vt_exchange_t exchange_core(const char *command,bool approved_set) {
     if(approved_set) {
         /* Internal only: previously generated from a semantic allowlist. */
         size_t n=strlen(command);
-        if(n>0 && n+3<=sizeof(tx) && command[0]=='P') {
+        if(n>0 && n+3<=sizeof(tx) && (command[0]=='P' || command[0]=='M')) {
             uint16_t crc=vt_crc16_xmodem((const uint8_t*)command,n);
             memcpy(tx,command,n);
             tx[n]=(uint8_t)(crc>>8);tx[n+1]=(uint8_t)crc;tx[n+2]=0x0D;
