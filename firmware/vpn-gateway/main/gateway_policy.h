@@ -18,6 +18,7 @@ typedef enum {
     SE_ROUTE_JK3_TELEMETRY,
     SE_ROUTE_JK3_DETAILS,
     SE_ROUTE_VOLT_STATUS,
+    SE_ROUTE_VOLT1_INFO, SE_ROUTE_VOLT2_INFO, SE_ROUTE_VOLT3_INFO,
     SE_ROUTE_VOLT1_DETAILS,
     SE_ROUTE_VOLT2_TELEMETRY, SE_ROUTE_VOLT2_DETAILS,
     SE_ROUTE_VOLT3_TELEMETRY, SE_ROUTE_VOLT3_DETAILS
@@ -34,6 +35,9 @@ static inline se_route_t se_route_get(const char *path, bool is_get) {
     if (!strcmp(path, "/api/v1/jk/2/details")) return SE_ROUTE_JK2_DETAILS;
     if (!strcmp(path, "/api/v1/jk/3/telemetry")) return SE_ROUTE_JK3_TELEMETRY;
     if (!strcmp(path, "/api/v1/jk/3/details")) return SE_ROUTE_JK3_DETAILS;
+    if (!strcmp(path, "/api/v1/voltronic/1/info")) return SE_ROUTE_VOLT1_INFO;
+    if (!strcmp(path, "/api/v1/voltronic/2/info")) return SE_ROUTE_VOLT2_INFO;
+    if (!strcmp(path, "/api/v1/voltronic/3/info")) return SE_ROUTE_VOLT3_INFO;
     if (!strcmp(path, "/api/v1/voltronic/status") ||
         !strcmp(path, "/api/v1/voltronic/1/telemetry")) return SE_ROUTE_VOLT_STATUS;
     if (!strcmp(path, "/api/v1/voltronic/1/details")) return SE_ROUTE_VOLT1_DETAILS;
