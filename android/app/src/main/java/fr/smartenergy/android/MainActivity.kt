@@ -4322,13 +4322,19 @@ class MainActivity : Activity() {
             else prefs.getInt("inverter_${slot}_port",18081)
         val code=auxiliaryCode(if(slot==1)"premium_voltronic_code_cipher"
             else "premium_voltronic_${slot}_code_cipher")
-        val network=voltronicWifiNetwork()
-        if(network==null || !SunSpecReadOnly.isPrivateIPv4(host) ||
-            code.length !in 8..32) {
-            AlertDialog.Builder(this).setTitle("INV$slot · accès local requis")
-                .setMessage("Connecte le téléphone au Wi-Fi local et renseigne "+
-                    "l'adresse privée et le code de cet ESP32-S3 dans Configuration. "+
-                    "Les écritures par VPN ne sont pas autorisées.")
+        val useVpn=selectedRoute()==JkTransportPolicy.Route.GATEWAY_VPN
+        val route=if(useVpn)voltronicVpnRoute() else null
+        val network=if(useVpn)null else voltronicWifiNetwork()
+        if((useVpn && route==null) ||
+           (!useVpn && (network==null || !SunSpecReadOnly.isPrivateIPv4(host) ||
+                        code.length !in 8..32))) {
+            AlertDialog.Builder(this).setTitle("INV$slot · connexion requise")
+                .setMessage(if(useVpn)
+                    "Vérifie que Tailscale et le VPN ESP32 JK sont connectés. "+
+                    "Les écritures distantes nécessitent le nouveau firmware "+
+                    "de la passerelle et une autorisation USB explicite."
+                 else "Connecte le téléphone au Wi-Fi local et renseigne "+
+                    "l'adresse privée et le code ESP32-S3 dans Configuration.")
                 .setPositiveButton("Compris",null).show()
             return
         }
@@ -4341,7 +4347,7 @@ class MainActivity : Activity() {
             android.widget.Toast.LENGTH_SHORT).show()
         settingsWorker.execute {
             val settings=try {
-                VoltronicParameterEditor.current(host,code,port,network)
+                VoltronicParameterEditor.current(host,code,port,network,route,slot)
             }catch(ex:Exception) {
                 runOnUiThread {
                     if(!isFinishing)AlertDialog.Builder(this)
@@ -4363,15 +4369,16 @@ class MainActivity : Activity() {
                     .setTitle("Paramètres Voltronic · INV$slot")
                     .setItems(settings.map { "${it.label} : ${it.value} ${it.unit}" }
                         .toTypedArray()) { _,index ->
-                        proposeVoltronicChange(slot,host,port,code,network,settings[index])
+                        proposeVoltronicChange(slot,host,port,code,network,route,
+                            settings[index])
                     }.show()
             }
         }
     }
 
     private fun proposeVoltronicChange(
-        slot:Int,host:String,port:Int,code:String,network:Network,
-        setting:VoltronicParameterEditor.Setting
+        slot:Int,host:String,port:Int,code:String,network:Network?,
+        route:VoltronicVpnRoute?,setting:VoltronicParameterEditor.Setting
     ) {
         val value=input("Nouvelle valeur ${setting.unit}")
         value.inputType=android.text.InputType.TYPE_CLASS_NUMBER or
@@ -4398,6 +4405,10 @@ class MainActivity : Activity() {
                             "Valeur actuelle : ${setting.value} ${setting.unit}\n"+
                             "Nouvelle valeur : $desired ${setting.unit}\n\n"+
                             "La valeur sera relue juste avant l'écriture. "+
+                            (if(route!=null)
+                                "MODIFICATION À DISTANCE via VPN Tailscale. "+
+                                "Le changement sera appliqué sur l'onduleur réel. "
+                              else "")+
                             "Une seule commande sera envoyée, puis une "+
                             "relecture native immédiate vérifiera le résultat. "+
                             "Si la confirmation échoue, aucun nouvel essai "+
@@ -4410,7 +4421,7 @@ class MainActivity : Activity() {
                                 val status=try {
                                     val result=VoltronicParameterEditor.change(
                                         host,code,port,network,setting.key,
-                                        setting.value,desired)
+                                        setting.value,desired,route,slot)
                                     if(result.optBoolean("verified",false))
                                         "INV$slot : paramètre vérifié par relecture native."
                                     else "INV$slot : modification NON CONFIRMÉE ("+
