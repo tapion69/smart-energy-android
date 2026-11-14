@@ -288,6 +288,15 @@ static bool patch_remote_writes(bool enabled) {
         before.remote_writes_enabled=enabled;
         ok=memcmp(&before,&after,sizeof(before))==0 && save_config(merged);
     }
+    /* An ACK means the NVS value survived a fresh read, not merely
+     * that the set/commit API returned ESP_OK. */
+    if(ok) {
+        se_vpn_config_t persisted={0};
+        ok=load_config(&persisted) &&
+            persisted.remote_writes_enabled==enabled &&
+            memcmp(&persisted,&after,sizeof(persisted))==0;
+        memset(&persisted,0,sizeof(persisted));
+    }
     if(merged)free(merged);
     cJSON_Delete(doc);
     memset(&before,0,sizeof before);
@@ -330,6 +339,26 @@ static void serial_prepare(void) {
         ESP_LOGE(TAG,"USB UART unavailable: %s",esp_err_to_name(err));
 #endif
 }
+/* The old READY banner is unsolicited; it proves TX only. A random
+ * nonce PING requires the S3 to receive bytes AND transmit the matching
+ * response on the same physical port, before any NVS-changing command. */
+static bool usb_nonce_hex(const char *value) {
+    if(!value || strlen(value)!=16)return false;
+    for(int i=0;i<16;i++) {
+        const char c=value[i];
+        if(!((c>='0' && c<='9') || (c>='a' && c<='f')))return false;
+    }
+    return true;
+}
+static void usb_ack_reboot(int port) {
+    usb_ack(port,"SEVPN_OK_REBOOT");
+#if CONFIG_IDF_TARGET_ESP32S3
+    if(port==SE_USB_BRIDGE && serial_bridge_ready)
+        uart_wait_tx_done(UART_NUM_0,pdMS_TO_TICKS(450));
+#endif
+    vTaskDelay(pdMS_TO_TICKS(1500));
+    esp_restart();
+}
 static void provisioning_loop(void) {
     serial_prepare();
     ESP_LOGW(TAG,"No network service started: USB provisioning only");
@@ -346,7 +375,18 @@ static void provisioning_loop(void) {
             if(byte=='\n') {
                 buffer[*used]=0;
                 if(strcmp(buffer,"SEVPN_PING")==0) {
+                    // Backward-compatible read-only handshake.
                     usb_ack(port,"SEVPN_READY_V1");
+                    memset(buffer,0,LINE_MAX);*used=0;
+                    continue;
+                }
+                if(strncmp(buffer,"SEVPN_PING ",11)==0) {
+                    const char *nonce=buffer+11;
+                    if(usb_nonce_hex(nonce)) {
+                        char reply[32];
+                        snprintf(reply,sizeof(reply),"SEVPN_PONG %s",nonce);
+                        usb_ack(port,reply);
+                    } else usb_ack(port,"SEVPN_ERR_PROTOCOL");
                     memset(buffer,0,LINE_MAX);*used=0;
                     continue;
                 }
@@ -354,29 +394,22 @@ static void provisioning_loop(void) {
                    strcmp(buffer,"SEVPN_REMOTE_WRITES_OFF")==0) {
                     const bool enable=strcmp(buffer,"SEVPN_REMOTE_WRITES_ON")==0;
                     if(patch_remote_writes(enable)) {
-                        usb_ack(port,"SEVPN_OK_REBOOT");
-                        memset(buffer,0,LINE_MAX);
-                        vTaskDelay(pdMS_TO_TICKS(1200));
-                        esp_restart();
+                        usb_ack_reboot(port);
                     }
+                    usb_ack(port,"SEVPN_ERR_NVS");
+                    memset(buffer,0,LINE_MAX);*used=0;continue;
                 }
                 const char add_volt[]="SEVPN_ADD_VOLTRONIC ";
                 if(*used>sizeof(add_volt)-1 &&
                    memcmp(buffer,add_volt,sizeof(add_volt)-1)==0 &&
                    patch_voltronic_only(buffer+sizeof(add_volt)-1)) {
-                    usb_ack(port,"SEVPN_OK_REBOOT");
-                    memset(buffer,0,LINE_MAX);
-                    vTaskDelay(pdMS_TO_TICKS(1200));
-                    esp_restart();
+                    usb_ack_reboot(port);
                 }
                 const char prefix[]="SEVPN_CONFIG ";
                 if(*used>sizeof(prefix)-1 &&
                    memcmp(buffer,prefix,sizeof(prefix)-1)==0 &&
                    save_config(buffer+sizeof(prefix)-1)) {
-                    usb_ack(port,"SEVPN_OK_REBOOT");
-                    memset(buffer,0,LINE_MAX);
-                    vTaskDelay(pdMS_TO_TICKS(1200));
-                    esp_restart();
+                    usb_ack_reboot(port);
                 }
                 usb_ack(port,"SEVPN_ERR_INVALID");
                 memset(buffer,0,LINE_MAX);*used=0;continue;
