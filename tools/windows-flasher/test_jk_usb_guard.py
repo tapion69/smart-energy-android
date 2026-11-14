@@ -72,6 +72,14 @@ class JkUsbGuardTests(unittest.TestCase):
             self.assertEqual(ready.app0.start,0x10000)
             self.assertEqual(len(calls),3)
             self.assertTrue(all("read_flash" in x for x in calls))
+            self.assertIn(["--after","no_reset"],[calls[0][i:i+2]
+                for i in range(len(calls[0])-1)])
+            for later in calls[1:]:
+                self.assertIn(["--before","no_reset"],[later[i:i+2]
+                    for i in range(len(later)-1)])
+                self.assertIn(["--after","no_reset"],[later[i:i+2]
+                    for i in range(len(later)-1)])
+            self.assertTrue(all("115200" in call for call in calls))
             with self.assertRaises(ValueError):
                 backup_jk_nvs("COM11",dst,750000,fake_esptool)
 
