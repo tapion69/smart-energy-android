@@ -328,6 +328,10 @@ class Flasher(tk.Tk):
                    command=self._flash_vpn).pack(side="right", padx=5)
         ttk.Button(vpn.actions, text="Ajouter INV sans effacer le reste",
                    command=self._add_voltronic_only).pack(side="left", padx=5)
+        ttk.Button(vpn.actions,text="Autoriser écritures VPN (USB)",
+                   command=lambda:self._set_vpn_remote_writes(True)).pack(side="left",padx=3)
+        ttk.Button(vpn.actions,text="Bloquer écritures VPN (USB)",
+                   command=lambda:self._set_vpn_remote_writes(False)).pack(side="left",padx=3)
         ttk.Button(voltronic.actions, text="Flasher Voltronic S3",
                    command=self._flash_voltronic).pack(side="right", padx=5)
         ttk.Button(voltronic.actions, text="Configurer S3 sans reflasher",
@@ -912,6 +916,31 @@ class Flasher(tk.Tk):
             on_ready=lambda: self._progress_step(
                 92, "ESP32 prêt : configuration VPN en cours d'enregistrement…"))
         self._progress_step(98, "Configuration VPN enregistrée et confirmée par l'ESP32.")
+
+    def _set_vpn_remote_writes(self, enabled: bool) -> None:
+        """USB/BOOT-only opt-in; all saved Tailscale and JK settings remain untouched."""
+        try:
+            from vpn_usb import set_remote_writes_over_serial
+            port=self._assert_ready()
+            choice="AUTORISER" if enabled else "INTERDIRE"
+            if not messagebox.askyesno(
+                "Écritures JK et Voltronic via VPN",
+                f"{choice} les modifications de paramètres par le VPN ?\\n\\n"
+                "Les confirmations et vérifications de valeurs restent obligatoires.\\n"
+                "Les réglages Wi-Fi, Tailscale et associations JK sont conservés.\\n\\n"
+                "Branche le VPN en USB, redémarre puis maintiens BOOT 3 secondes "
+                "pendant les 9 secondes de démarrage.\\n"
+                "Nécessite le nouveau firmware VPN."
+            ):
+                return
+            self._run_async(
+                lambda:set_remote_writes_over_serial(
+                    port,enabled,self._log,
+                    on_ready=lambda:self._progress_step(
+                        88,"Passerelle VPN : autorisation USB en cours…")),
+                mode="config")
+        except Exception as exc:
+            messagebox.showerror("Écritures VPN",str(exc))
 
     def _add_voltronic_only(self) -> None:
         """Only volt{n}_ip and volt{n}_code change; preserve other NVS keys."""
