@@ -57,6 +57,9 @@ class JkUsbGuardTests(unittest.TestCase):
             calls.append(list(argv))
             if argv[-3:-1] == ["0x8000","0x1000"]:
                 Path(argv[-1]).write_bytes(VALID)
+            elif argv[-3:-1] == ["0x10000","0x140000"]:
+                product=b"smart-jk-esp32"
+                Path(argv[-1]).write_bytes(product+b"\xff"*(0x140000-len(product)))
             elif argv[-3:-1] == ["0x9000","0x5000"]:
                 Path(argv[-1]).write_bytes(nvs)
             else:
@@ -67,10 +70,28 @@ class JkUsbGuardTests(unittest.TestCase):
             self.assertTrue(dst.exists())
             self.assertEqual(dst.read_bytes(),nvs)
             self.assertEqual(ready.app0.start,0x10000)
-            self.assertEqual(len(calls),2)
+            self.assertEqual(len(calls),3)
             self.assertTrue(all("read_flash" in x for x in calls))
             with self.assertRaises(ValueError):
                 backup_jk_nvs("COM11",dst,750000,fake_esptool)
+
+    def test_vpn_board_with_identical_partition_table_is_refused(self):
+        calls=[]
+        def fake_esptool(argv):
+            calls.append(list(argv))
+            if argv[-3:-1]==["0x8000","0x1000"]:
+                Path(argv[-1]).write_bytes(VALID)
+            elif argv[-3:-1]==["0x10000","0x140000"]:
+                product=b"smart-energy-vpn-gateway"
+                Path(argv[-1]).write_bytes(product+b"\xff"*(0x140000-len(product)))
+            else:
+                raise AssertionError("The NVS must not be backed up on a wrong board")
+        with tempfile.TemporaryDirectory() as temp:
+            dst=Path(temp)/"private.bin"
+            with self.assertRaisesRegex(ValueError,"Smart JK"):
+                backup_jk_nvs("COM11",dst,750000,fake_esptool)
+            self.assertFalse(dst.exists())
+            self.assertEqual(len(calls),2)
 
     def test_unsafe_partition_refuses_backup_and_never_reads_nvs(self):
         calls=[]
