@@ -5,6 +5,7 @@ on:
     branches: [dev]
     paths:
       - '.github/workflows/release-android-0345-voltronic-035.yml'
+      - 'firmware/voltronic-esp32/tests/test_ota_preflight_sources.py'
   workflow_dispatch:
 
 permissions:
