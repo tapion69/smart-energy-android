@@ -787,7 +787,7 @@ static esp_err_t edit_parameter_handler(httpd_req_t *r){
     }
     if(edit_request.pending){
         xSemaphoreGive(edit_lock);cJSON_Delete(doc);
-        return httpd_resp_send_err(r,HTTPD_409_CONFLICT,"previous edit unresolved");
+        return httpd_resp_send_err(r,HTTPD_503_SERVICE_UNAVAILABLE,"previous edit unresolved");
     }
     memset(&edit_request,0,sizeof(edit_request));
     snprintf(edit_request.key,sizeof(edit_request.key),"%s",spec->key);
@@ -1092,6 +1092,93 @@ static void interpret_reply(const char *cmd,const vt_exchange_t *rx,uint32_t now
         state.polls_ok++;
     }
 }
+static void edit_result(char result[64],const char *text){
+    snprintf(result,64,"%s",text);
+}
+static void perform_parameter_edit(
+    const vt_edit_request_t *request,bool *verified,bool *acknowledged,
+    char result[64]) {
+    *verified=false;*acknowledged=false;
+    const vt_edit_spec_t *spec=vt_edit_find(request->key);
+    if(!spec){edit_result(result,"unsupported_parameter");return;}
+    xSemaphoreTake(state_lock,portMAX_DELAY);
+    bool identified=state.inverter_model[0]!=0 && state.inverter_fw_main[0]!=0;
+    xSemaphoreGive(state_lock);
+    if(!identified){edit_result(result,"identity_not_ready");return;}
+    /* A fresh CRC-valid native query is required before the SET. */
+    vt_exchange_t before=exchange(spec->query);
+    double fields[48]={0};
+    size_t count=vt_fields(before.frame,before.len,fields,48);
+    if(before.nak||before.timeout||count<=spec->index){
+        edit_result(result,"fresh_read_failed");return;
+    }
+    double current=fields[spec->index];
+    if(fabs(current-request->old_value)>spec->tolerance){
+        edit_result(result,"changed_since_preview");return;
+    }
+    int nominal=0;
+    if(strcmp(spec->query,"QPIRI")==0 && count>9){
+        double under_voltage=fields[9];
+        nominal=under_voltage>=36.0&&under_voltage<=65.0?48:
+                under_voltage>=16.0&&under_voltage<=34.0?24:0;
+    }
+    if(!vt_edit_allowed(spec,current,request->new_value,nominal)){
+        edit_result(result,"value_or_step_not_supported");return;
+    }
+    char command[VT_MAX_COMMAND]={0};
+    if(!vt_edit_command(spec,request->new_value,command,sizeof(command))){
+        edit_result(result,"command_not_supported");return;
+    }
+    /* One candidate, never an automatic fallback. */
+    vt_exchange_t reply=exchange_core(command,true);
+    char ack[16]={0};
+    if(reply.timeout||reply.nak||
+       !vt_payload_copy(reply.frame,reply.len,ack,sizeof(ack))||
+       strcmp(ack,"ACK")!=0){
+        edit_result(result,"set_not_acknowledged_state_unknown");return;
+    }
+    *acknowledged=true;
+    /* Priority readback immediately follows the SET on this same task. */
+    vt_exchange_t after=exchange(spec->query);
+    double check[48]={0};
+    size_t read_count=vt_fields(after.frame,after.len,check,48);
+    if(after.nak||after.timeout||read_count<=spec->index){
+        edit_result(result,"post_write_read_failed");return;
+    }
+    xSemaphoreTake(state_lock,portMAX_DELAY);
+    interpret_reply(spec->query,&after,esp_log_timestamp());
+    xSemaphoreGive(state_lock);
+    if(fabs(check[spec->index]-request->new_value)>spec->tolerance){
+        edit_result(result,"readback_does_not_match");return;
+    }
+    *verified=true;
+    edit_result(result,"verified_by_fresh_native_readback");
+}
+/* Only the original UART poll task may service a confirmed edit. */
+static bool process_pending_parameter_edit(void){
+    vt_edit_request_t copy={0};
+    xSemaphoreTake(edit_lock,portMAX_DELAY);
+    bool take=edit_request.pending&&!edit_request.running&&!edit_request.finished;
+    if(take){
+        edit_request.running=true;
+        copy=edit_request;
+    }
+    xSemaphoreGive(edit_lock);
+    if(!take)return false;
+    bool verified=false,acknowledged=false;
+    char result[64]={0};
+    perform_parameter_edit(&copy,&verified,&acknowledged,result);
+    xSemaphoreTake(edit_lock,portMAX_DELAY);
+    edit_request.verified=verified;
+    edit_request.set_acknowledged=acknowledged;
+    snprintf(edit_request.result,sizeof(edit_request.result),"%s",result);
+    edit_request.finished=true;
+    edit_request.running=false;
+    xSemaphoreGive(edit_lock);
+    xSemaphoreGive(edit_completed);
+    return true;
+}
+
 static void polling_task(void *unused) {
     (void)unused;
     serial_start();
@@ -1105,6 +1192,7 @@ static void polling_task(void *unused) {
     jobs[17].next_ms=start+500;   /* Flow alternating tick (500 ms). */
     uint32_t iterations=0;
     while(true) {
+        if(process_pending_parameter_edit())continue;
         uint32_t now=esp_log_timestamp();
         bool secondary=(iterations%3==2);
         vt_job_t *job=next_due_job(now,secondary);
