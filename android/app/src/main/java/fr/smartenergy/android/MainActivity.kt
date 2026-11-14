@@ -1219,11 +1219,20 @@ class MainActivity : Activity() {
             checkSmartEnergyUpdates(true)
         })
         val firmwareUpdates=section(updatesPage,"Firmware ESP32-S3 Voltronic · OTA",true)
-        add(firmwareUpdates,label("Le lecteur Voltronic actuel utilise une "+
-            "partition unique. L'OTA directe est désactivée tant qu'une "+
-            "migration USB sécurisée vers deux partitions OTA "+
-            "n'a pas été effectuée. Aucune écriture flash automatique.",12f,
-            color=subdued))
+        add(firmwareUpdates,label("Vérification locale sans écriture : l'ESP32-S3 "+
+            "indique si son partitionnement permet une OTA directe. "+
+            "Si une migration USB est nécessaire, aucune installation OTA "+
+            "ne sera proposée. Aucun réglage Voltronic n'est modifié par "+
+            "ce test.",12f,color=subdued))
+        add(firmwareUpdates,action("Tester la compatibilité OTA du S3 (lecture seule)") {
+            val slots=(1..3).filter {voltronicFleet.configured(it)}
+            if(slots.isEmpty())updateFeedback.text="Configure d'abord un S3 Voltronic."
+            else AlertDialog.Builder(this)
+                .setTitle("Quel S3 vérifier ?")
+                .setItems(slots.map{"INV$it"}.toTypedArray()) { _,which->
+                    checkVoltronicOtaReadiness(slots[which])
+                }.show()
+        },7)
         add(firmwareUpdates,action("Vérifier les versions firmware publiées") {
             checkSmartEnergyUpdates(true)
         })
@@ -3940,6 +3949,41 @@ class MainActivity : Activity() {
                     }
                 }
             }
+        }
+    }
+
+    private fun checkVoltronicOtaReadiness(slot:Int) {
+        if(slot !in 1..3 || !voltronicFleet.configured(slot))return
+        val host=if(slot==1)prefs.getString("inverter_probe_ip","")?:""
+            else prefs.getString("inverter_${slot}_ip","")?:""
+        val port=if(slot==1)prefs.getInt("inverter_probe_port",18081)
+            else prefs.getInt("inverter_${slot}_port",18081)
+        val code=auxiliaryCode(if(slot==1)"premium_voltronic_code_cipher"
+            else "premium_voltronic_${slot}_code_cipher")
+        val network=voltronicWifiNetwork()
+        if(network==null || !SunSpecReadOnly.isPrivateIPv4(host)
+            || code.length !in 8..32) {
+            updateFeedback.text="INV$slot : Wi-Fi local, IP privée et code S3 requis."
+            return
+        }
+        updateFeedback.text="INV$slot : lecture des partitions OTA…"
+        settingsWorker.execute {
+            val message=try {
+                val status=VoltronicLocalOta.status(host,code,port,network)
+                val scheme=status.optString("partition_scheme","inconnu")
+                val version=status.optString("running_firmware",
+                    voltronicFleet.snapshotFor(slot).optString("firmwareVersion",""))
+                val pending=status.optBoolean("rollback_pending",false)
+                val ready=status.optBoolean("ota_supported",false)
+                "INV$slot · firmware $version · partitions $scheme · "+
+                    (if(pending)"rollback en attente : aucune OTA autorisée"
+                     else if(ready)"OTA possible après publication officielle et SHA-256"
+                     else "migration USB nécessaire : OTA refusée sans écriture")
+            }catch(ex:Exception) {
+                "INV$slot : contrôle OTA inaccessible ("+
+                    ex.javaClass.simpleName.take(50)+"). Aucune écriture effectuée."
+            }
+            runOnUiThread {if(::updateFeedback.isInitialized)updateFeedback.text=message}
         }
     }
 
