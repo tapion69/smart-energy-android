@@ -1218,6 +1218,14 @@ class MainActivity : Activity() {
         add(appUpdates,action("Vérifier les mises à jour Android") {
             checkSmartEnergyUpdates(true)
         })
+        add(appUpdates,action("Terminer l'installation de l'APK vérifiée") {
+            try {
+                val started=SmartEnergyApkInstaller.openAndroidInstaller(this)
+                if(!started)updateFeedback.text="Autorise l'installation pour Smart Energy dans les réglages Android, puis reviens ici pour terminer."
+            }catch(ex:Exception){
+                updateFeedback.text="Installation indisponible : "+(ex.message?:ex.javaClass.simpleName)
+            }
+        },6)
         val firmwareUpdates=section(updatesPage,"Firmware ESP32-S3 Voltronic · OTA",true)
         add(firmwareUpdates,label("Vérification locale sans écriture : l'ESP32-S3 "+
             "indique si son partitionnement permet une OTA directe. "+
@@ -4055,6 +4063,47 @@ class MainActivity : Activity() {
         }
     }
 
+    private fun installAndroidRelease(release:SmartEnergyUpdateFeed.AndroidRelease) {
+        if(!::updateFeedback.isInitialized)return
+        updateFeedback.text="Préparation de la mise à jour Android…"
+        settingsWorker.execute {
+            try {
+                SmartEnergyApkInstaller.downloadAndVerify(this,release) { progress ->
+                    runOnUiThread {
+                        if(::updateFeedback.isInitialized)updateFeedback.text=progress
+                    }
+                }
+                runOnUiThread {
+                    if(isFinishing || isDestroyed)return@runOnUiThread
+                    AlertDialog.Builder(this)
+                        .setTitle("APK vérifiée : ${release.version}")
+                        .setMessage("Empreinte SHA-256, identité de paquet et "+
+                            "certificat Android contrôlés. Android installera "+
+                            "la nouvelle version par-dessus celle-ci. "+
+                            "Ne désinstalle pas l'application : "+
+                            "tes associations et codes restent enregistrés.")
+                        .setNegativeButton("Annuler",null)
+                        .setPositiveButton("Ouvrir l'installateur Android") { _,_ ->
+                            try {
+                                if(!SmartEnergyApkInstaller.openAndroidInstaller(this))
+                                    updateFeedback.text="Autorise Smart Energy à installer "+
+                                        "ses mises à jour, puis utilise le bouton "+
+                                        "« Terminer l'installation » de cet onglet."
+                            }catch(ex:Exception){
+                                updateFeedback.text="Installation Android : "+
+                                    (ex.message?:ex.javaClass.simpleName)
+                            }
+                        }.show()
+                }
+            }catch(ex:Exception) {
+                runOnUiThread {
+                    if(::updateFeedback.isInitialized)updateFeedback.text=
+                        "APK non installée : "+(ex.message?:ex.javaClass.simpleName).take(160)
+                }
+            }
+        }
+    }
+
     private fun checkSmartEnergyUpdates(manual:Boolean) {
         if(!::updateFeedback.isInitialized)return
         val now=System.currentTimeMillis()
@@ -4108,11 +4157,10 @@ class MainActivity : Activity() {
                             prefs.edit().putLong("updates_last_alert_code",
                                 release.versionCode).apply()
                         }
-                        .setPositiveButton("Télécharger") { _,_ ->
+                        .setPositiveButton("Télécharger et installer") { _,_ ->
                             prefs.edit().putLong("updates_last_alert_code",
                                 release.versionCode).apply()
-                            startActivity(Intent(Intent.ACTION_VIEW,
-                                Uri.parse(release.downloadUrl)))
+                            installAndroidRelease(release)
                         }.show()
                 }
             }
