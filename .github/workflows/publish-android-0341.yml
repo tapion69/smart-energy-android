@@ -1,0 +1,73 @@
+name: Publish verified Smart Energy Android 0.3.41 test release
+on:
+  push:
+    branches: [dev]
+    paths:
+      - '.github/workflows/publish-android-0341.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  actions: read
+
+jobs:
+  publish-verified-apk:
+    name: Verify APK 0.3.41 and publish a GitHub prerelease
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download exact permanently signed APK from validated CI
+        uses: actions/download-artifact@v4
+        with:
+          name: smart-energy-android-signed-upgradeable
+          repository: tapion69/smart-energy-android
+          run-id: 43593693157
+          github-token: ${{ github.token }}
+          path: release-files
+
+      - name: Verify exact APK SHA256, signature and bundled S3 firmware
+        shell: bash
+        env:
+          EXPECTED_CERT: ${{ secrets.SMART_ENERGY_ANDROID_CERT_SHA256 }}
+        run: |
+          set -euo pipefail
+          APK=release-files/app-release.apk
+          test -s "$APK"
+          EXPECTED_APK_SHA=7ff8c8a869c75824f48e5b5784ded42531c61a5783b8b39f7f2da144fab5494e
+          printf '%s  %s\n' "$EXPECTED_APK_SHA" "$APK" | sha256sum --check --status
+          EXPECTED_S3_SHA=9cfc8c87280c50bf92eb4f6b8029ea67004aa79cfbe7ff0faa0f24f78e3bf289
+          ACTUAL_S3_SHA=$(unzip -p "$APK" assets/voltronic-s3-0.3.4-test.bin | sha256sum | awk '{print $1}')
+          test "$ACTUAL_S3_SHA" = "$EXPECTED_S3_SHA"
+          test "$(unzip -p "$APK" assets/voltronic-s3-0.3.4-test.bin | wc -c)" -eq 901664
+          test "$EXPECTED_CERT" != ""
+          [[ "$EXPECTED_CERT" =~ ^[[:xdigit:]]{64}$ ]]
+          APKSIGNER=$(find "$ANDROID_HOME/build-tools" -type f -name apksigner | sort -V | tail -n 1)
+          test -x "$APKSIGNER"
+          "$APKSIGNER" verify --verbose "$APK"
+          CERT_REPORT=$("$APKSIGNER" verify --print-certs "$APK")
+          ACTUAL_CERT=$(printf '%s\n' "$CERT_REPORT" |
+            grep -Eio '([[:xdigit:]]{2}:){31}[[:xdigit:]]{2}|[[:xdigit:]]{64}' |
+            head -n 1 | tr -d ':' | tr '[:upper:]' '[:lower:]' || true)
+          TRUSTED_CERT=$(printf '%s' "$EXPECTED_CERT" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')
+          test "$ACTUAL_CERT" = "$TRUSTED_CERT"
+          echo "Verified Android 0.3.41 package, permanent signer and embedded S3 firmware."
+          mv "$APK" release-files/SmartEnergy-Android-0.3.41.apk
+
+      - name: Publish prerelease asset (no overwrite or new signing)
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          REPO=tapion69/smart-energy-android
+          TAG=android-v0.3.41-test
+          if gh release view "$TAG" --repo "$REPO" > /dev/null 2>&1; then
+            echo "::error::Release tag already exists. Refusing to replace an installed APK."
+            exit 1
+          fi
+          gh release create "$TAG" release-files/SmartEnergy-Android-0.3.41.apk \
+            --repo "$REPO" \
+            --target a06a36eface4a2690e7473cd3ac2c2989c160d19 \
+            --title "Smart Energy Android 0.3.41 — Inverter parameters + Voltronic VPN + JK update checks" \
+            --prerelease \
+            --notes "Signed app versionCode 55. Installs over the same permanently signed official 0.3.40 (versionCode 54) without deleting configuration. Native inverter-parameters editor in Onduleurs, simplified Voltronic OTA update check, JK ESP1/2/3 firmware version checks (no JK OTA flashing until safe boot partition support), and Voltronic read-only VPN routing via the same active JK Tailscale gateway. Bundled Voltronic 0.3.4 test is preserved. Do not uninstall the app. JK dashboard and JK/VPN firmware unchanged."
+          echo "Published GitHub prerelease $TAG with original verified signed APK."
