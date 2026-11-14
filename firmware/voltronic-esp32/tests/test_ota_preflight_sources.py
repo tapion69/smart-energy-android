@@ -17,7 +17,7 @@ for required in (
     'X-Image-SHA256',
 ):
     assert required in s,required
-assert '#define VT_VERSION "0.3.3-dev-ota-preflight-read-only"' in s
+assert '#define VT_VERSION "0.3.4-dev-ota-parameter-edit-test"' in s
 assert "esp_ota_get_state_partition" in s
 assert "VT_JOBS 18" in s
-print("OTA status is read-only; rollback and SHA256 protections retained")
+print("OTA status remains read-only; guarded parameter writes are separate; rollback and SHA256 retained")
