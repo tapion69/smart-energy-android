@@ -973,9 +973,13 @@ class Flasher(tk.Tk):
                 f"{choice} les modifications de paramètres par le VPN ?\\n\\n"
                 "Les confirmations et vérifications de valeurs restent obligatoires.\\n"
                 "Les réglages Wi-Fi, Tailscale et associations JK sont conservés.\\n\\n"
-                "Branche le VPN en USB, redémarre puis maintiens BOOT 3 secondes "
-                "pendant les 9 secondes de démarrage.\\n"
-                "Nécessite le nouveau firmware VPN."
+                "ESP32-S3 VPN 0.3.5 ou plus : branche la prise COM, "
+                "puis maintiens BOOT 4 secondes et RELÂCHE quand le flasheur "
+                "attend SEVPN_READY_V1. Aucun RESET nécessaire.\\n"
+                "Ancien firmware : RESET bref, puis BOOT 3 secondes "
+                "dans la fenêtre initiale de 9 secondes.\\n"
+                "Si le port change, sélectionne le nouveau COM et relance "
+                "UNIQUEMENT cette configuration USB, sans flash."
             ):
                 return
             self._run_async(
