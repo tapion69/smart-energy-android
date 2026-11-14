@@ -5,17 +5,19 @@ import org.json.JSONObject
 import java.net.HttpURLConnection
 import java.net.URL
 
-/**
- * Local, explicit Voltronic semantic parameter edits. No VPN or raw serial
- * commands are permitted; the S3 itself decides the supported values and
- * verifies an immediate post-SET native QPIRI/QDOP readback.
- */
+/** Verified semantic Voltronic parameter edits, over authenticated LAN
+ * or physically enabled VPN. Raw QPIRI/QDOP fields remain in diagnostics;
+ * only S3-firmware-allowlisted commands can ever be proposed for writing. */
 internal object VoltronicParameterEditor {
     data class Setting(val key:String,val label:String,val value:Double,val unit:String,
                        val editable:Boolean=true)
     private data class Spec(val key:String,val label:String,val source:String,
                             val unit:String)
     private val specifications = listOf(
+        // The two priorities are the most useful daily inverter controls.
+        // POP/PCP opcodes and ranges are explicitly allowlisted by S3.
+        Spec("output_source_priority_code","Priorité secteur / sortie","qpiri",""),
+        Spec("charger_source_priority_code","Priorité de charge","qpiri",""),
         Spec("battery_recharge_voltage_v","Tension de retour réseau","qpiri","V"),
         Spec("battery_under_voltage_v","Tension de coupure batterie","qpiri","V"),
         Spec("battery_bulk_voltage_v","Tension Bulk","qpiri","V"),
@@ -25,12 +27,30 @@ internal object VoltronicParameterEditor {
         Spec("max_ac_charging_current_a","Courant maximal de charge AC","qpiri","A"),
         Spec("max_charging_current_a","Courant de charge maximal","qpiri","A"),
         Spec("max_discharging_current_a","Courant de décharge maximal (pas 10 A)","qpiri","A"),
-        Spec("output_source_priority_code","Priorité de sortie (code)","qpiri",""),
-        Spec("charger_source_priority_code","Priorité de charge (code)","qpiri",""),
         Spec("battery_recharge_capacity_pct","Capacité retour réseau","qdop","%"),
         Spec("battery_redischarge_capacity_pct","Capacité retour batterie","qdop","%"),
         Spec("battery_under_capacity_pct","Capacité basse","qdop","%")
     )
+    fun priorityChoices(key:String):List<Pair<Double,String>> = when(key) {
+        "output_source_priority_code" -> listOf(
+            0.0 to "Secteur → solaire → batterie",
+            1.0 to "Solaire → secteur → batterie",
+            2.0 to "Solaire → batterie → secteur"
+        )
+        "charger_source_priority_code" -> listOf(
+            1.0 to "Solaire en priorité",
+            2.0 to "Solaire + secteur",
+            3.0 to "Solaire uniquement"
+        )
+        else -> emptyList()
+    }
+    fun settingDescription(setting:Setting):String {
+        val choice=priorityChoices(setting.key).find{
+            kotlin.math.abs(it.first-setting.value)<0.01
+        }?.second
+        return if(choice!=null)"${setting.label} : $choice (code ${setting.value.toInt()})"
+               else "${setting.label} : ${setting.value} ${setting.unit}"
+    }
     private fun validateLocal(host:String,code:String,port:Int,network:Network?) {
         require(network!=null){"Wi-Fi local obligatoire (pas de VPN)"}
         require(SunSpecReadOnly.isPrivateIPv4(host)){"Adresse IPv4 locale obligatoire"}
@@ -65,40 +85,10 @@ internal object VoltronicParameterEditor {
             if(!value.isFinite())null else Setting(
                 spec.key,spec.label,value,spec.unit,editable=canEdit)
         }
-        // Cover every additional *received* numeric QPIRI/QDOP field, while
-        // rejecting writes for positions without a proven Voltronic opcode.
-        // Native field numbering is zero-based and can depend on model.
-        val mappedQpiri=setOf(8,9,10,11,12,13,14,16,17,22,27)
-        val mappedQdop=setOf(8,9,10)
-        val known=mapOf(
-            0 to ("Tension nominale entrée" to "V"),
-            1 to ("Courant nominal entrée" to "A"),
-            2 to ("Tension nominale sortie" to "V"),
-            3 to ("Fréquence nominale sortie" to "Hz"),
-            4 to ("Courant nominal sortie" to "A"),
-            5 to ("Puissance apparente nominale" to "VA"),
-            6 to ("Puissance active nominale" to "W"),
-            7 to ("Tension nominale batterie" to "V")
-        )
-        val extra=mutableListOf<Setting>()
-        for(source in listOf("qpiri","qdop")) {
-            val obj=native.optJSONObject(source)?:continue
-            if(obj.optLong("age_ms",Long.MAX_VALUE) !in 0L..300000L)continue
-            val raw=obj.optJSONArray("raw_fields")?:continue
-            val skipped=if(source=="qpiri")mappedQpiri else mappedQdop
-            for(index in 0 until minOf(raw.length(),48)) {
-                if(index in skipped || raw.isNull(index))continue
-                val value=raw.optDouble(index,Double.NaN)
-                if(!value.isFinite())continue
-                val labelAndUnit=if(source=="qpiri")known[index] else null
-                extra.add(Setting(
-                    "${source}_raw_$index",
-                    (labelAndUnit?.first?:("Champ natif "+source.uppercase()+" [$index]"))+
-                        " · lecture seule",
-                    value,labelAndUnit?.second?:"",editable=false))
-            }
-        }
-        return available+extra
+        // Diagnostic raw QPIRI / QDOP remains visible in the Inverter
+        // details panel, NOT in this edit picker. Unknown positions are
+        // never presented as editable settings.
+        return available
     }
     fun change(
         host:String,code:String,port:Int,network:Network?,
