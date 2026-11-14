@@ -29,8 +29,8 @@ button{font:inherit;cursor:pointer}
 .photoVal{position:absolute;z-index:2;min-width:90px;padding:8px;background:#051e30e9;border:1px solid #7ac6d1;border-radius:9px;box-shadow:0 5px 19px #0009}
 .photoVal .cap{display:block;color:#b2d5e5;font-size:10px}.photoVal strong{display:block;font-size:18px;white-space:nowrap}.photoVal .day{font-size:10px;display:block;margin-top:3px;color:#e1f4f5}
 .photoVal.pv{left:28%;top:13%;border-color:#e2b85e}.photoVal.pv strong{color:#ffe080}
-.photoVal.home{left:3%;top:37%;right:auto}.photoVal.grid{left:3%;bottom:5%;border-color:#659bdc}.photoVal.bat{right:3%;bottom:5%;border-color:#45ca96}.photoVal.bat strong{color:#94ffc3}
-.photoVal.inv{right:3%;left:auto;top:48%;font-size:10px}.photoVal.inv strong{font-size:14px}
+.photoVal.home{right:3%;top:37%;left:auto}.photoVal.grid{left:3%;bottom:5%;border-color:#659bdc}.photoVal.bat{right:3%;bottom:5%;border-color:#45ca96}.photoVal.bat strong{color:#94ffc3}
+.photoVal.inv{left:33%;right:auto;top:50%;font-size:10px}.photoVal.inv strong{font-size:14px}
 .hero-lines{position:absolute;inset:0;width:100%;height:100%;pointer-events:none;filter:drop-shadow(0 0 4px #000);opacity:.9}
 .hero-lines path{fill:none;stroke-width:3;stroke-dasharray:none;animation:none;opacity:.13;transition:opacity .2s}
 .hero-lines path.running{stroke-dasharray:6 9;animation:flow 1.3s linear infinite;opacity:1}
@@ -128,7 +128,7 @@ button{font:inherit;cursor:pointer}
 .battery-node .inline-detail{display:block;font-size:10px;line-height:1.3;color:#c1dbce;margin-top:3px;overflow-wrap:anywhere}
 .battery-node .inline-detail strong{font-size:10px}
 .flow-main .join.reverse.moving:before{animation-direction:reverse}
-@media(max-width:390px){.wrap{padding:8px 5px}.hero{height:420px}.photoVal{padding:6px;min-width:0}.photoVal strong{font-size:15px}.photoVal.pv{left:22%}.photoVal.home{left:2%;right:auto;top:37%}.photoVal.inv{right:2%;left:auto;top:50%}.photoVal.bat{right:2%;bottom:4%}.mppt-box .detail{font-size:9px}.battery-node{gap:8px}.battery-icon{width:47px;height:67px}.flow-main .node .inline-detail{font-size:9px}}
+@media(max-width:390px){.wrap{padding:8px 5px}.hero{height:420px}.photoVal{padding:6px;min-width:0}.photoVal strong{font-size:15px}.photoVal.pv{left:22%}.photoVal.home{right:2%;left:auto;top:37%}.photoVal.inv{left:33%;right:auto;top:50%}.photoVal.bat{right:2%;bottom:4%}.mppt-box .detail{font-size:9px}.battery-node{gap:8px}.battery-icon{width:47px;height:67px}.flow-main .node .inline-detail{font-size:9px}}
 
 </style></head>
 <body><main class="wrap">
@@ -144,7 +144,7 @@ button{font:inherit;cursor:pointer}
 <div id="modern" class="view show">
 <section class="hero" id="hero"><div class="hero-title">⚡ ÉNERGIE DE LA MAISON</div>
 <svg class="hero-lines" viewBox="0 0 360 450" preserveAspectRatio="none" aria-hidden="true">
-<path class="solar" d="M122 140 Q194 160 276 237"/><path class="house" d="M265 244 Q184 254 105 218"/><path class="store" d="M281 278 Q296 315 286 355"/><path class="utility" d="M68 353 Q137 312 267 274"/>
+<path class="solar" d="M122 114 Q150 165 170 228"/><path class="house" d="M188 260 Q244 211 291 204"/><path class="store" d="M188 291 Q239 323 288 356"/><path class="utility" d="M68 353 Q110 320 164 285"/>
 </svg>
 <div class="photoVal pv"><span class="cap">☀ Solaire</span><strong id="mPv">— W</strong><span class="day" id="mPvDay">Jour : —</span></div>
 <div class="photoVal home"><span class="cap">⌂ Maison</span><strong id="mLoad">— W</strong><span class="inline-detail" id="mLoadDay">Jour : —</span></div>
