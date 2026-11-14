@@ -237,7 +237,7 @@ class ScrollableTab(ttk.Frame):
 class Flasher(tk.Tk):
     def __init__(self) -> None:
         super().__init__()
-        self.title("Smart Energy — JK / VPN / Voltronic ESP32-S3")
+        self.title("Smart Energy — JK USB sécurisé / VPN / Voltronic ESP32-S3")
         self.geometry("960x780")
         self.minsize(740, 550)
         self.events: queue.Queue[tuple[str, str]] = queue.Queue()
@@ -322,7 +322,7 @@ class Flasher(tk.Tk):
         self._build_vpn(vpn.content)
         self._build_voltronic(voltronic.content)
         # Important actions remain visible even when the form is scrolled.
-        ttk.Button(jk.actions, text="Flasher le lecteur JK",
+        ttk.Button(jk.actions, text="Mettre à jour ESP JK (USB si OTA impossible)",
                    command=self._flash_jk).pack(side="right", padx=5)
         ttk.Button(vpn.actions, text="Flasher VPN (mode sélectionné)",
                    command=self._flash_vpn).pack(side="right", padx=5)
@@ -773,21 +773,64 @@ class Flasher(tk.Tk):
             elif payload[0] != 0xE9:
                 raise ValueError("Le firmware APP-ONLY n'a pas l'en-tête ESP32 attendu.")
             offset = "0x0" if factory else "0x10000"
-            self._run_async(lambda: self._do_jk(port, path, offset), mode="jk")
+            private_backup=None
+            if not factory:
+                # APP-ONLY fallback for readers which cannot yet accept OTA.
+                # Never flash before reading the real table and backing up NVS.
+                from datetime import datetime
+                suggested="SmartEnergy-JK-NVS-PRIVE-"+port+"-"+datetime.now().strftime("%Y%m%d-%H%M%S")+".bin"
+                target=filedialog.asksaveasfilename(
+                    title="Sauvegarde obligatoire : Wi-Fi, code et associations JK (PRIVÉ)",
+                    defaultextension=".bin",
+                    filetypes=[("Sauvegarde ESP32 NVS", "*.bin")],
+                    initialdir=str(Path.home()/"Documents"),
+                    initialfile=suggested)
+                if not target:return
+                private_backup=Path(target)
+                if private_backup.exists():
+                    raise ValueError("Le fichier de sauvegarde existe déjà. Choisis un nouveau nom.")
+                if not messagebox.askyesno(
+                    "JK · migration USB sécurisée",
+                    "Le lecteur ne peut pas être mis à jour en OTA ?\\n\\n"
+                    "1. Lecture de sa table de partitions actuelle.\\n"
+                    "2. Sauvegarde NVS (Wi-Fi, code, BMS) sur TON PC.\\n"
+                    "3. APP-ONLY 0x10000 seulement, sans effacement NVS.\\n\\n"
+                    "La sauvegarde contient des informations privées :\\n"
+                    "ne la mets pas dans un dépôt public ou dans ChatGPT.\\n"
+                    "Si la table est inconnue, le flash est refusé.\\n\\n"
+                    "Confirmer cette mise à jour USB JK ?"):
+                    return
+            self._run_async(lambda: self._do_jk(port,path,offset,private_backup),
+                            mode="jk")
         except Exception as exc:
             messagebox.showerror("Flash JK", str(exc))
 
-    def _do_jk(self, port: str, file: Path, offset: str) -> None:
+    def _do_jk(self, port: str, file: Path, offset: str,
+               private_backup: Path | None = None) -> None:
         ensure_esptool_console_streams()
         self._log(f"Flash JK {port}, offset {offset}, fichier {file.name}")
-        self._progress_stage("Connexion à l'ESP32 JK et écriture du firmware…")
         from esptool import main as esptool_main
+        if offset == "0x10000":
+            from jk_usb_guard import backup_jk_nvs
+            if private_backup is None:
+                raise ValueError("Sauvegarde NVS obligatoire avant la mise à jour USB JK.")
+            self._progress_stage("JK : lecture des partitions et sauvegarde NVS PRIVÉE…")
+            checked=backup_jk_nvs(port,private_backup,file.stat().st_size,esptool_main)
+            self._log("Table des partitions validée ; sauvegarde NVS conservée "+
+                "sur ton PC uniquement. Aucun code ou mot de passe affiché.")
+            if checked.has_second_ota_slot:
+                self._log("Double partition OTA détectée. Si une autre partition "+
+                    "était active, vérifie la version après redémarrage.")
+            else:
+                self._log("Partition unique : APP-ONLY maintient la configuration, "+
+                    "mais ne crée PAS de partition OTA supplémentaire.")
+        self._progress_stage("Connexion à l'ESP32 JK et écriture du firmware…")
         with monitor_esptool_progress(self._flash_percent):
             esptool_main(["--chip", "esp32", "--port", port, "--baud", "460800",
                           "write_flash", "--flash_mode", "dio", "--flash_freq", "40m",
                           "--flash_size", "4MB", offset, str(file)])
         self._progress_step(98, "Image JK écrite et vérifiée.")
-        self._log("Flash JK terminé. Redémarre le lecteur, puis vérifie la version dans l'APK.")
+        self._log("Flash JK terminé. Redémarre le lecteur et vérifie les BMS dans l'APK.")
 
     @staticmethod
     def _bundled_jk_image(mode: str) -> Path:
