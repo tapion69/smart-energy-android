@@ -1,4 +1,5 @@
 #include "../main/gateway_policy.h"
+#include "../main/gateway_write_policy.h"
 #include <assert.h>
 #include <stdio.h>
 
@@ -80,6 +81,35 @@ int main(void) {
     assert(!se_secure_equals("0123456789012345678901234567", "0123456789012345678901234568"));
     assert(!se_secure_equals("0123456789012345678901234567", ""));
     assert(!se_secure_equals("short", "short"));
+    // All writes require an explicit fixed path, exact slot and POST.
+    for(int slot=1;slot<=3;slot++) {
+        char path[96];
+        snprintf(path,sizeof path,"/api/v1/jk/%d/write-arm",slot);
+        se_write_route_t route=se_write_route(path,true);
+        assert(route.slot==slot && route.kind==SE_WRITE_JK_ARM);
+        assert(se_write_route(path,false).kind==SE_WRITE_DENIED);
+        snprintf(path,sizeof path,"/api/v1/jk/%d/write",slot);
+        assert(se_write_route(path,true).kind==SE_WRITE_JK_COMMIT);
+        snprintf(path,sizeof path,"/api/v1/jk/%d/settings-refresh",slot);
+        assert(se_write_route(path,true).kind==SE_WRITE_JK_REFRESH);
+        snprintf(path,sizeof path,"/api/v1/jk/%d/write-status?mac=AA%%3ABB%%3ACC%%3ADD%%3AEE%%3AFF",slot);
+        assert(se_write_route(path,false).kind==SE_WRITE_JK_STATUS);
+        snprintf(path,sizeof path,"/api/v1/voltronic/%d/parameters/change",slot);
+        assert(se_write_route(path,true).kind==SE_WRITE_VOLTRONIC_PARAM);
+        assert(se_write_route(path,false).kind==SE_WRITE_DENIED);
+    }
+    assert(se_write_route("/api/v1/jk/4/write",true).kind==SE_WRITE_DENIED);
+    assert(se_write_route("/api/v1/jk/1/../wifi",true).kind==SE_WRITE_DENIED);
+    assert(se_write_route("/api/v1/jk/1/ota/image",true).kind==SE_WRITE_DENIED);
+    assert(se_write_route("/api/v1/voltronic/1/ota/image",true).kind==SE_WRITE_DENIED);
+    assert(se_write_route("/api/v1/jk/1/access",true).kind==SE_WRITE_DENIED);
+    assert(se_write_route("/api/v1/voltronic/1/parameters/change?host=evil",true).kind==SE_WRITE_DENIED);
+    assert(se_write_mac("AA:BB:CC:DD:EE:FF"));
+    assert(!se_write_mac("AA:BB:CC:DD:EE:FF?"));
+    assert(!se_write_mac("AA:BB:CC:DD:EE:GG"));
+    assert(se_write_voltronic_key("battery_float_voltage_v"));
+    assert(!se_write_voltronic_key("QPIWS"));
+    assert(!se_write_voltronic_key("raw_command"));
     puts("Smart Energy VPN gateway policy tests OK");
     return 0;
 }
