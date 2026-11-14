@@ -34,7 +34,7 @@
 #include "voltronic_protocol.h"
 #include "voltronic_edit.h"
 
-#define VT_VERSION "0.3.5"
+#define VT_VERSION "0.3.6-test-ha-bridge"
 #define VT_UART UART_NUM_1
 #define VT_TX GPIO_NUM_17
 #define VT_RX GPIO_NUM_16
@@ -376,6 +376,13 @@ static esp_err_t info_handler(httpd_req_t *r){
         "QPIGS QPIGS2 QMOD QPIRI QDOP QPIWS QMN QID QVFW QVFW3 QET QEY QEM QED QLT QLY QLM QLD");
     cJSON_AddBoolToObject(root,"parameter_edit_supported",true);
     cJSON_AddStringToObject(root,"parameter_edit_protocol","verified-write-v1");
+    /* Explicit capability handshake for optional Node-RED cached transport.
+       GETs never dispatch UART commands: only polling_task owns the port.
+       Semantic edits are a separate, explicitly confirmed transaction. */
+    cJSON_AddStringToObject(root,"ha_bridge_protocol","esp-cache-v1");
+    cJSON_AddBoolToObject(root,"ha_bridge_single_uart_owner",true);
+    cJSON_AddBoolToObject(root,"ha_bridge_http_get_is_cache_only",true);
+    cJSON_AddBoolToObject(root,"ha_bridge_raw_uart_commands_supported",false);
     return send_json(r,root);
 }
 static esp_err_t telemetry_handler(httpd_req_t *r){
@@ -390,6 +397,11 @@ static esp_err_t telemetry_handler(httpd_req_t *r){
     cJSON *root=base_json("voltronic-qpigs-read-only");
     cJSON_AddBoolToObject(root,"available",live);
     cJSON_AddNumberToObject(root,"age_ms",snap.have_qpigs?age:-1);
+    /* For multi-client cache consumers: every HTTP reader sees the same
+       last UART sample, with an observable timestamp and freshness gate. */
+    cJSON_AddNumberToObject(root,"qpigs_sample_monotonic_ms",
+                            snap.have_qpigs?snap.last_qpigs_ms:0);
+    cJSON_AddBoolToObject(root,"http_read_was_cached",true);
     cJSON_AddNumberToObject(root,"polls_ok",snap.polls_ok);
     cJSON_AddNumberToObject(root,"crc_rejects",snap.crc_rejects);
     cJSON_AddNumberToObject(root,"timeouts",snap.timeouts);
@@ -480,6 +492,7 @@ static esp_err_t details_handler(httpd_req_t *r){
     vol_state_t snap;
     xSemaphoreTake(state_lock,portMAX_DELAY);snap=state;xSemaphoreGive(state_lock);
     cJSON *root=base_json("voltronic-details-read-only");
+    cJSON_AddBoolToObject(root,"http_read_was_cached",true);
     cJSON_AddStringToObject(root,"operation_mode",
         snap.qmod ? (char[]){snap.qmod,0} : "");
     if(snap.qmod) cJSON_AddNumberToObject(root,"operation_mode_age_ms",
