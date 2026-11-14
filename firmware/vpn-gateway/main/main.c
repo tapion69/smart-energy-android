@@ -38,7 +38,7 @@
 #include "cJSON.h"
 #include <math.h>
 
-#define GATEWAY_VERSION "0.3.4-dev-explicit-remote-parameter-writes"
+#define GATEWAY_VERSION "0.3.5-dev-boot-anytime-usb"
 #define GATEWAY_PORT 18767
 #define MAX_JSON_BYTES 32768
 
@@ -654,6 +654,10 @@ void app_main(void) {
     }
     ESP_LOGI(TAG, "Smart Energy VPN Gateway %s (experimental)", GATEWAY_VERSION);
     ESP_LOGI(TAG, "No Bluetooth: separate JK and future Voltronic equipment over WiFi.");
+    // On S3, an explicit BOOT hold/release during normal operation
+    // enters offline USB provisioning after a one-time software reboot.
+    // Never sends/receives a parameter-write enable request over VPN.
+    se_vpn_start_physical_maintenance_monitor();
     start_wifi();
     const EventBits_t result = xEventGroupWaitBits(wifi_events, WIFI_READY,
                 pdFALSE, pdTRUE, pdMS_TO_TICKS(60000));
