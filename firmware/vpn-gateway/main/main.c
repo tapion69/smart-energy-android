@@ -33,9 +33,12 @@
 #include "freertos/event_groups.h"
 #include "tailtiny.h"
 #include "gateway_policy.h"
+#include "gateway_write_policy.h"
 #include "vpn_provision.h"
+#include "cJSON.h"
+#include <math.h>
 
-#define GATEWAY_VERSION "0.3.3-dev-voltronic-preserving-usb-add"
+#define GATEWAY_VERSION "0.3.4-dev-explicit-remote-parameter-writes"
 #define GATEWAY_PORT 18767
 #define MAX_JSON_BYTES 32768
 
@@ -212,16 +215,20 @@ static esp_err_t deny(httpd_req_t *req, const char *status,
 static esp_err_t health_handler(httpd_req_t *req) {
     if (!request_is_private_vpn(req))
         return deny(req, "403 Forbidden", "{\"error\":\"vpn_only\"}");
-    // Never return an access code, auth key or private LAN host address.
-    httpd_resp_set_type(req, "application/json");
-    httpd_resp_set_hdr(req, "Cache-Control", "no-store");
-    return httpd_resp_sendstr(req,
+    // Compatibility: read_only still describes the default JK telemetry
+    // interface. Writable routes are separate and individually gated by USB.
+    char body[320]={0};
+    snprintf(body,sizeof body,
         "{\"product\":\"smart-energy-vpn-gateway\","
-        "\"version\":\"" GATEWAY_VERSION "\","
-        "\"vpn_connected\":true,"
-        "\"vpn_only\":true,"
-        "\"read_only\":true,\"jk_reader_slots\":3,"
-        "\"voltronic_reader_slots\":3}");
+        "\"version\":\"%s\",\"vpn_connected\":true,"
+        "\"vpn_only\":true,\"read_only\":true,"
+        "\"jk_reader_slots\":3,\"voltronic_reader_slots\":3,"
+        "\"remote_parameter_writes_opt_in\":%s}",
+        GATEWAY_VERSION,
+        personal && personal->remote_writes_enabled?"true":"false");
+    httpd_resp_set_type(req,"application/json");
+    httpd_resp_set_hdr(req,"Cache-Control","no-store");
+    return httpd_resp_sendstr(req,body);
 }
 
 typedef struct {
@@ -370,10 +377,199 @@ static esp_err_t relay_read(httpd_req_t *req) {
     return ESP_OK;
 }
 
+
+/* Remote writes are OFF by default. Enabling requires physical USB BOOT
+ * provisioning: SEVPN_REMOTE_WRITES_ON. No network setting can enable them.
+ * The public GitHub firmware does not contain installation credentials.
+ *
+ * Fixed endpoint and per-device secret on both hops:
+ * Android Tailscale -> token + VPN dst/source gate -> this relay ->
+ * fixed NVS LAN host+per-device code -> device's semantic allowlist and
+ * explicit SET + fresh readback. No raw serial, BLE opcode, arbitrary IP,
+ * arbitrary HTTP path, pairing, NVS changes or OTA can be relayed.
+ */
+static int64_t last_remote_commit_us[6]={0};
+
+static bool safe_write_payload(se_write_kind_t kind,const char *body) {
+    cJSON *json=cJSON_Parse(body);
+    if(!cJSON_IsObject(json)) {cJSON_Delete(json);return false;}
+    bool allowed=false;
+    const cJSON *confirmation=cJSON_GetObjectItemCaseSensitive(json,"confirmation");
+    const cJSON *mac=cJSON_GetObjectItemCaseSensitive(json,"mac");
+    const bool valid_mac=cJSON_IsString(mac) && se_write_mac(mac->valuestring);
+    if(kind==SE_WRITE_JK_REFRESH) {
+        allowed=valid_mac;
+    }else if(kind==SE_WRITE_JK_ARM) {
+        allowed=valid_mac && cJSON_IsString(confirmation) &&
+            strcmp(confirmation->valuestring,"I_CONFIRM_ONE_JK_WRITE")==0;
+    }else if(kind==SE_WRITE_JK_COMMIT) {
+        const cJSON *key=cJSON_GetObjectItemCaseSensitive(json,"key");
+        const cJSON *value=cJSON_GetObjectItemCaseSensitive(json,"value");
+        const cJSON *old=cJSON_GetObjectItemCaseSensitive(json,"expected_old");
+        const cJSON *risk=cJSON_GetObjectItemCaseSensitive(json,"risk_confirmation");
+        const bool types=(cJSON_IsBool(value)||cJSON_IsNumber(value)) &&
+                         (cJSON_IsBool(old)||cJSON_IsNumber(old));
+        bool key_safe=cJSON_IsString(key) && key->valuestring &&
+                      strlen(key->valuestring)>0 && strlen(key->valuestring)<64;
+        if(key_safe) for(const unsigned char *p=(const unsigned char*)key->valuestring;*p;p++){
+            if(!isalnum(*p) && *p!='_'){key_safe=false;break;}
+        }
+        allowed=valid_mac && types && key_safe &&
+            (!cJSON_IsNumber(value)||isfinite(value->valuedouble)) &&
+            (!cJSON_IsNumber(old)||isfinite(old->valuedouble)) &&
+            cJSON_IsString(confirmation) &&
+            strcmp(confirmation->valuestring,"APPLY_TO_SELECTED_BMS")==0 &&
+            (!risk || (cJSON_IsString(risk) &&
+                strcmp(risk->valuestring,"I_ACCEPT_PROTECTION_RISK")==0));
+    }else if(kind==SE_WRITE_VOLTRONIC_PARAM) {
+        const cJSON *key=cJSON_GetObjectItemCaseSensitive(json,"parameter");
+        const cJSON *old=cJSON_GetObjectItemCaseSensitive(json,"old");
+        const cJSON *value=cJSON_GetObjectItemCaseSensitive(json,"value");
+        const cJSON *confirmed=cJSON_GetObjectItemCaseSensitive(json,"confirmed");
+        allowed=cJSON_IsString(key) && se_write_voltronic_key(key->valuestring) &&
+            cJSON_IsNumber(old) && cJSON_IsNumber(value) &&
+            isfinite(old->valuedouble) && isfinite(value->valuedouble) &&
+            cJSON_IsTrue(confirmed);
+    }
+    cJSON_Delete(json);
+    return allowed;
+}
+
+static bool parse_jk_status_mac(httpd_req_t *req,char result[18]) {
+    char query[96]={0},mac[64]={0};
+    if(httpd_req_get_url_query_str(req,query,sizeof query)!=ESP_OK ||
+       httpd_query_key_value(query,"mac",mac,sizeof mac)!=ESP_OK)return false;
+    // Android URLEncoder encodes MAC colon as %3A. Decode ONLY that syntax;
+    // reject all other encodings, extra query delimiters and path injection.
+    size_t output=0;
+    for(size_t i=0;mac[i] && output<17;i++) {
+        if(mac[i]=='%') {
+            if(mac[i+1]!='3' || (mac[i+2]!='A' && mac[i+2]!='a'))
+                return false;
+            result[output++]=':';i+=2;
+        }else result[output++]=mac[i];
+    }
+    result[output]=0;
+    return se_write_mac(result);
+}
+
+static esp_err_t relay_parameter_control(httpd_req_t *req) {
+    if(!request_is_private_vpn(req))
+        return deny(req,"403 Forbidden","{\"error\":\"vpn_only\"}");
+    if(!authorized(req))
+        return deny(req,"401 Unauthorized","{\"error\":\"invalid_gateway_token\"}");
+    if(!personal || !personal->remote_writes_enabled)
+        return deny(req,"403 Forbidden","{\"error\":\"remote_writes_disabled_usb_opt_in_required\"}");
+    const bool post=req->method==HTTP_POST;
+    const se_write_route_t route=se_write_route(req->uri,post);
+    if(route.kind==SE_WRITE_DENIED)
+        return deny(req,"404 Not Found","{\"error\":\"write_route_not_allowed\"}");
+    char body[769]={0};
+    int length=0;
+    if(post) {
+        char confirmed[8]={0};
+        if(httpd_req_get_hdr_value_str(req,"X-Remote-Write-Confirmed",
+                confirmed,sizeof confirmed)!=ESP_OK ||
+           strcmp(confirmed,"yes")!=0)
+            return deny(req,"403 Forbidden","{\"error\":\"remote_write_confirmation_required\"}");
+        if(req->content_len<2 || req->content_len>768)
+            return deny(req,"400 Bad Request","{\"error\":\"request_size_invalid\"}");
+        while(length<req->content_len) {
+            int got=httpd_req_recv(req,body+length,req->content_len-length);
+            if(got<=0) return deny(req,"400 Bad Request","{\"error\":\"incomplete_json\"}");
+            length+=got;
+        }
+        body[length]=0;
+        if(!safe_write_payload(route.kind,body))
+            return deny(req,"400 Bad Request","{\"error\":\"not_an_approved_parameter_request\"}");
+    }
+    const int stamp_idx=(route.kind==SE_WRITE_VOLTRONIC_PARAM?3:0)+route.slot-1;
+    const bool committed=route.kind==SE_WRITE_JK_COMMIT ||
+                         route.kind==SE_WRITE_VOLTRONIC_PARAM;
+    const int64_t now=esp_timer_get_time();
+    if(committed && last_remote_commit_us[stamp_idx] &&
+       now-last_remote_commit_us[stamp_idx]<15000000LL)
+        return deny(req,"429 Too Many Requests","{\"error\":\"parameter_write_cooldown\"}");
+
+    lan_target_t target={0};
+    se_route_t selection;
+    if(route.kind==SE_WRITE_VOLTRONIC_PARAM)
+        selection=route.slot==1?SE_ROUTE_VOLT_STATUS:
+                  route.slot==2?SE_ROUTE_VOLT2_TELEMETRY:SE_ROUTE_VOLT3_TELEMETRY;
+    else
+        selection=route.slot==1?SE_ROUTE_JK_TELEMETRY:
+                  route.slot==2?SE_ROUTE_JK2_TELEMETRY:SE_ROUTE_JK3_TELEMETRY;
+    if(!get_target(selection,&target))
+        return deny(req,"503 Service Unavailable","{\"error\":\"source_not_configured\"}");
+    char with_query[96]={0};
+    if(route.kind==SE_WRITE_JK_STATUS) {
+        char mac[18]={0};
+        if(!parse_jk_status_mac(req,mac))
+            return deny(req,"400 Bad Request","{\"error\":\"invalid_bms_mac\"}");
+        snprintf(with_query,sizeof with_query,"%s?mac=%s",route.upstream_path,mac);
+        target.path=with_query;
+    }else target.path=route.upstream_path;
+
+    esp_http_client_config_t cfg={
+        .host=target.host,.port=target.port,.path=target.path,
+        .transport_type=HTTP_TRANSPORT_OVER_TCP,
+        .timeout_ms=route.kind==SE_WRITE_VOLTRONIC_PARAM?23000:10000,
+        .buffer_size=1024,.buffer_size_tx=1024
+    };
+    esp_http_client_handle_t client=esp_http_client_init(&cfg);
+    if(!client)
+        return deny(req,"502 Bad Gateway","{\"error\":\"upstream_init_failed\"}");
+    esp_http_client_set_method(client,post?HTTP_METHOD_POST:HTTP_METHOD_GET);
+    esp_http_client_set_header(client,"X-Setup-Code",target.access_code);
+    if(route.kind==SE_WRITE_VOLTRONIC_PARAM)
+        esp_http_client_set_header(client,"X-Write-Confirmed","yes");
+    if(post)esp_http_client_set_header(client,"Content-Type","application/json");
+    // Count an attempted write BEFORE issuing it: a lost response cannot
+    // trigger a second automatic write through a different phone request.
+    if(committed)last_remote_commit_us[stamp_idx]=now;
+    esp_err_t err=esp_http_client_open(client,post?length:0);
+    if(err!=ESP_OK) {
+        esp_http_client_cleanup(client);
+        return deny(req,"502 Bad Gateway","{\"error\":\"upstream_unreachable\"}");
+    }
+    if(post && esp_http_client_write(client,body,length)!=length) {
+        esp_http_client_close(client);esp_http_client_cleanup(client);
+        return deny(req,"502 Bad Gateway","{\"error\":\"upstream_write_uncertain\"}");
+    }
+    (void)esp_http_client_fetch_headers(client);
+    const int code=esp_http_client_get_status_code(client);
+    char response[2049]={0};
+    const int count=esp_http_client_read_response(client,response,sizeof(response)-1);
+    esp_http_client_close(client);
+    esp_http_client_cleanup(client);
+    if(count<=0 || count>=2048 || code<200 || code>=600)
+        return deny(req,"502 Bad Gateway","{\"error\":\"upstream_response_unconfirmed\"}");
+    response[count]=0;
+    // Return only expected JSON documents. Do not trust HTML, bytes or secrets.
+    cJSON *verified=cJSON_Parse(response);
+    const bool valid=cJSON_IsObject(verified);
+    cJSON_Delete(verified);
+    if(!valid)
+        return deny(req,"502 Bad Gateway","{\"error\":\"upstream_response_not_json\"}");
+    if(code==200)httpd_resp_set_status(req,"200 OK");
+    else if(code==202)httpd_resp_set_status(req,"202 Accepted");
+    else if(code==400)httpd_resp_set_status(req,"400 Bad Request");
+    else if(code==401)httpd_resp_set_status(req,"401 Unauthorized");
+    else if(code==403)httpd_resp_set_status(req,"403 Forbidden");
+    else if(code==404)httpd_resp_set_status(req,"404 Not Found");
+    else if(code==409)httpd_resp_set_status(req,"409 Conflict");
+    else if(code==429)httpd_resp_set_status(req,"429 Too Many Requests");
+    else httpd_resp_set_status(req,"502 Bad Gateway");
+    httpd_resp_set_type(req,"application/json");
+    httpd_resp_set_hdr(req,"Cache-Control","no-store");
+    httpd_resp_set_hdr(req,"X-Content-Type-Options","nosniff");
+    return httpd_resp_send(req,response,count);
+}
+
 static void start_private_http(void) {
     httpd_config_t cfg = HTTPD_DEFAULT_CONFIG();
     cfg.server_port = GATEWAY_PORT;
-    cfg.max_uri_handlers = 18;
+    cfg.max_uri_handlers = 40;
     cfg.stack_size = 8192;
     cfg.max_open_sockets = 4;
     cfg.lru_purge_enable = true;
@@ -399,6 +595,21 @@ static void start_private_http(void) {
         {.uri="/api/v1/voltronic/2/details",.method=HTTP_GET,.handler=relay_read},
         {.uri="/api/v1/voltronic/3/telemetry",.method=HTTP_GET,.handler=relay_read},
         {.uri="/api/v1/voltronic/3/details",.method=HTTP_GET,.handler=relay_read},
+        {.uri="/api/v1/jk/1/settings-refresh",.method=HTTP_POST,.handler=relay_parameter_control},
+        {.uri="/api/v1/jk/1/write-arm",.method=HTTP_POST,.handler=relay_parameter_control},
+        {.uri="/api/v1/jk/1/write",.method=HTTP_POST,.handler=relay_parameter_control},
+        {.uri="/api/v1/jk/1/write-status",.method=HTTP_GET,.handler=relay_parameter_control},
+        {.uri="/api/v1/voltronic/1/parameters/change",.method=HTTP_POST,.handler=relay_parameter_control},
+        {.uri="/api/v1/jk/2/settings-refresh",.method=HTTP_POST,.handler=relay_parameter_control},
+        {.uri="/api/v1/jk/2/write-arm",.method=HTTP_POST,.handler=relay_parameter_control},
+        {.uri="/api/v1/jk/2/write",.method=HTTP_POST,.handler=relay_parameter_control},
+        {.uri="/api/v1/jk/2/write-status",.method=HTTP_GET,.handler=relay_parameter_control},
+        {.uri="/api/v1/voltronic/2/parameters/change",.method=HTTP_POST,.handler=relay_parameter_control},
+        {.uri="/api/v1/jk/3/settings-refresh",.method=HTTP_POST,.handler=relay_parameter_control},
+        {.uri="/api/v1/jk/3/write-arm",.method=HTTP_POST,.handler=relay_parameter_control},
+        {.uri="/api/v1/jk/3/write",.method=HTTP_POST,.handler=relay_parameter_control},
+        {.uri="/api/v1/jk/3/write-status",.method=HTTP_GET,.handler=relay_parameter_control},
+        {.uri="/api/v1/voltronic/3/parameters/change",.method=HTTP_POST,.handler=relay_parameter_control},
     };
     for (size_t i=0; i<sizeof(uris)/sizeof(uris[0]); ++i)
         ESP_ERROR_CHECK(httpd_register_uri_handler(http_server, &uris[i]));
