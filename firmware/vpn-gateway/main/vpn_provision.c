@@ -11,9 +11,45 @@
 #include "driver/gpio.h"
 #include "esp_log.h"
 #include "esp_system.h"
+#if CONFIG_IDF_TARGET_ESP32S3
+#include "esp_attr.h"
+#endif
 #include "nvs.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+
+#if CONFIG_IDF_TARGET_ESP32S3
+/*
+ * A physical hold/release on BOOT while running requests a ONE-TIME,
+ * local-only USB maintenance boot. The marker is RTC memory (NOT NVS);
+ * a cold boot, brownout or a normal reset cannot accidentally arm it.
+ * Only esp_restart() performed after GPIO0 has been released consumes it.
+ */
+#define SE_USB_MAINT_MAGIC 0x53455635UL
+RTC_NOINIT_ATTR static uint32_t usb_maintenance_request;
+static void usb_maintenance_watch_task(void *unused) {
+    (void)unused;
+    int consecutive_low=0;
+    bool armed=false;
+    for(;;) {
+        const bool held=gpio_get_level(GPIO_NUM_0)==0;
+        if(held) {
+            if(consecutive_low<40)++consecutive_low;
+            if(consecutive_low>=35)armed=true; // 3.5s; debounce margin
+        }else {
+            if(armed) {
+                /* RELEASE is mandatory. Never reset with BOOT held,
+                 * which could enter the ESP32-S3 ROM download mode. */
+                ESP_LOGW(TAG, "Physical BOOT hold/release: entering offline USB maintenance");
+                usb_maintenance_request=SE_USB_MAINT_MAGIC;
+                esp_restart();
+            }
+            consecutive_low=0;
+        }
+        vTaskDelay(pdMS_TO_TICKS(100));
+    }
+}
+#endif
 
 // Each device has its own NVS record. The firmware contains NO user tokens.
 // WARNING: initial prototype does NOT yet enable ESP32 flash encryption.
@@ -379,14 +415,34 @@ static bool physical_reconfigure_requested(void) {
     return false;
 }
 const se_vpn_config_t *se_vpn_provision_or_load(void) {
+#if CONFIG_IDF_TARGET_ESP32S3
+    const bool runtime_physical_request=
+        esp_reset_reason()==ESP_RST_SW &&
+        usb_maintenance_request==SE_USB_MAINT_MAGIC;
+    // Consume before any provisioning work; never turn a later reboot into
+    // another maintenance request, and never persist a marker in NVS.
+    usb_maintenance_request=0;
+#else
+    const bool runtime_physical_request=false;
+#endif
     if(!load_config(&current)) {
         provisioning_loop(); // May restart after first successful provisioning
         return NULL;
     }
-    if(physical_reconfigure_requested()) {
-        ESP_LOGW(TAG,"Physical BOOT authorization: USB reprovision mode");
+    if(runtime_physical_request || physical_reconfigure_requested()) {
+        ESP_LOGW(TAG,"Physical BOOT authorization: offline USB provisioning mode");
         provisioning_loop();
         return NULL;
     }
     return &current;
+}
+
+void se_vpn_start_physical_maintenance_monitor(void) {
+#if CONFIG_IDF_TARGET_ESP32S3
+    // GPIO0 is configured as a pulled-up input by the initial 9s check.
+    // Monitoring is independent of Wi-Fi and VPN connection state.
+    if(xTaskCreate(usb_maintenance_watch_task,"se-usb-boot",3072,
+                   NULL,5,NULL)!=pdPASS)
+        ESP_LOGE(TAG,"Failed to start physical USB BOOT monitor");
+#endif
 }
