@@ -67,16 +67,16 @@ class UsbProtocolTests(unittest.TestCase):
                 self.is_open=False
                 self.close_count+=1
             def write(self,packet):
-                if packet==b"SEVPN_PING\\n":
+                if packet==b"SEVPN_PING\n":
                     if not self.failed_first_ping:
                         self.failed_first_ping=True
                         raise serial.SerialTimeoutException("Port reset mid-ping")
-                    self.pending.append(b"SEVPN_READY_V1\\n")
+                    self.pending.append(b"SEVPN_READY_V1\n")
                 else:
                     if not self.ready_was_received:
                         raise AssertionError("Payload sent before READY")
                     self.payloads.append(packet)
-                    self.pending.append(b"SEVPN_OK_REBOOT\\n")
+                    self.pending.append(b"SEVPN_OK_REBOOT\n")
                 return len(packet)
             def readline(self):
                 line=self.pending.pop(0) if self.pending else b""
@@ -107,8 +107,8 @@ class UsbProtocolTests(unittest.TestCase):
             def open(self):self.is_open=True
             def close(self):self.is_open=False
             def write(self,packet):
-                if packet==b"SEVPN_PING\\n":
-                    self.pending.append(b"SEVPN_READY_V1\\n")
+                if packet==b"SEVPN_PING\n":
+                    self.pending.append(b"SEVPN_READY_V1\n")
                     return len(packet)
                 self.payload_count+=1
                 raise serial.SerialTimeoutException("Lost connection after READY")
