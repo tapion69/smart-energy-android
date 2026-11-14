@@ -438,8 +438,10 @@ class Flasher(tk.Tk):
         ).pack(anchor="w", pady=5)
         ttk.Label(
             root,
-            text="ATTENTION : FACTORY uniquement pour un nouvel ESP32. "
-                 "Ne jamais utiliser FACTORY pour mettre à jour un JK déjà associé.",
+            text="ESP JK déjà associé : utilise uniquement APP-ONLY. "
+                 "Le flasheur vérifie la table de partitions et enregistre une "
+                 "sauvegarde NVS privée avant toute écriture. "
+                 "FACTORY reste réservé à une carte neuve.",
             wraplength=720
         ).grid(row=2, column=0, columnspan=3, sticky="w", padx=8, pady=12)
         expert = ttk.Frame(root)
