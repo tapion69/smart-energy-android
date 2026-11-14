@@ -1,4 +1,4 @@
-name: Smart Energy Voltronic ESP32-S3 read-only experimental
+name: Smart Energy Voltronic ESP32-S3 parameter-write experimental
 on:
   push:
     branches: [dev]
@@ -12,7 +12,7 @@ permissions:
 
 jobs:
   host-protocol:
-    name: CRC XMODEM / read-only protocol tests
+    name: CRC XMODEM / semantic parameter write safety tests
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -22,13 +22,20 @@ jobs:
             firmware/voltronic-esp32/tests/test_protocol.c \
             -o /tmp/smart-voltronic-protocol -lm
           /tmp/smart-voltronic-protocol
-      - name: Explicitly reject any serial SET/parameter commands
+      - name: Test bounded semantic write allowlist (no RS232 access)
         run: |
-          if grep -R -E '"(POP|PCP|PBCV|PBDV|PBFT|MNCHGC)' \
-             firmware/voltronic-esp32/main; then
-            echo "Write-command string detected in Voltronic READ-ONLY main"
-            exit 1
-          fi
+          gcc -std=gnu11 -Wall -Wextra -Werror \
+            firmware/voltronic-esp32/tests/test_edit.c \
+            -o /tmp/smart-voltronic-edit -lm
+          /tmp/smart-voltronic-edit
+      - name: Keep generic read-command maker strictly read-only
+        run: |
+          grep -q 'if(!vt_read_command(cmd))return 0;' \
+            firmware/voltronic-esp32/main/voltronic_protocol.h
+          grep -q 'vt_edit_find(key->valuestring)' \
+            firmware/voltronic-esp32/main/main.c
+          grep -q 'if(process_pending_parameter_edit())continue;' \
+            firmware/voltronic-esp32/main/main.c
 
   esp32s3:
     name: Compile ESP32-S3 N16R8 Voltronic reader
@@ -48,7 +55,7 @@ jobs:
           test -s firmware/voltronic-esp32/build/smart_energy_voltronic_s3.bin
           grep -q '^CONFIG_IDF_TARGET_ESP32S3=y' firmware/voltronic-esp32/sdkconfig
           grep -q '^CONFIG_ESPTOOLPY_FLASHSIZE_16MB=y' firmware/voltronic-esp32/sdkconfig
-      - name: Precompile S3 factory/app-only read-only images
+      - name: Precompile S3 factory/app-only test images
         run: |
           set -euo pipefail
           python -m pip install "esptool==4.9.0"
@@ -64,7 +71,7 @@ jobs:
       - name: Publish VOLTRONIC S3 test images
         uses: actions/upload-artifact@v4
         with:
-          name: SmartEnergy-VOLTRONIC-ESP32S3-N16R8-READONLY
+          name: SmartEnergy-VOLTRONIC-ESP32S3-N16R8-EDIT-TEST
           path: |
             firmware/voltronic-esp32/dist/smart-energy-voltronic-S3-FACTORY-0x0.bin
             firmware/voltronic-esp32/dist/smart-energy-voltronic-S3-APP-0x10000.bin
