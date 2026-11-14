@@ -14,7 +14,7 @@ permissions:
 
 jobs:
   android:
-    name: Android debug APK
+    name: Android tests + permanently signed release APK
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
