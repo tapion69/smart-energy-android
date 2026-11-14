@@ -142,8 +142,8 @@ jobs:
           set -euo pipefail
           FW=firmware/voltronic-esp32/build_ota/smart_energy_voltronic_s3.bin
           test -s "$FW"
-          grep -q '^CONFIG_IDF_TARGET_ESP32S3=y' firmware/voltronic-esp32/build_ota/config/sdkconfig.h || true
-          grep -q 'CONFIG_PARTITION_TABLE_CUSTOM=y' firmware/voltronic-esp32/build_ota/sdkconfig
+          grep -q '^CONFIG_PARTITION_TABLE_CUSTOM=y' firmware/voltronic-esp32/sdkconfig
+          grep -q '^CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE=y' firmware/voltronic-esp32/sdkconfig
           test -s firmware/voltronic-esp32/build_ota/partition_table/partition-table.bin
           python - <<'PY'
           from pathlib import Path
@@ -155,7 +155,18 @@ jobs:
           assert 'ota_0,app,ota_0,0x210000,0x200000' in csv
           assert 'ota_1,app,ota_1,0x410000,0x200000' in csv
           assert 'nvs,data,nvs,0x9000,0x6000' in csv
-          print('S3 OTA application verified:',len(d),'bytes')
+          # Validate the COMPILED partition table, not only its CSV source.
+          table=Path('firmware/voltronic-esp32/build_ota/partition_table/partition-table.bin').read_bytes()
+          entries={}
+          for pos in range(0,len(table)-31,32):
+              p=table[pos:pos+32]
+              if int.from_bytes(p[:2],'little')!=0x50AA: continue
+              label=p[12:28].split(b'\\x00',1)[0].decode('ascii')
+              entries[label]=(int.from_bytes(p[4:8],'little'),int.from_bytes(p[8:12],'little'))
+          assert entries.get('nvs')==(0x9000,0x6000),entries
+          assert entries.get('ota_0')==(0x210000,0x200000),entries
+          assert entries.get('ota_1')==(0x410000,0x200000),entries
+          print('S3 OTA app and compiled partitions verified:',len(d),'bytes')
           PY
       - uses: actions/upload-artifact@v4
         with:
