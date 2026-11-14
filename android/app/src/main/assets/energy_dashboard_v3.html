@@ -385,7 +385,7 @@ function renderInverters(){
  editBtn.onclick=function(){if(Number.isInteger(v.slot)&&v.slot>=1&&v.slot<=3)appNav('voltronic-parameters:'+v.slot)};
  params.append(editBtn);
  var localHint=document.createElement('div');localHint.className='muted';
- localHint.textContent='Modification uniquement en Wi-Fi local, avec confirmation et vérification après écriture. En VPN : consultation seule.';
+ localHint.textContent='Chaque modification exige une confirmation et une relecture. Le VPN est en lecture seule par défaut ; écriture possible seulement après autorisation physique sur la passerelle VPN.';
  params.append(localHint);
  var diag=section(details,'▤ Diagnostics et communication',false,'diagnostics');
  row(diag,'Dernier diagnostic',v.detail||'—');
