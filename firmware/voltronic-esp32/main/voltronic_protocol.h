@@ -30,6 +30,7 @@ typedef struct {
     bool grid_power_native_available;
     double grid_power_native_w;
     bool pv1_power_native_available;
+    bool pv1_power_native_verified; /* false when field 19 zero is not yet learned */
     double pv1_power_native_w;
 } vt_qpigs_t;
 
@@ -183,6 +184,12 @@ static inline bool vt_parse_energy(const uint8_t *frame,size_t n,double *wh) {
         return false;
     *wh=numbers[0];return true;
 }
+/* The Node-RED flow retains the known QPIGS PV1 power index between polls.
+ * One Voltronic S3 talks to one inverter; keep its learned index at runtime. */
+static inline int *vt_pv1_learned_index(void) {
+    static int index=-1;
+    return &index;
+}
 static inline bool vt_parse_qpigs(const uint8_t *frame,size_t n,vt_qpigs_t *out) {
     if(!out)return false;
     double f[40]={0};size_t count=vt_fields(frame,n,f,40);
@@ -208,20 +215,36 @@ static inline bool vt_parse_qpigs(const uint8_t *frame,size_t n,vt_qpigs_t *out)
     if(count>24&&f[24]>=-30000&&f[24]<=30000) {
         m.grid_power_native_available=true;m.grid_power_native_w=f[24];
     }
-    /* Matching native PV1 field, if present: Node-RED learns from candidates
-       [19,20,18,17,16]. Without an approximately consistent P=V*I use only
-       voltage/current values, never pretend PV1 power was measured. */
+    /* Once validated by daytime P~V*I, use the SAME native power field
+       [19,20,18,17,16] at night. Never revert to an estimated wattage. */
     const int candidates[]={19,20,18,17,16};
     double estimate=m.pv1_voltage_v*m.pv1_current_a;
-    if(estimate>10)for(size_t j=0;j<sizeof(candidates)/sizeof(candidates[0]);j++) {
-        int idx=candidates[j];
-        if(count>(size_t)idx && f[idx]>=0 && f[idx]<=30000) {
-            double ratio=f[idx]/estimate;
-            if(ratio>0.8&&ratio<1.2) {
-                m.pv1_power_native_available=true;
-                m.pv1_power_native_w=f[idx];break;
+    int *learned=vt_pv1_learned_index();
+    if(*learned>=0 && count>(size_t)*learned &&
+       f[*learned]>=0 && f[*learned]<=30000) {
+        m.pv1_power_native_available=true;
+        m.pv1_power_native_verified=true;
+        m.pv1_power_native_w=f[*learned];
+    } else if(estimate>10) {
+        for(size_t j=0;j<sizeof(candidates)/sizeof(candidates[0]);j++) {
+            int idx=candidates[j];
+            if(count>(size_t)idx && f[idx]>=0 && f[idx]<=30000) {
+                double ratio=f[idx]/estimate;
+                if(ratio>0.8&&ratio<1.2) {
+                    *learned=idx;
+                    m.pv1_power_native_available=true;
+                    m.pv1_power_native_verified=true;
+                    m.pv1_power_native_w=f[idx];
+                    break;
+                }
             }
         }
+    } else if(count>19 && f[19]==0) {
+        /* Node-RED low/no-production fallback: direct QPIGS[19] zero.
+           The field mapping is unverified until production resumes. */
+        m.pv1_power_native_available=true;
+        m.pv1_power_native_verified=false;
+        m.pv1_power_native_w=0;
     }
     *out=m;return true;
 }
