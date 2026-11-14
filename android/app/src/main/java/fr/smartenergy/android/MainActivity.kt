@@ -190,8 +190,7 @@ class MainActivity : Activity() {
                 ?: connectivity.allNetworks.firstOrNull(::wifi)
         } catch (_:Exception) { null }
     private fun voltronicVpnRoute():VoltronicVpnRoute?=try {
-        if(!prefs.getBoolean("remote_voltronic_enabled",true) ||
-           selectedRoute()!=JkTransportPolicy.Route.GATEWAY_VPN || !vpnConnected())
+        if(selectedRoute()!=JkTransportPolicy.Route.GATEWAY_VPN || !vpnConnected())
             null
         else {
             val gateway=prefs.getString("remote_gateway_ip","") ?: ""
@@ -1112,16 +1111,9 @@ class MainActivity : Activity() {
             "puis uniquement les lectures de INV1/INV2/INV3 sur le réseau local. "+
             "L'ESP32 VPN doit être configuré dans le flasher avec les IP et "+
             "codes Voltronic. Aucune écriture n'est relayée.",12f,color=subdued))
-        val vpnVoltEnabled=CheckBox(this).apply {
-            text="Lecture Voltronic via le même VPN JK (activée par défaut)"
-            setTextColor(normal)
-            isChecked=prefs.getBoolean("remote_voltronic_enabled",true)
-            setOnCheckedChangeListener { _,checked ->
-                prefs.edit().putBoolean("remote_voltronic_enabled",checked).apply()
-                voltronicFleet.changed()
-            }
-        }
-        add(voltVpn,vpnVoltEnabled)
+        add(voltVpn,label("Automatique : quand l'accès extérieur ESP32 VPN "+
+            "est actif pour JK, les mesures Voltronic empruntent la même "+
+            "passerelle en lecture seule. Aucune case d'activation séparée.",12f,color=subdued))
         add(voltVpn,label("Lorsque le VPN JK est sélectionné, l'application utilise "+
             "automatiquement la même adresse Tailscale et le même token pour "+
             "les lectures des onduleurs. Attention : le firmware de l'ESP VPN "+
