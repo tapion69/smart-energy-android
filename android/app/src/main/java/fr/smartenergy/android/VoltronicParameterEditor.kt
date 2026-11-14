@@ -11,7 +11,8 @@ import java.net.URL
  * verifies an immediate post-SET native QPIRI/QDOP readback.
  */
 internal object VoltronicParameterEditor {
-    data class Setting(val key:String,val label:String,val value:Double,val unit:String)
+    data class Setting(val key:String,val label:String,val value:Double,val unit:String,
+                       val editable:Boolean=true)
     private data class Spec(val key:String,val label:String,val source:String,
                             val unit:String)
     private val specifications = listOf(
@@ -41,28 +42,63 @@ internal object VoltronicParameterEditor {
         route:VoltronicVpnRoute?=null,slot:Int=1
     ):List<Setting> {
         if(route==null)validateLocal(host,code,port,network)
-        else require(VoltronicVpnReadOnlyClient.remoteWritesEnabled(route)) {
-            "Écriture à distance désactivée sur la passerelle VPN. "+
-            "Le nouveau firmware VPN et une autorisation physique USB sont requis."
-        }
+        val remoteWriteAllowed=route==null ||
+            try { VoltronicVpnReadOnlyClient.remoteWritesEnabled(route) }
+            catch(_:Exception) { false }
         val info=if(route!=null)VoltronicVpnReadOnlyClient.info(slot,route)
                  else VoltronicReadOnlyClient.probe(host,code,port,network)
-        require(info.optBoolean("parameter_edit_supported",false) &&
-            info.optString("parameter_edit_protocol")=="verified-write-v1"){
-            "Ce firmware Voltronic ne permet pas les modifications vérifiées"
-        }
+        val editSupported=info.optBoolean("parameter_edit_supported",false) &&
+            info.optString("parameter_edit_protocol")=="verified-write-v1"
+        // Older or USB-locked gateways may still provide valid native
+        // parameter reads. Never offer a write unless both sides advertise it.
+        val canEdit=editSupported && remoteWriteAllowed
         val details=if(route!=null)VoltronicVpnReadOnlyClient.read(slot,true,route)
                     else VoltronicReadOnlyClient.details(host,code,port,network)
         val native=details.optJSONObject("parameters")
             ?:throw IllegalStateException("Valeurs natives indisponibles")
-        return specifications.mapNotNull { spec ->
+        val available=specifications.mapNotNull { spec ->
             val obj=native.optJSONObject(spec.source) ?:return@mapNotNull null
             if(!obj.has(spec.key)||obj.isNull(spec.key))return@mapNotNull null
             val age=obj.optLong("age_ms",Long.MAX_VALUE)
             if(age !in 0L..300000L)return@mapNotNull null
             val value=obj.optDouble(spec.key,Double.NaN)
-            if(!value.isFinite())null else Setting(spec.key,spec.label,value,spec.unit)
+            if(!value.isFinite())null else Setting(
+                spec.key,spec.label,value,spec.unit,editable=canEdit)
         }
+        // Cover every additional *received* numeric QPIRI/QDOP field, while
+        // rejecting writes for positions without a proven Voltronic opcode.
+        // Native field numbering is zero-based and can depend on model.
+        val mappedQpiri=setOf(8,9,10,11,12,13,14,16,17,22,27)
+        val mappedQdop=setOf(8,9,10)
+        val known=mapOf(
+            0 to ("Tension nominale entrée" to "V"),
+            1 to ("Courant nominal entrée" to "A"),
+            2 to ("Tension nominale sortie" to "V"),
+            3 to ("Fréquence nominale sortie" to "Hz"),
+            4 to ("Courant nominal sortie" to "A"),
+            5 to ("Puissance apparente nominale" to "VA"),
+            6 to ("Puissance active nominale" to "W"),
+            7 to ("Tension nominale batterie" to "V")
+        )
+        val extra=mutableListOf<Setting>()
+        for(source in listOf("qpiri","qdop")) {
+            val obj=native.optJSONObject(source)?:continue
+            if(obj.optLong("age_ms",Long.MAX_VALUE) !in 0L..300000L)continue
+            val raw=obj.optJSONArray("raw_fields")?:continue
+            val skipped=if(source=="qpiri")mappedQpiri else mappedQdop
+            for(index in 0 until minOf(raw.length(),48)) {
+                if(index in skipped || raw.isNull(index))continue
+                val value=raw.optDouble(index,Double.NaN)
+                if(!value.isFinite())continue
+                val labelAndUnit=if(source=="qpiri")known[index] else null
+                extra.add(Setting(
+                    "${source}_raw_$index",
+                    (labelAndUnit?.first?:("Champ natif "+source.uppercase()+" [$index]"))+
+                        " · lecture seule",
+                    value,labelAndUnit?.second?:"",editable=false))
+            }
+        }
+        return available+extra
     }
     fun change(
         host:String,code:String,port:Int,network:Network?,
