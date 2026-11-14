@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import json
 import time
+import secrets
 import ipaddress
 from pathlib import Path
 from typing import Callable
@@ -110,7 +111,7 @@ def provision_over_serial(port: str, values: dict[str, str] | None,
                           timeout_seconds: int = 50,
                           on_ready: Callable[[], None] | None = None,
                           payload_override: bytes | None = None) -> None:
-    """Reopen the SAME COM port after a reset during SEVPN_READY_V1 wait.
+    """Reopen selected COM after reset, require a nonce PONG before writes.
 
     The only automatic retry is the unprivileged SEVPN_PING. The secret
     configuration payload is sent ONCE, only after READY, and is NEVER retried
@@ -126,11 +127,17 @@ def provision_over_serial(port: str, values: dict[str, str] | None,
     ser.write_timeout = 1.2
     ser.dtr = False
     ser.rts = False
-    log("Attente du signal USB SEVPN_READY_V1. Aucun secret transmis avant la réponse.")
+    log("Vérification USB S3 : envoi PING avec nonce, attente du PONG exact. Aucune configuration envoyée avant preuve bidirectionnelle.")
     last_ping = 0.0
     had_usb_error = False
     connected_once = False
     ready = False
+    # READY is broadcast periodically by firmware even if the S3 cannot
+    # receive on this USB connector. Only an exact fresh nonce echoed as
+    # SEVPN_PONG proves that the S3 heard the selected COM/USB port.
+    nonce=secrets.token_hex(8)
+    ping=("SEVPN_PING "+nonce+"\n").encode("ascii")
+    pong=("SEVPN_PONG "+nonce).encode("ascii")
     try:
         while time.monotonic() < deadline:
             if not ser.is_open:
@@ -149,13 +156,19 @@ def provision_over_serial(port: str, values: dict[str, str] | None,
             try:
                 now = time.monotonic()
                 if now - last_ping >= 1.5 or last_ping == 0.0:
-                    ser.write(b"SEVPN_PING\n")
+                    ser.write(ping)
                     last_ping = now
                 line = ser.readline().strip()
-                if b"SEVPN_READY_V1" in line:
+                if line==pong:
                     ready = True
-                    log("Firmware VPN prêt : transmission locale de la configuration.")
+                    log("Connexion USB bidirectionnelle vérifiée (nonce de session).")
                     break
+                # Unsolicited SEVPN_READY_V1 is not accepted as proof of RX.
+                if line.startswith(b"SEVPN_ERR_PROTOCOL"):
+                    raise RuntimeError(
+                        "Le firmware VPN a refusé la vérification USB. "
+                        "Vérifie qu'il s'agit du firmware 0.3.6 ou supérieur."
+                    )
             except (serial.SerialException, serial.SerialTimeoutException, OSError):
                 # RESET can temporarily remove the USB CDC port on ESP32-S3.
                 # An unacknowledged PING has no side effects: safe to retry.
@@ -171,10 +184,11 @@ def provision_over_serial(port: str, values: dict[str, str] | None,
         if not ready:
             if connected_once:
                 raise RuntimeError(
-                    "Aucun SEVPN_READY_V1 reçu : redémarre l'ESP32 avec RESET, "
-                    "puis maintiens BOOT 3 secondes pendant les 9 secondes de "
-                    "démarrage. Si le port COM a changé, sélectionne le nouveau "
-                    "port et recommence l'ajout ciblé (sans flasher)."
+                    "Aucune réponse USB bidirectionnelle SEVPN_PONG reçue. "
+                    "Le firmware VPN doit être 0.3.6 ou supérieur pour ce test. "
+                    "Sur ESP32-S3, maintiens BOOT environ 5 secondes puis relâche. "
+                    "Vérifie le bon port COM/USB et ne lance aucun nouveau flash "
+                    "si le firmware 0.3.6 est déjà installé."
                 )
             raise RuntimeError(
                 f"Le port {port} ne se rouvre pas après RESET. Sélectionne le "
@@ -208,10 +222,16 @@ def provision_over_serial(port: str, values: dict[str, str] | None,
                 log("Configuration NVS confirmée par le firmware. "
                     "Redémarrage automatique.")
                 return
-            if b"SEVPN_ERR_INVALID" in line:
+            if b"SEVPN_ERR_NVS" in line:
                 raise RuntimeError(
-                    "Le firmware a refusé les champs : "
-                    "aucune nouvelle configuration confirmée."
+                    "Le firmware VPN a refusé ou n'a pas pu vérifier "
+                    "l'enregistrement NVS. Rien de confirmé : ne pas réenvoyer "
+                    "sans vérifier /api/v1/health."
+                )
+            if b"SEVPN_ERR_INVALID" in line or b"SEVPN_ERR_PROTOCOL" in line:
+                raise RuntimeError(
+                    "Le firmware VPN a refusé la commande USB : "
+                    "aucune modification NVS confirmée."
                 )
         raise RuntimeError(
             "Aucune confirmation NVS reçue. État NON CONFIRMÉ : "
