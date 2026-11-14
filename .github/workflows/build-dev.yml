@@ -71,9 +71,12 @@ jobs:
           APKSIGNER=$(find "$ANDROID_HOME/build-tools" -type f -name apksigner | sort -V | tail -n 1)
           APK=android/app/build/outputs/apk/release/app-release.apk
           "$APKSIGNER" verify --verbose "$APK"
-          ACTUAL=$("$APKSIGNER" verify --print-certs "$APK" |
-            sed -n 's/.*Signer #1 certificate SHA-256 digest: //p' | head -n 1 |
-            tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')
+          # apksigner output wording can vary across SDK build-tools.
+          # Only accept a 256-bit public certificate fingerprint.
+          CERT_REPORT=$("$APKSIGNER" verify --print-certs "$APK")
+          ACTUAL=$(printf '%s\n' "$CERT_REPORT" |
+            grep -Eio '([[:xdigit:]]{2}:){31}[[:xdigit:]]{2}|[[:xdigit:]]{64}' |
+            head -n 1 | tr -d ':' | tr '[:upper:]' '[:lower:]' || true)
           # Compute the expected digest independently from the PUBLIC
           # certificate stored alongside the private key. No private data is printed.
           KEYSTORE_CERT=$(keytool -exportcert -storetype PKCS12 \
@@ -83,6 +86,8 @@ jobs:
           TRUSTED=$(printf '%s' "$EXPECTED_CERT" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')
           if [[ ! "$KEYSTORE_CERT" =~ ^[a-f0-9]{64}$ || ! "$ACTUAL" =~ ^[a-f0-9]{64}$ ]]; then
             echo "::error::Signing certificate digests missing/invalid (keystore or apksigner)"
+            echo "apksigner public certificate output (for diagnosis only):"
+            printf '%s\\n' "$CERT_REPORT"
             exit 1
           fi
           if [[ "$KEYSTORE_CERT" != "$TRUSTED" ]]; then
