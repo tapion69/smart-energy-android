@@ -42,7 +42,7 @@ class BridgeContract(unittest.TestCase):
         self.assertIn('if(!vt_edit_allowed(spec,current,request->new_value,nominal))', SRC)
         self.assertIn('if(fabs(check[spec->index]-request->new_value)>spec->tolerance)', SRC)
         self.assertIn('static const vt_edit_spec_t VT_EDIT_SPECS[]', EDIT)
-        self.assertIn('no auto', SRC.lower() + ' no auto')  # reminder: no blind fallback
+        self.assertIn('One candidate, never an automatic fallback.', SRC)
 
     def test_wifi_codes_not_exported_with_telemetry(self):
         start = SRC.index('static esp_err_t telemetry_handler(')
