@@ -12,6 +12,7 @@ typedef enum {
     SE_ROUTE_DENIED = 0,
     SE_ROUTE_HEALTH,
     SE_ROUTE_JK_TELEMETRY,
+    SE_ROUTE_JK1_INFO, SE_ROUTE_JK2_INFO, SE_ROUTE_JK3_INFO,
     SE_ROUTE_JK_DETAILS,
     SE_ROUTE_JK2_TELEMETRY,
     SE_ROUTE_JK2_DETAILS,
@@ -27,6 +28,9 @@ typedef enum {
 static inline se_route_t se_route_get(const char *path, bool is_get) {
     if (!is_get || !path) return SE_ROUTE_DENIED;
     if (!strcmp(path, "/api/v1/health")) return SE_ROUTE_HEALTH;
+    if (!strcmp(path, "/api/v1/jk/1/info")) return SE_ROUTE_JK1_INFO;
+    if (!strcmp(path, "/api/v1/jk/2/info")) return SE_ROUTE_JK2_INFO;
+    if (!strcmp(path, "/api/v1/jk/3/info")) return SE_ROUTE_JK3_INFO;
     if (!strcmp(path, "/api/v1/jk/telemetry")) return SE_ROUTE_JK_TELEMETRY;
     if (!strcmp(path, "/api/v1/jk/details")) return SE_ROUTE_JK_DETAILS;
     if (!strcmp(path, "/api/v1/jk/1/telemetry")) return SE_ROUTE_JK_TELEMETRY;
