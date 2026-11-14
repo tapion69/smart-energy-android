@@ -46,3 +46,12 @@ assert 'snprintf(reply,sizeof(reply),"SEVPN_PONG %s",nonce)' in source
 assert 'SEVPN_ERR_NVS' in source
 assert 'persisted.remote_writes_enabled==enabled' in source
 assert 'usb_ack_reboot(port)' in source
+
+# USB provisioning must run with enough stack for JSON + 3 validated config
+# snapshots, never on ESP-IDF's small default app_main stack.
+assert '#define SE_USB_MAINT_TASK_STACK 12288' in source
+assert 'xTaskCreate(usb_maintenance_task,"se-vpn-usb",SE_USB_MAINT_TASK_STACK' in source
+assert 'start_offline_usb_task()' in source
+provision_boot=source.split('const se_vpn_config_t *se_vpn_provision_or_load(void)',1)[1].split('void se_vpn_start_physical_maintenance_monitor(void)',1)[0]
+assert 'provisioning_loop();' not in provision_boot
+assert provision_boot.count('start_offline_usb_task()') == 2
