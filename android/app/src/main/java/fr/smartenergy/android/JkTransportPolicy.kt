@@ -24,6 +24,35 @@ object JkTransportPolicy {
         }
     }
 
+    /** Only the four fixed per-reader parameter endpoints can be mapped.
+     * BMS re-association, Wi-Fi, BLE scan, code changes and OTA are impossible
+     * through the VPN gateway. The gateway separately enforces USB opt-in. */
+    fun vpnParameterPath(reader:Int,method:String,path:String):String? {
+        if(reader !in 1..3)return null
+        if(method=="GET" && path=="/api/v1/info")
+            return "/api/v1/jk/$reader/info"
+        if(method=="GET" && path.startsWith("/api/v1/jk/write-status?mac=")) {
+            val raw=path.substringAfter("?mac=")
+            val decoded=try {
+                java.net.URLDecoder.decode(raw,"UTF-8")
+            }catch(_:Exception){return null}
+            if(!Regex("(?i)^[0-9a-f]{2}(:[0-9a-f]{2}){5}$").matches(decoded))
+                return null
+            return "/api/v1/jk/$reader/write-status?mac="+
+                java.net.URLEncoder.encode(decoded.uppercase(),"UTF-8")
+        }
+        if(method=="POST")return when(path){
+            "/api/v1/jk/settings-refresh" ->
+                "/api/v1/jk/$reader/settings-refresh"
+            "/api/v1/jk/write-arm" ->
+                "/api/v1/jk/$reader/write-arm"
+            "/api/v1/jk/write" ->
+                "/api/v1/jk/$reader/write"
+            else -> null
+        }
+        return null
+    }
+
     fun select(
         vpnActive: Boolean,
         preference: String,
