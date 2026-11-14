@@ -1,0 +1,168 @@
+name: Publish Smart Energy Android 0.3.46 — legacy Modern positions
+
+on:
+  push:
+    branches: [dev]
+    paths:
+      - '.github/workflows/publish-android-0346.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  actions: read
+
+concurrency:
+  group: smart-energy-android-release-0346
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    name: Test, permanently sign, verify and publish APK 0.3.46
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Verify only the legacy layout positions change
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import re
+          html=Path('android/app/src/main/assets/energy_dashboard_v3.html').read_text()
+          # The reference screenshot had the inverter at right/top and home
+          # near center/lower. Swap *positions* while preserving both slots.
+          for rule in (
+              '.photoVal.home{right:3%;top:37%;left:auto}',
+              '.photoVal.inv{left:33%;right:auto;top:50%',
+              '.photoVal.home{right:2%;left:auto;top:37%}',
+              '.photoVal.inv{left:33%;right:auto;top:50%}',
+          ):
+              assert rule in html,rule
+          hero=html.split('<section class="hero"',1)[1].split('</section>',1)[0]
+          for ident in ('mInverterStats','mLoadDay','mBatteryStats','mBatteryVoltage','mBatteryTemp','mPvDay'):
+              assert f'id="{ident}"' in hero,ident
+          assert '<path class="solar" d="M122 114 Q150 165 170 228"/>' in hero
+          assert '<path class="house" d="M188 260 Q244 211 291 204"/>' in hero
+          assert 'id="sunInvTemp"' in html and 'id="sunBatteryPower"' in html
+          assert 'id="homeJkCards"' in html
+          ids=re.findall(r'\bid="([^"]+)"',html)
+          assert len(ids)==len(set(ids))
+          assert 'versionCode = 60' in Path('android/app/build.gradle.kts').read_text()
+          print('Original image anchors and inline telemetry: PASS')
+          PY
+
+      - name: Fetch original SHA256-pinned 0.3.4 test OTA embedded asset, unchanged
+        uses: actions/download-artifact@v4
+        with:
+          name: SmartEnergy-VOLTRONIC-S3-OTA-0.3.3-PREFLIGHT
+          run-id: 43585410799
+          repository: tapion69/smart-energy-android
+          github-token: ${{ github.token }}
+          path: android/app/src/main/assets
+      - name: Verify exact embedded asset bytes
+        run: |
+          set -euo pipefail
+          cd android/app/src/main/assets
+          echo '9cfc8c87280c50bf92eb4f6b8029ea67004aa79cfbe7ff0faa0f24f78e3bf289  smart-energy-voltronic-S3-OTA.bin' | sha256sum -c -
+          test "$(wc -c < smart-energy-voltronic-S3-OTA.bin)" -eq 901664
+          mv smart-energy-voltronic-S3-OTA.bin voltronic-s3-0.3.4-test.bin
+
+      - name: Load permanent Android signing key from existing repository secrets
+        shell: bash
+        env:
+          SE_KEYSTORE_B64: ${{ secrets.SMART_ENERGY_ANDROID_KEYSTORE_BASE64 }}
+          SE_STORE_PASSWORD: ${{ secrets.SMART_ENERGY_ANDROID_STORE_PASSWORD }}
+          SE_KEY_ALIAS: ${{ secrets.SMART_ENERGY_ANDROID_KEY_ALIAS }}
+          SE_KEY_PASSWORD: ${{ secrets.SMART_ENERGY_ANDROID_KEY_PASSWORD }}
+          TRUSTED_CERT: ${{ secrets.SMART_ENERGY_ANDROID_CERT_SHA256 }}
+        run: |
+          set -euo pipefail
+          test -n "$SE_KEYSTORE_B64" && test -n "$SE_STORE_PASSWORD"
+          test -n "$SE_KEY_ALIAS" && test -n "$SE_KEY_PASSWORD"
+          [[ "$TRUSTED_CERT" =~ ^[a-fA-F0-9]{64}$ ]]
+          printf '%s' "$SE_KEYSTORE_B64" | base64 --decode > "$RUNNER_TEMP/smart-energy-android-release.jks"
+          chmod 600 "$RUNNER_TEMP/smart-energy-android-release.jks"
+          echo "SMART_ENERGY_ANDROID_KEYSTORE_FILE=$RUNNER_TEMP/smart-energy-android-release.jks" >> "$GITHUB_ENV"
+          echo "SMART_ENERGY_ANDROID_STORE_PASSWORD=$SE_STORE_PASSWORD" >> "$GITHUB_ENV"
+          echo "SMART_ENERGY_ANDROID_KEY_ALIAS=$SE_KEY_ALIAS" >> "$GITHUB_ENV"
+          echo "SMART_ENERGY_ANDROID_KEY_PASSWORD=$SE_KEY_PASSWORD" >> "$GITHUB_ENV"
+
+      - name: Android unit tests and permanently signed release build
+        working-directory: android
+        run: ./gradlew --no-daemon testDebugUnitTest assembleRelease
+
+      - name: Verify package, version, original 0.3.45 signer and embedded firmware
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TRUSTED_CERT: ${{ secrets.SMART_ENERGY_ANDROID_CERT_SHA256 }}
+        run: |
+          set -euo pipefail
+          mkdir -p release-files previous
+          APK=android/app/build/outputs/apk/release/app-release.apk
+          APKSIGNER=$(find "$ANDROID_HOME/build-tools" -type f -name apksigner | sort -V | tail -n 1)
+          AAPT=$(find "$ANDROID_HOME/build-tools" -type f -name aapt | sort -V | tail -n 1)
+          test -s "$APK"
+          "$APKSIGNER" verify --verbose "$APK"
+          "$AAPT" dump badging "$APK" > /tmp/new-apk-badging
+          grep -q "name='fr.smartenergy.android'" /tmp/new-apk-badging
+          grep -q "versionCode='60'" /tmp/new-apk-badging
+          grep -q "versionName='0.3.46-dev'" /tmp/new-apk-badging
+          test "$(unzip -p "$APK" assets/voltronic-s3-0.3.4-test.bin | sha256sum | awk '{print $1}')" = 9cfc8c87280c50bf92eb4f6b8029ea67004aa79cfbe7ff0faa0f24f78e3bf289
+          gh release download android-v0.3.45-dev -R "$GITHUB_REPOSITORY" --pattern SmartEnergy-Android.apk --dir previous
+          OLD=previous/SmartEnergy-Android.apk
+          echo "2d793db1fd51af2e92b1f8ec9823a7f41730dbbea6f1366e556800bf032278d9  $OLD" | sha256sum -c -
+          "$APKSIGNER" verify "$OLD"
+          get_cert() {
+            "$APKSIGNER" verify --print-certs "$1" |
+              grep -Eio '([[:xdigit:]]{2}:){31}[[:xdigit:]]{2}|[[:xdigit:]]{64}' |
+              head -n 1 | tr -d ':' | tr '[:upper:]' '[:lower:]'
+          }
+          PREVIOUS=$(get_cert "$OLD")
+          CURRENT=$(get_cert "$APK")
+          TRUSTED=$(printf '%s' "$TRUSTED_CERT" | tr '[:upper:]' '[:lower:]')
+          [[ "$CURRENT" =~ ^[a-f0-9]{64}$ && "$PREVIOUS" =~ ^[a-f0-9]{64}$ ]]
+          test "$CURRENT" = "$PREVIOUS" && test "$CURRENT" = "$TRUSTED"
+          cp "$APK" release-files/SmartEnergy-Android.apk
+          sha256sum release-files/SmartEnergy-Android.apk
+
+      - name: Publish immutable official GitHub prerelease
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          TAG=android-v0.3.46-dev
+          ! gh release view "$TAG" -R "$GITHUB_REPOSITORY" > /dev/null 2>&1
+          gh release create "$TAG" release-files/SmartEnergy-Android.apk \
+            -R "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --prerelease \
+            --title "Smart Energy Android 0.3.46 — Modern original image anchors" \
+            --notes "Permanently signed fr.smartenergy.android version 0.3.46-dev (versionCode 60), direct upgrade over official signed 0.3.45 with all data retained. Modern dashboard repositions inverter at the original lower center-left Home slot and Home at the original upper-right Inverter slot. Realigns solar/house/battery/grid energy tracks. Existing live values stay INSIDE the image cards. Sunsynk, JK BMS dashboard and firmware, VPN, and Voltronic 0.3.5 OTA untouched. No device firmware flash."
+
+      - name: Activate in-app Android update manifest on main (no Voltronic changes)
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch origin main
+          mkdir -p /tmp/official-main
+          git worktree add /tmp/official-main origin/main
+          cd /tmp/official-main
+          python -m unittest discover -s tools/releases -p 'test_*.py'
+          python tools/releases/publish_update_manifest.py \
+            --tag android-v0.3.46-dev \
+            --asset "$GITHUB_WORKSPACE/release-files/SmartEnergy-Android.apk" \
+            --version 0.3.46-dev --version-code 60
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add updates/android.json
+          if git diff --cached --quiet; then
+            echo 'Android 0.3.46 manifest already published'
+            exit 0
+          fi
+          git commit -m 'chore(updates): publish signed Android 0.3.46-dev'
+          git pull --rebase origin main
+          git push origin HEAD:main
+          echo 'Android update available in existing app update checker'
