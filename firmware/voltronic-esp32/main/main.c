@@ -87,6 +87,18 @@ typedef struct {
 } vt_exchange_t;
 static vol_cfg_t cfg={0};
 static vol_state_t state={0};
+/* A CRC-verified and bounded cache of native replies, shared by APK and
+ * optional Smart Voltronic without any additional UART polling. */
+#define VT_BRIDGE_CACHE 20
+typedef struct {
+    uint32_t seq, updated_ms;
+    bool nak;
+    char command[VT_MAX_COMMAND];
+    char payload[VT_MAX_FRAME];
+} vt_bridge_record_t;
+static vt_bridge_record_t bridge_cache[VT_BRIDGE_CACHE];
+static uint32_t bridge_seq=0;
+
 static SemaphoreHandle_t state_lock;
 static EventGroupHandle_t wifi_events;
 typedef struct {
@@ -380,6 +392,7 @@ static esp_err_t info_handler(httpd_req_t *r){
        GETs never dispatch UART commands: only polling_task owns the port.
        Semantic edits are a separate, explicitly confirmed transaction. */
     cJSON_AddStringToObject(root,"ha_bridge_protocol","esp-cache-v1");
+    cJSON_AddStringToObject(root,"ha_bridge_snapshot_protocol","esp-cache-native-v1");
     cJSON_AddBoolToObject(root,"ha_bridge_single_uart_owner",true);
     cJSON_AddBoolToObject(root,"ha_bridge_http_get_is_cache_only",true);
     cJSON_AddBoolToObject(root,"ha_bridge_raw_uart_commands_supported",false);
@@ -593,6 +606,40 @@ static esp_err_t details_handler(httpd_req_t *r){
        totals. Serial ID is available solely through authenticated /details;
        never published in /telemetry, HTTP logs or external discovery. */
     return send_json(r,root);
+}
+/* Authenticated native-frame payload cache; no serial I/O in HTTP context.
+ * Every record is a previously CRC-validated UART reply. */
+static esp_err_t bridge_snapshot_handler(httpd_req_t *r) {
+    if(!authorized(r))return deny(r);
+    vol_state_t snap;
+    vt_bridge_record_t copy[VT_BRIDGE_CACHE];
+    uint32_t max_seq;
+    xSemaphoreTake(state_lock,portMAX_DELAY);
+    snap=state;
+    memcpy(copy,bridge_cache,sizeof(copy));
+    max_seq=bridge_seq;
+    xSemaphoreGive(state_lock);
+    uint32_t now=esp_log_timestamp();
+    bool online=snap.have_qpigs &&
+        (uint32_t)(now-snap.last_qpigs_ms)<=10000U;
+    cJSON *doc=base_json("esp-cache-native-v1");
+    cJSON_AddBoolToObject(doc,"available",online);
+    cJSON_AddBoolToObject(doc,"cache_only",true);
+    cJSON_AddNumberToObject(doc,"uptime_ms",now);
+    cJSON_AddNumberToObject(doc,"max_seq",max_seq);
+    cJSON *array=cJSON_AddArrayToObject(doc,"replies");
+    for(size_t i=0;i<VT_BRIDGE_CACHE;i++){
+        const vt_bridge_record_t *e=&copy[i];
+        if(!e->seq || !e->command[0])continue;
+        cJSON *rec=cJSON_CreateObject();
+        cJSON_AddStringToObject(rec,"command",e->command);
+        cJSON_AddStringToObject(rec,"payload",e->payload);
+        cJSON_AddBoolToObject(rec,"nak",e->nak);
+        cJSON_AddNumberToObject(rec,"seq",e->seq);
+        cJSON_AddNumberToObject(rec,"age_ms",(uint32_t)(now-e->updated_ms));
+        cJSON_AddItemToArray(array,rec);
+    }
+    return send_json(r,doc);
 }
 static esp_err_t diagnostics_handler(httpd_req_t *r) {
     if(!authorized(r))return deny(r);
@@ -835,7 +882,7 @@ static esp_err_t edit_parameter_handler(httpd_req_t *r){
 static void start_api(void){
     httpd_config_t conf=HTTPD_DEFAULT_CONFIG();
     conf.server_port=VT_HTTP_PORT;
-    conf.max_uri_handlers=7;
+    conf.max_uri_handlers=8;
     /* Default 4 KB HTTP stack and LRU disabled: protect frequent polling
        from held sessions and provide more room for cJSON + stack locals. */
     conf.stack_size=8192;
@@ -854,6 +901,10 @@ static void start_api(void){
     ESP_ERROR_CHECK(httpd_register_uri_handler(server,&telemetry));
     ESP_ERROR_CHECK(httpd_register_uri_handler(server,&details));
     ESP_ERROR_CHECK(httpd_register_uri_handler(server,&diag));
+    httpd_uri_t bridge_snapshot={
+        .uri="/api/v1/bridge/snapshot",.method=HTTP_GET,
+        .handler=bridge_snapshot_handler};
+    ESP_ERROR_CHECK(httpd_register_uri_handler(server,&bridge_snapshot));
     httpd_uri_t ota_status={.uri="/api/v1/ota/status",.method=HTTP_GET,
         .handler=ota_status_handler};
     httpd_uri_t ota_image={.uri="/api/v1/ota/image",.method=HTTP_POST,
@@ -946,7 +997,7 @@ typedef struct {
     uint32_t deferred_until_ms;
     bool dated;
 } vt_job_t;
-#define VT_JOBS 18
+#define VT_JOBS 20
 static vt_job_t jobs[VT_JOBS]={
     {"QMOD",VT_FLOW_MODE_MS,0,0,false},
     {"QPIRI",300000,0,0,false},
@@ -965,7 +1016,9 @@ static vt_job_t jobs[VT_JOBS]={
     {"QEY",86400000,0,0,true},
     {"QLY",86400000,0,0,true},
     {"QPIGS",VT_FAST_CHANNEL_MS,0,0,false},
-    {"QPIGS2",VT_FAST_CHANNEL_MS,0,0,false}
+    {"QPIGS2",VT_FAST_CHANNEL_MS,0,0,false},
+    {"QBMS",3600000,0,0,false},
+    {"Q1",3600000,0,0,false}
 };
 static bool job_command(const vt_job_t *job,char *dst,size_t dst_len) {
     if(!job->dated) {
@@ -1009,6 +1062,27 @@ static vt_job_t *next_due_job(uint32_t now,bool secondary) {
         }
     }
     return NULL;
+}
+/* Called only inside the existing UART polling task under state_lock.
+ * A NAK is represented explicitly. Invalid CRC and partial frames are never
+ * allowed into the cache; no raw binary control bytes enter JSON. */
+static void bridge_store_reply(size_t slot,const char *cmd,
+                               const vt_exchange_t *rx,uint32_t now){
+    if(slot>=VT_BRIDGE_CACHE || (!rx->len && !rx->nak))return;
+    vt_bridge_record_t *entry=&bridge_cache[slot];
+    char text[VT_MAX_FRAME]={0};
+    if(!rx->nak){
+        if(!vt_payload_copy(rx->frame,rx->len,text,sizeof(text)))return;
+        for(size_t k=0;text[k];k++) {
+            unsigned char c=(unsigned char)text[k];
+            if(c<32 || c>126)return; /* prevent binary telemetry injection */
+        }
+    }
+    entry->seq=++bridge_seq;
+    entry->updated_ms=now;
+    entry->nak=rx->nak;
+    snprintf(entry->command,sizeof(entry->command),"%s",cmd);
+    snprintf(entry->payload,sizeof(entry->payload),"%s",rx->nak?"NAK":text);
 }
 static void interpret_reply(const char *cmd,const vt_exchange_t *rx,uint32_t now) {
     bool known=rx->len>0 && !rx->nak;
@@ -1261,6 +1335,7 @@ static void polling_task(void *unused) {
         }
         if(rx.len>0)state.last_valid_ms=end;
         interpret_reply(cmd,&rx,end);
+        bridge_store_reply((size_t)(job-jobs),cmd,&rx,end);
         xSemaphoreGive(state_lock);
         iterations++;
         vTaskDelay(pdMS_TO_TICKS(120));
