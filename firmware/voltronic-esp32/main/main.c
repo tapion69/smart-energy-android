@@ -32,8 +32,9 @@
 #include "freertos/event_groups.h"
 #include "cJSON.h"
 #include "voltronic_protocol.h"
+#include "voltronic_edit.h"
 
-#define VT_VERSION "0.3.3-dev-ota-preflight-read-only"
+#define VT_VERSION "0.3.4-dev-ota-parameter-edit-test"
 #define VT_UART UART_NUM_1
 #define VT_TX GPIO_NUM_17
 #define VT_RX GPIO_NUM_16
@@ -88,6 +89,16 @@ static vol_cfg_t cfg={0};
 static vol_state_t state={0};
 static SemaphoreHandle_t state_lock;
 static EventGroupHandle_t wifi_events;
+typedef struct {
+    bool pending, running, finished;
+    char key[52];
+    double old_value, new_value;
+    bool verified, set_acknowledged;
+    char result[64];
+} vt_edit_request_t;
+static vt_edit_request_t edit_request={0};
+static SemaphoreHandle_t edit_lock;
+static SemaphoreHandle_t edit_completed;
 #define WIFI_OK BIT0
 /* Aggregated, anonymous counters; no SSID, MAC, IP, password or access code. */
 typedef struct {
@@ -363,6 +374,8 @@ static esp_err_t info_handler(httpd_req_t *r){
     cJSON_AddStringToObject(root,"transport","uart1-rs232-max3232");
     cJSON_AddStringToObject(root,"capabilities",
         "QPIGS QPIGS2 QMOD QPIRI QDOP QPIWS QMN QID QVFW QVFW3 QET QEY QEM QED QLT QLY QLM QLD");
+    cJSON_AddBoolToObject(root,"parameter_edit_supported",true);
+    cJSON_AddStringToObject(root,"parameter_edit_protocol","verified-write-v1");
     return send_json(r,root);
 }
 static esp_err_t telemetry_handler(httpd_req_t *r){
@@ -775,10 +788,20 @@ static void serial_start(void){
  * Transport instrumentation distinguishes no signal, partial bytes and bad
  * CRC. No raw serial payload, SSID, code or device ID enters HTTP/logs.
  */
-static vt_exchange_t exchange(const char *command) {
+static vt_exchange_t exchange_core(const char *command,bool approved_set) {
     vt_exchange_t out={0};
     uint8_t tx[VT_MAX_COMMAND]={0};
-    size_t tx_len=vt_make_command(command,tx);
+    size_t tx_len=0;
+    if(approved_set) {
+        /* Internal only: previously generated from a semantic allowlist. */
+        size_t n=strlen(command);
+        if(n>0 && n+3<=sizeof(tx) && command[0]=='P') {
+            uint16_t crc=vt_crc16_xmodem((const uint8_t*)command,n);
+            memcpy(tx,command,n);
+            tx[n]=(uint8_t)(crc>>8);tx[n+1]=(uint8_t)crc;tx[n+2]=0x0D;
+            tx_len=n+3;
+        }
+    } else tx_len=vt_make_command(command,tx);
     if(!tx_len)return out;
     uart_flush_input(VT_UART);
     uart_write_bytes(VT_UART,(const char*)tx,tx_len);
@@ -817,6 +840,9 @@ static vt_exchange_t exchange(const char *command) {
     if(stream.len>0)out.partial++;
     out.timeout=true;
     return out;
+}
+static vt_exchange_t exchange(const char *command){
+    return exchange_core(command,false);
 }
 /* Flow schedules a command every 0.5s, alternating QPIGS / QPIGS2.
  * Each channel is therefore due about once per second. The serial exchange
@@ -1090,6 +1116,9 @@ static void ota_postboot_validate_task(void *unused){
 void app_main(void){
     ESP_ERROR_CHECK(nvs_flash_init());
     state_lock=xSemaphoreCreateMutex();
+    edit_lock=xSemaphoreCreateMutex();
+    edit_completed=xSemaphoreCreateBinary();
+    ESP_ERROR_CHECK(state_lock&&edit_lock&&edit_completed?ESP_OK:ESP_ERR_NO_MEM);
     usb_begin();
     if(!load_config() || boot_reprovision()){
         ESP_LOGW(TAG,"USB provisioning required — no Wi-Fi or inverter writes");
