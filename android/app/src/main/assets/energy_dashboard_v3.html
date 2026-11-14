@@ -476,19 +476,110 @@ function renderInverters(){
  if(v.lastHttpErrorKind)row(diag,'Dernier incident HTTP',v.lastHttpErrorKind);
  if(v.firmwareVersion)row(diag,'Firmware ESP32-S3',v.firmwareVersion);
 }
-function render(){var items=data.inverters||[],live=fresh(),pvs=channels(live),p=sum(live,'pvPowerW'),l=sum(live,'loadW'),pvDay=(live.length===items.length&&live.length>0&&live.every(function(x){return n(x.pvDayKwh)!==null}))?sum(live,'pvDayKwh'):null,loadDay=(live.length===items.length&&live.length>0&&live.every(function(x){return n(x.loadDayKwh)!==null}))?sum(live,'loadDayKwh'):null;var jk=data.jk||{},soc=n(jk.soc),bvol=null,bcur=null,batLabel='';if((jk.online||0)>0){batLabel='JK BMS'}else{var bat=live.find(function(x){return n(x.batteryVoltageV)!==null});if(bat){bvol=n(bat.batteryVoltageV);bcur=n(bat.batteryCurrentA);soc=n(bat.inverterBatterySoc);batLabel='Onduleur (estimation SOC)'}}var grid=null,gridInfo='Sens non vérifié';if(live.length===1){grid=n(live[0].gridPowerW);gridInfo=grid===null?'Mesure indisponible':'Puissance native, sens non validé'}else if(live.length>1){gridInfo='Multi-onduleurs : total réseau non mesurable'}
-el('setupHelp').style.display=items.length===0?'':'none';
-var stale=items.length>0&&live.length===0,reachable=items.some(function(v){return v.transportReachable===true}),unstable=items.some(function(v){return v.transientHttpError===true});el('state').textContent=items.length===0?'○ À configurer':unstable?'◷ HTTP instable':live.length===items.length&&live.length>0?'● Connecté':stale&&reachable?'◷ QPIGS en retard':stale?'○ Liaison indisponible':'◷ Partiel';el('state').className='status'+(stale?' old':live.length!==items.length?' off':'');el('hero').classList.toggle('paused',stale||unstable);txt('mPv',fmt(p,'W'));txt('mLoad',fmt(l,'W'));txt('mGrid',fmt(grid,'W'));txt('mSoc',fmt(soc,'%'));txt('mPvDay','PV jour UTC : '+fmt(pvDay,'kWh',2));el('mPvDay').style.display=pvDay===null?'none':'';txt('mInv',items.length+' / 3 INV');txt('sunPv',fmt(p,'W'));txt('sunPvDay','PV jour UTC : '+fmt(pvDay,'kWh',2));el('sunPvDay').style.display=pvDay===null?'none':'';el('nativeDayBlocks').style.display=pvDay===null&&loadDay===null?'none':'grid';
-el('nativePvDayBox').style.display=pvDay===null?'none':'block';
-el('nativeLoadDayBox').style.display=loadDay===null?'none':'block';
-txt('nativePvDayValue',fmt(pvDay,'kWh',2));
-txt('nativeLoadDayValue',fmt(loadDay,'kWh',2));
-txt('sunHome',fmt(l,'W'));txt('sunGrid',fmt(grid,'W'));txt('sunGridInfo',gridInfo);txt('sunInv',live.length+'/'+items.length+' onduleur(s)');txt('sunAc',live.length===1?fmt(live[0].outputVoltageV,'V',1)+' · '+fmt(live[0].outputHz,'Hz',2):'Voir onglets Onduleurs');txt('sunSoc',fmt(soc,'%'));txt('sunBattery',(batLabel||'Batterie sans mesure')+' · '+(bvol===null?'—':fmt(bvol,'V',1))+(bcur===null?'':' · '+fmt(bcur,'A',1)));drawMppts(pvs);
-txt('route',data.route||'Local');txt('count',items.length+' INV · '+pvs.length+' MPPT frais');txt('updated',data.updated||'—');
-renderHomeJk(jk);
+function render(){
+ var items=data.inverters||[],live=fresh(),pvs=channels(live),
+     p=sum(live,'pvPowerW'),l=sum(live,'loadW');
+ // Native UTC counters only. Never invent a day total from instantaneous W.
+ var nativeComplete=live.length===items.length&&live.length>0;
+ var pvDay=nativeComplete&&live.every(function(x){return n(x.pvDayKwh)!==null})?
+       sum(live,'pvDayKwh'):null;
+ var loadDay=nativeComplete&&live.every(function(x){return n(x.loadDayKwh)!==null})?
+       sum(live,'loadDayKwh'):null;
+ var jk=data.jk||{},soc=n(jk.soc),bvol=n(jk.meanVoltageV),
+     bcur=n(jk.currentA),bpower=n(jk.powerW),btemp=n(jk.batteryTempC),
+     batLabel=(jk.online||0)>0?'JK BMS':'Onduleur';
+ if((jk.online||0)===0){
+  var bat=live.find(function(x){return n(x.batteryVoltageV)!==null});
+  if(bat){
+   bvol=n(bat.batteryVoltageV);bcur=n(bat.batteryCurrentA);
+   soc=n(bat.inverterBatterySoc)
+  }
+ }
+ var tempValues=live.map(function(v){return n(v.temperatureC)}).filter(function(v){return v!==null});
+ var temperature=tempValues.length?
+   tempValues.reduce(function(x,y){return x+y},0)/tempValues.length:null;
+ var outputCurrent=live.length&&live.every(function(v){return n(v.outputCurrentEstimateA)!==null})?
+   sum(live,'outputCurrentEstimateA'):null;
+ var grid=null,gridInfo='Sens non vérifié',gridVerified=false;
+ if(live.length===1){
+  grid=n(live[0].gridPowerW);
+  gridVerified=live[0].gridDirectionVerified===true;
+  gridInfo=grid===null?'Mesure indisponible':
+           gridVerified?'Sens confirmé':'Puissance native · sens non validé'
+ }else if(live.length>1)gridInfo='Multi-onduleurs : pas de total réseau validé';
+ var stale=items.length>0&&live.length===0,
+     reachable=items.some(function(v){return v.transportReachable===true}),
+     unstable=items.some(function(v){return v.transientHttpError===true});
+ el('setupHelp').style.display=items.length===0?'':'none';
+ el('state').textContent=items.length===0?'○ À configurer':
+  unstable?'◷ HTTP instable':nativeComplete?'● Connecté':
+  stale&&reachable?'◷ QPIGS en retard':
+  stale?'○ Liaison indisponible':'◷ Partiel';
+ el('state').className='status'+(stale?' old':live.length!==items.length?' off':'');
+ var flowsEnabled=!stale&&!unstable;
+ el('hero').classList.toggle('paused',!flowsEnabled);
+ function runningFlow(cls,enabled,reverse){
+  var path=el('hero').querySelector('path.'+cls);
+  if(!path)return;
+  path.classList.toggle('running',!!(flowsEnabled&&enabled));
+  path.classList.toggle('reverse',!!reverse)
+ }
+ runningFlow('solar',n(p)!==null&&p>1,false);
+ runningFlow('house',n(l)!==null&&l>1,false);
+ // Do not animate grid if its direction is unknown even when power != 0.
+ runningFlow('utility',gridVerified&&n(grid)!==null&&Math.abs(grid)>1,grid<0);
+ // JK power is signed: negative means battery discharging to inverter/home.
+ runningFlow('store',n(bpower)!==null&&Math.abs(bpower)>5,bpower<0);
+ var gridWire=el('sun').querySelector('.join.left'),
+     homeWire=el('sun').querySelector('.join.right'),
+     batteryWire=el('sun').querySelector('.battery-branch');
+ gridWire.classList.toggle('moving',flowsEnabled&&gridVerified&&n(grid)!==null&&Math.abs(grid)>1);
+ homeWire.classList.toggle('moving',flowsEnabled&&n(l)!==null&&l>1);
+ batteryWire.classList.toggle('charging',flowsEnabled&&n(bpower)!==null&&bpower>5);
+ batteryWire.classList.toggle('discharging',flowsEnabled&&n(bpower)!==null&&bpower< -5);
+ var direction=n(bpower)===null?'Sens non mesuré':
+   bpower>5?'Charge → batterie':bpower< -5?'Décharge → onduleur':'Batterie au repos';
+ txt('mPv',fmt(p,'W'));txt('mLoad',fmt(l,'W'));txt('mGrid',fmt(grid,'W'));
+ txt('mSoc',fmt(soc,'%'));txt('mInv',live.length+' / '+items.length+' INV');
+ txt('mPvDay','PV jour UTC : '+fmt(pvDay,'kWh',2));
+ el('mPvDay').style.display=pvDay===null?'none':'';
+ txt('mInverterStats',fmt(temperature,'°C',1)+' · '+fmt(outputCurrent,'A',1));
+ txt('mBatteryStats',fmt(bpower,'W')+' · '+fmt(bcur,'A',1));
+ txt('mBatteryVoltage',fmt(bvol,'V',2));
+ txt('mBatteryTemp',fmt(btemp,'°C',1)+' · '+direction);
+ txt('sunPv',fmt(p,'W'));txt('sunPvDay','PV jour UTC : '+fmt(pvDay,'kWh',2));
+ el('sunPvDay').style.display=pvDay===null?'none':'';
+ el('nativeDayBlocks').style.display=pvDay===null&&loadDay===null?'none':'grid';
+ el('nativePvDayBox').style.display=pvDay===null?'none':'block';
+ el('nativeLoadDayBox').style.display=loadDay===null?'none':'block';
+ txt('nativePvDayValue',fmt(pvDay,'kWh',2));
+ txt('nativeLoadDayValue',fmt(loadDay,'kWh',2));
+ txt('sunHome',fmt(l,'W'));txt('sunGrid',fmt(grid,'W'));txt('sunGridInfo',gridInfo);
+ txt('sunInv',live.length+'/'+items.length+' onduleur(s)');
+ txt('sunAc',live.length===1?fmt(live[0].outputVoltageV,'V',1)+' · '+
+     fmt(live[0].outputHz,'Hz',2):'Voir onglets Onduleurs');
+ txt('sunSoc',fmt(soc,'%'));
+ txt('sunBattery',batLabel+' · '+fmt(bvol,'V',2));
+ txt('sunBatteryDirection',direction);
+ txt('sunInvTemp',fmt(temperature,'°C',1));
+ txt('sunInvCurrent',fmt(outputCurrent,'A',1)+' · calculé');
+ txt('sunBatteryPower',fmt(bpower,'W'));
+ txt('sunBatteryCurrent',fmt(bcur,'A',1));
+ txt('sunBatteryVoltage',fmt(bvol,'V',2));
+ txt('sunBatteryTemp',fmt(btemp,'°C',1));
+ txt('sunLoadDay',fmt(loadDay,'kWh',2));
+ var batteryFill=el('sun').querySelector('.battery-icon .fill');
+ batteryFill.style.height=(n(soc)===null?0:Math.min(100,Math.max(0,soc)))+'%';
+ drawMppts(pvs);
+ txt('route',data.route||'Local');
+ txt('count',items.length+' INV · '+pvs.length+' MPPT frais');
+ txt('updated',data.updated||'—');
+ renderHomeJk(jk);
  renderVpnVoltronicStatus(items);
- txt('qualityNote',items.length===0?'Ajoute un ESP32-S3 Voltronic dans Configuration pour obtenir des mesures. Aucune valeur fictive n’est affichée.':unstable?'HTTP momentanément instable : les dernières mesures sont récentes, les flux sont suspendus et une nouvelle tentative est prévue.':stale?'Les dernières mesures restent consultables dans Onduleurs mais ne sont pas considérées comme actuelles.':'Les totaux excluent les onduleurs sans mesure fraîche. Réseau : sens à vérifier, jamais assimilé à un achat EDF. MPPT non détectés non affichés.');
-renderInverters()}
+ // The native ScrollView owns scrolling. Rebuilding the hidden inverter
+ // detail tree every telemetry tick caused stuttering and lost touch scroll.
+ if(active==='inverters')renderInverters()
+}
 window.updateSmartEnergy=function(d){if(!d||typeof d!=='object')return;data=d;setStyle(d.style||style,false);render()};
 window.updateSmartEnergy(data);
 })();
