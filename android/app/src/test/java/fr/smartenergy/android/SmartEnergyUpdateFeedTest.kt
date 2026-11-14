@@ -36,6 +36,18 @@ class SmartEnergyUpdateFeedTest {
         assertFalse(SmartEnergyUpdateFeed.newerFirmware(
             "0.4.0","unknown"))
     }
+    @Test fun jkFirmwareIsNotAdvertisedBeforeSafeOtaExists() {
+        val disabled="""{"schemaVersion":1,"product":"smart-jk-esp32",
+            "available":false,"version":null,"hardwareTargets":[]}"""
+        assertNull(SmartEnergyUpdateFeed.parseJk(disabled,"0.3.8-dev"))
+        val release="""{"schemaVersion":1,"product":"smart-jk-esp32",
+            "available":true,"version":"0.3.9",
+            "hardwareTargets":["esp32dev"],
+            "downloadUrl":"https://github.com/tapion69/smart-energy-android/releases/download/jk-v0.3.9/safe.bin",
+            "sha256":"${"a".repeat(64)}"}"""
+        assertEquals("0.3.9",SmartEnergyUpdateFeed.parseJk(release,"0.3.8-dev")?.version)
+        assertNull(SmartEnergyUpdateFeed.parseJk(release,"0.3.9-dev"))
+    }
     @Test fun noArbitraryFirmwareUrl() {
         val json="""{"schemaVersion":1,"product":"smart-voltronic-esp32","available":true,
         "version":"1.1.0","hardwareTargets":["esp32s3-n16r8"],
