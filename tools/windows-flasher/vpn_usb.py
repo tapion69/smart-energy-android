@@ -52,6 +52,28 @@ def format_voltronic_patch(slot: int, ip: str, code: str) -> bytes:
     return ("SEVPN_ADD_VOLTRONIC "+data+"\n").encode("ascii")
 
 
+
+def format_jk_target_patch(slot: int, ip: str, code: str = "") -> bytes:
+    """Physical USB only: replace IP of JK slot; blank code keeps old NVS code."""
+    if slot not in (1, 2, 3):
+        raise ValueError("Sélectionne ESP JK 1, 2 ou 3.")
+    try:
+        addr=ipaddress.IPv4Address(ip.strip())
+        allowed=any(addr in ipaddress.ip_network(network) for network in
+                    ("10.0.0.0/8","172.16.0.0/12","192.168.0.0/16"))
+    except ValueError:
+        allowed=False
+    if not allowed:raise ValueError("Adresse IP JK privée invalide.")
+    if code and (len(code) not in range(8,33) or
+                 any(ch in code for ch in "\r\n\x00")):
+        raise ValueError("Code JK invalide (8–32 caractères).")
+    request={"slot":slot,"ip":ip.strip()}
+    if code:request["code"]=code
+    payload=("SEVPN_SET_JK "+json.dumps(
+        request,ensure_ascii=True,separators=(",",":"))+"\\n").encode("ascii")
+    if len(payload)>1599:raise ValueError("Commande USB JK trop longue.")
+    return payload
+
 def check_precompiled_image(image: Path, mode: str, chip: str = "esp32") -> int:
     """Validate both flash OFFSET and chip identity before any USB operation.
 
@@ -254,6 +276,14 @@ def set_remote_writes_over_serial(port: str, enabled: bool,
     """
     command=b"SEVPN_REMOTE_WRITES_ON\n" if enabled else b"SEVPN_REMOTE_WRITES_OFF\n"
     provision_over_serial(port,None,log,on_ready=on_ready,payload_override=command)
+
+
+def update_jk_target_over_serial(port: str, slot: int, ip: str, code: str,
+                                 log: Callable[[str], None],
+                                 on_ready: Callable[[], None] | None = None) -> None:
+    """One JK target only, NVS merge and readback performed by USB firmware."""
+    payload=format_jk_target_patch(slot,ip,code)
+    provision_over_serial(port,None,log,on_ready=on_ready,payload_override=payload)
 
 
 def add_voltronic_over_serial(port: str, slot: int, ip: str, code: str,
