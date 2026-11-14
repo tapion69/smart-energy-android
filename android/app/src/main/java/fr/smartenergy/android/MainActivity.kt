@@ -190,7 +190,8 @@ class MainActivity : Activity() {
                 ?: connectivity.allNetworks.firstOrNull(::wifi)
         } catch (_:Exception) { null }
     private fun voltronicVpnRoute():VoltronicVpnRoute?=try {
-        if(!prefs.getBoolean("remote_voltronic_enabled",false) || !vpnConnected())
+        if(!prefs.getBoolean("remote_voltronic_enabled",true) ||
+           selectedRoute()!=JkTransportPolicy.Route.GATEWAY_VPN || !vpnConnected())
             null
         else {
             val gateway=prefs.getString("remote_gateway_ip","") ?: ""
@@ -783,7 +784,13 @@ class MainActivity : Activity() {
                 "batteries" -> showPage(1)
                 "settings" -> showPage(3)
                 "configuration" -> showPage(2)
-                else -> showPage(0)
+                else -> {
+                    if(destination.startsWith("voltronic-parameters:")) {
+                        val slot=destination.substringAfter(':').toIntOrNull()
+                        if(slot!=null && slot in 1..3 && voltronicFleet.configured(slot))
+                            loadEditableVoltronicSettings(slot)
+                    }else showPage(0)
+                }
             }
         }
         energyDashboard.onStyleChanged={ style ->
@@ -1106,19 +1113,23 @@ class MainActivity : Activity() {
             "L'ESP32 VPN doit être configuré dans le flasher avec les IP et "+
             "codes Voltronic. Aucune écriture n'est relayée.",12f,color=subdued))
         val vpnVoltEnabled=CheckBox(this).apply {
-            text="Utiliser le relais VPN Voltronic quand Tailscale est actif"
+            text="Lecture Voltronic via le même VPN JK (activée par défaut)"
             setTextColor(normal)
-            isChecked=prefs.getBoolean("remote_voltronic_enabled",false)
+            isChecked=prefs.getBoolean("remote_voltronic_enabled",true)
             setOnCheckedChangeListener { _,checked ->
                 prefs.edit().putBoolean("remote_voltronic_enabled",checked).apply()
                 voltronicFleet.changed()
             }
         }
         add(voltVpn,vpnVoltEnabled)
-        add(voltVpn,label("Réutilise l'adresse et le token du menu VPN JK. "+
-            "Si aucune passerelle n'est enregistrée, configure-la d'abord "+
-            "dans « Batteries JK → Accès extérieur ». Le Wi-Fi local "+
-            "reste utilisé lorsque Tailscale est coupé.",12f,color=subdued))
+        add(voltVpn,label("Lorsque le VPN JK est sélectionné, l'application utilise "+
+            "automatiquement la même adresse Tailscale et le même token pour "+
+            "les lectures des onduleurs. Attention : le firmware de l'ESP VPN "+
+            "doit aussi posséder les routes Voltronic et les IP/codes INV "+
+            "provisionnés par USB. Une erreur 503 signifie configuration "+
+            "Voltronic absente sur la passerelle, 404 firmware VPN trop ancien, "+
+            "502 lecteur Voltronic inaccessible. Aucune modification ni OTA "+
+            "n'est relayée par le VPN.",12f,color=subdued))
         add(voltVpn,action("Tester le relais VPN Voltronic INV1") {
             val gateway=voltronicVpnRoute()
             if(gateway==null)state("Active Tailscale, configure le token et coche VPN Voltronic.")
@@ -1226,48 +1237,29 @@ class MainActivity : Activity() {
                 updateFeedback.text="Installation indisponible : "+(ex.message?:ex.javaClass.simpleName)
             }
         },6)
-        val firmwareUpdates=section(updatesPage,"Firmware ESP32-S3 Voltronic · OTA",true)
-        add(firmwareUpdates,label("Vérification locale sans écriture : l'ESP32-S3 "+
-            "indique si son partitionnement permet une OTA directe. "+
-            "Si une migration USB est nécessaire, aucune installation OTA "+
-            "ne sera proposée. Aucun réglage Voltronic n'est modifié par "+
-            "ce test.",12f,color=subdued))
-        add(firmwareUpdates,action("Tester la compatibilité OTA du S3 (lecture seule)") {
+        val firmwareUpdates=section(updatesPage,"Firmware ESP32 Voltronic · mises à jour",true)
+        add(firmwareUpdates,label("Vérification de la version de chaque ESP32-S3 "+
+            "en Wi-Fi local. Si un firmware officiel plus récent existe, "+
+            "l'application propose l'OTA avec vérification SHA-256 et confirmation. "+
+            "Le test 0.3.2 → 0.3.4 intégré est proposé uniquement à la version "+
+            "de test correspondante. Aucune écriture automatique.",12f,color=subdued))
+        add(firmwareUpdates,action("Vérifier les MAJ Voltronic") {
             val slots=(1..3).filter {voltronicFleet.configured(it)}
-            if(slots.isEmpty())updateFeedback.text="Configure d'abord un S3 Voltronic."
+            if(slots.isEmpty())updateFeedback.text="Configure d'abord un ESP32-S3 Voltronic."
             else AlertDialog.Builder(this)
-                .setTitle("Quel S3 vérifier ?")
-                .setItems(slots.map{"INV$it"}.toTypedArray()) { _,which->
-                    checkVoltronicOtaReadiness(slots[which])
-                }.show()
+                .setTitle("Vérifier la mise à jour de quel onduleur ?")
+                .setItems(slots.map{"INV$it"}.toTypedArray()) { _,which ->
+                    checkVoltronicOtaForSlot(slots[which])
+                }.setNegativeButton("Annuler",null).show()
         },7)
-        add(firmwareUpdates,action("TEST · OTA Voltronic 0.3.4 depuis cette APK") {
-            val slots=(1..3).filter {voltronicFleet.configured(it)}
-            if(slots.isEmpty()) {
-                updateFeedback.text="Configure d'abord le lecteur S3 Voltronic."
-            }else {
-                AlertDialog.Builder(this)
-                    .setTitle("Tester l'OTA du Voltronic")
-                    .setItems(slots.map { "INV$it" }.toTypedArray()) { _,which ->
-                        prepareBundledVoltronicOta(slots[which])
-                    }.setNegativeButton("Annuler",null).show()
-            }
-        },7)
-        add(firmwareUpdates,action("Vérifier les versions firmware publiées") {
-            checkSmartEnergyUpdates(true)
-        })
-        add(firmwareUpdates,action("Installer OTA Voltronic depuis GitHub (si compatible)") {
-            val slots=(1..3).filter {voltronicFleet.configured(it)}
-            if(slots.isEmpty()) {
-                updateFeedback.text="Configure d'abord un ESP32-S3 Voltronic."
-            }else {
-                val titles=slots.map{"INV$it"}.toTypedArray()
-                AlertDialog.Builder(this)
-                    .setTitle("Choisir le lecteur Voltronic")
-                    .setItems(titles) { _,which ->
-                        checkVoltronicOtaForSlot(slots[which])
-                    }.show()
-            }
+        val jkUpdates=section(updatesPage,"Firmware ESP32 JK · mises à jour",true)
+        add(jkUpdates,label("Vérification des lecteurs ESP1 / ESP2 / ESP3 "+
+            "sans interrompre le Bluetooth. L'OTA reste désactivée sur les "+
+            "firmwares JK actuels qui annoncent ota=false. Une mise à jour "+
+            "ne sera jamais tentée tant que le lecteur ne dispose pas de "+
+            "partitions et d'un service OTA validés.",12f,color=subdued))
+        add(jkUpdates,action("Vérifier les MAJ des ESP JK") {
+            checkJkFirmwareUpdates()
         },7)
         updateFeedback=label("Aucune vérification effectuée.",13f,false,subdued)
         add(updatesPage,updateFeedback,8)
@@ -1277,22 +1269,6 @@ class MainActivity : Activity() {
         },6)
 
         add(settingsPage,label("Réglages de l'application",25f,true),16)
-        val voltEdit=section(settingsPage,"Modifier les paramètres Voltronic",true)
-        add(voltEdit,label("Uniquement en Wi-Fi local sur un ESP32-S3 compatible. "+
-            "Chaque modification demande une confirmation, puis le S3 vérifie "+
-            "la nouvelle valeur par une relecture QPIRI/QDOP. "+
-            "Aucune commande ne part sans validation. "+
-            "Les paramètres JK et le VPN ne sont pas touchés.",12f,color=subdued))
-        add(voltEdit,action("Lire / modifier un paramètre Voltronic") {
-            val slots=(1..3).filter {voltronicFleet.configured(it)}
-            if(slots.isEmpty()){
-                updateFeedback.text="Configure un onduleur Voltronic avant de modifier ses paramètres."
-            }else AlertDialog.Builder(this)
-                .setTitle("Choisir l'onduleur à modifier")
-                .setItems(slots.map{"INV$it"}.toTypedArray()) { _,index ->
-                    loadEditableVoltronicSettings(slots[index])
-                }.show()
-        },8)
         val migration=section(settingsPage,"Sauvegarde / migration de configuration",true)
         add(migration,label("Une mise à jour Android signée avec le même certificat "+
             "conserve automatiquement toutes les données, y compris les codes "+
@@ -4063,6 +4039,66 @@ class MainActivity : Activity() {
                         }
                     }.show()
                 updateFeedback.text="INV$slot : contrôle préalable réussi. Confirmation demandée."
+            }
+        }
+    }
+
+    /** No flash/OTA here: JK currently advertises ota=false.
+     * Read each saved reader independently without touching BLE or JK settings. */
+    private fun checkJkFirmwareUpdates() {
+        val wifi=voltronicWifiNetwork()
+        if(wifi==null || selectedRoute()==JkTransportPolicy.Route.GATEWAY_VPN) {
+            updateFeedback.text="ESP JK : vérification firmware réservée au Wi-Fi local. "+
+                "Désactive le VPN pour cette opération."
+            return
+        }
+        data class Reader(val slot:Int,val host:String,val code:String)
+        val readers=(1..3).mapNotNull { slot ->
+            val host=if(slot==activeReaderSlot)prefs.getString("local_ip","")?:""
+                else prefs.getString(slotKey(slot,"local_ip"),"")?:""
+            val code=slotPairingCode(slot)
+            if(allowedLocalIp(host) && code.length in 8..32)
+                Reader(slot,host,code) else null
+        }
+        if(readers.isEmpty()) {
+            updateFeedback.text="Aucun ESP JK associé avec une IP et un code local."
+            return
+        }
+        updateFeedback.text="Vérification des versions de ${readers.size} lecteur(s) JK…"
+        settingsWorker.execute {
+            val summary=readers.map { reader ->
+                try {
+                    val url=URL("http://${reader.host}/api/v1/info")
+                    val c=wifi.openConnection(url) as HttpURLConnection
+                    try {
+                        c.requestMethod="GET"
+                        c.instanceFollowRedirects=false
+                        c.connectTimeout=3000
+                        c.readTimeout=5000
+                        c.setRequestProperty("X-Setup-Code",reader.code)
+                        require(c.responseCode==200){"HTTP ${c.responseCode}"}
+                        val data=JSONObject(c.inputStream.bufferedReader().use {
+                            it.readText().take(4096)
+                        })
+                        require(data.optString("product")=="smart-jk-esp32") {
+                            "Appareil JK non reconnu"
+                        }
+                        val version=data.optString("version","inconnue")
+                        val ota=data.optBoolean("ota",false)
+                        if(ota)
+                            "ESP${reader.slot} · $version : OTA annoncée par le lecteur "+
+                            "(publication officielle et signature encore à valider)"
+                        else "ESP${reader.slot} · $version : OTA indisponible sur ce firmware ; "+
+                            "migration USB nécessaire avant les futures MAJ sans câble"
+                    }finally{c.disconnect()}
+                }catch(ex:Exception) {
+                    "ESP${reader.slot} : vérification impossible ("+
+                        (ex.message?:ex.javaClass.simpleName).take(60)+")"
+                }
+            }.joinToString("\n")
+            runOnUiThread {
+                if(!isFinishing && ::updateFeedback.isInitialized)
+                    updateFeedback.text=summary
             }
         }
     }
