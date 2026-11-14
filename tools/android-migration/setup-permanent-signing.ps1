@@ -40,31 +40,39 @@ if (!(Test-Path $Store)) {
     if (!$row) { throw 'Signing recovery password is missing' }
     $Pass = $row.Substring('STORE_PASSWORD='.Length)
 }
-# Capture keytool diagnostics safely: never echo the password or keystore contents.
-# On Windows PowerShell 5.1, native programs may send errors to stderr.
+# Export the public certificate in PEM format rather than using keytool -list -v.
+# Some localized Java runtimes (including French JBR) throw
+# MissingFormatArgumentException in keytool's verbose certificate printer.
+# The PKCS12 private key and the recovery file are never modified here.
 $previousErrorAction = $ErrorActionPreference
-$keyDetails = @()
+$certificateOutput = @()
 try {
     $ErrorActionPreference = 'Continue'
-    $keyDetails = @(& $Keytool -list -v -storetype PKCS12 -keystore $Store -storepass $Pass -alias $Alias 2>&1 | ForEach-Object { $_.ToString() })
+    $certificateOutput = @(& $Keytool -exportcert -rfc -storetype PKCS12 -keystore $Store -storepass $Pass -alias $Alias 2>&1 | ForEach-Object { $_.ToString() })
     $keyExit = $LASTEXITCODE
 } finally {
     $ErrorActionPreference = $previousErrorAction
 }
+$certificateText = $certificateOutput -join [Environment]::NewLine
 if ($keyExit -ne 0) {
-    $safeDetails = (($keyDetails -join [Environment]::NewLine).Replace($Pass, '[REDACTED]').Replace($Store, '[KEYSTORE_PATH]'))
-    if ($safeDetails.Length -gt 1400) { $safeDetails = $safeDetails.Substring(0,1400) }
+    $safeDetails = $certificateText.Replace($Pass,'[REDACTED]').Replace($Store,'[KEYSTORE_PATH]')
+    if ($safeDetails.Length -gt 1200) { $safeDetails = $safeDetails.Substring(0,1200) }
     Write-Host ('Keytool used: ' + $Keytool)
     Write-Host ('Keytool exit code: ' + $keyExit)
-    Write-Host ('Keystore exists: ' + (Test-Path $Store))
-    Write-Host ('Recovery file exists: ' + (Test-Path $Recovery))
     Write-Host ('Keytool error (secrets redacted): ' + $safeDetails)
-    throw 'Cannot read permanent signing key. Keep both original backup files. Please share only the sanitized diagnostic lines above.'
+    throw 'Could not export the public signing certificate; existing backup is intact.'
 }
-$match = [regex]::Match(($keyDetails -join [Environment]::NewLine),'SHA256:\s*([0-9A-Fa-f:]{95})')
-if (!$match.Success) { throw 'SHA256 certificate fingerprint not found' }
-$CertificateSha256 = $match.Groups[1].Value.Replace(':','').ToLowerInvariant()
-if ($CertificateSha256.Length -ne 64) { throw 'Invalid certificate fingerprint' }
+$pem = [regex]::Match($certificateText,'(?s)-----BEGIN CERTIFICATE-----\\s*([A-Za-z0-9+/=\\r\\n]+?)\\s*-----END CERTIFICATE-----')
+if (!$pem.Success) { throw 'Keytool returned no public certificate (PEM). Existing backup preserved.' }
+$encodedCertificate = $pem.Groups[1].Value -replace '\\s',''
+$certificateBytes = [Convert]::FromBase64String($encodedCertificate)
+$sha256 = [Security.Cryptography.SHA256]::Create()
+try {
+    $CertificateSha256 = ([BitConverter]::ToString($sha256.ComputeHash($certificateBytes))).Replace('-','').ToLowerInvariant()
+} finally {
+    $sha256.Dispose()
+}
+if ($CertificateSha256.Length -ne 64) { throw 'Invalid signing certificate SHA256 length.' }
 Write-Host 'Uploading one stable signing identity to GitHub Actions...'
 function Set-SecretFromStdin([string]$name,[string]$value) {
     $value | & gh secret set $name -R $Repo
