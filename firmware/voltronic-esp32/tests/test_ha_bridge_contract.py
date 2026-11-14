@@ -17,7 +17,7 @@ class BridgeContract(unittest.TestCase):
         self.assertIn('"ha_bridge_single_uart_owner",true', SRC)
         self.assertIn('static void polling_task(void *unused)', SRC)
         self.assertIn('if(process_pending_parameter_edit())continue;', SRC)
-        self.assertEqual(SRC.count("uart_write_bytes("), 1)
+        self.assertEqual(SRC.count("uart_write_bytes(VT_UART,"), 1)  # UART0 USB provisioning is separate
 
     def test_cache_read_contract(self):
         self.assertIn('"ha_bridge_http_get_is_cache_only",true', SRC)
