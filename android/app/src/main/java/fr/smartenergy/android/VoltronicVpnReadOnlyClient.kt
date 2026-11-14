@@ -47,7 +47,12 @@ object VoltronicVpnReadOnlyClient {
         require(route.gatewayToken.length in 20..128){"Gateway token missing"}
         val path=fixedPath(slot,details)
         val url=URL("http://${route.gatewayIp}:18767$path")
-        val c=route.vpnNetwork.openConnection(url) as HttpURLConnection
+        // Match the working JK VPN transport: let Android/Tailscale route the
+        // Tailnet address. Binding a socket to Android's VPN Network handle
+        // fails with EPERM on some devices even though JK works normally.
+        // The route is enabled only after a VPN Network is detected and
+        // gatewayIp is restricted to 100.64.0.0/10.
+        val c=url.openConnection() as HttpURLConnection
         return try {
             c.requestMethod="GET"
             c.instanceFollowRedirects=false
