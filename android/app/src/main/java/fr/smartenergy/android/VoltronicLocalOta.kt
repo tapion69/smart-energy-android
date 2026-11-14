@@ -56,8 +56,15 @@ internal object VoltronicLocalOta {
         require(release.compatible && SmartEnergyUpdateFeed.officialFirmwareUrl(release.downloadUrl))
         require(SunSpecReadOnly.isPrivateIPv4(host))
         val status=status(host,code,port,network)
-        require(status.optBoolean("ota_supported",false)){
+        require(status.optBoolean("ota_supported",false) &&
+                status.optString("partition_scheme")=="dual_ota"){
             "Migration USB OTA nécessaire (partition unique actuelle)"
+        }
+        require(!status.optBoolean("rollback_pending",false)){
+            "Rollback OTA en attente : vérifier l'ESP32 avant une nouvelle mise à jour"
+        }
+        if(status.has("flash_ready"))require(status.optBoolean("flash_ready",false)){
+            "ESP32-S3 non prêt pour la mise à jour OTA"
         }
         val limit=status.optInt("max_image_bytes",0)
         require(limit in 262144..8388608){"Partition OTA incompatible"}

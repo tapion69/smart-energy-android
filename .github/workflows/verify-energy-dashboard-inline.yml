@@ -1,0 +1,58 @@
+name: Verify inline energy dashboard and native MPPT1
+
+on:
+  pull_request:
+    branches: [dev]
+    paths:
+      - 'android/**'
+      - 'firmware/voltronic-esp32/**'
+      - '.github/workflows/verify-energy-dashboard-inline.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  dashboard-protocol:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify native QPIGS parser at production and night
+        run: |
+          gcc -std=gnu11 -Wall -Wextra -Werror \
+            firmware/voltronic-esp32/tests/test_protocol.c \
+            -o /tmp/smart-voltronic-readonly-protocol -lm
+          /tmp/smart-voltronic-readonly-protocol
+      - name: Ensure visible energy measures are inside diagram nodes
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import re
+          html=Path('android/app/src/main/assets/energy_dashboard_v3.html').read_text()
+          hero=html.split('<section class="hero"',1)[1].split('</section>',1)[0]
+          sun=html.split('<section class="sun">',1)[1].split('</section>',1)[0]
+          for ident in ('mInverterStats','mBatteryStats','mBatteryVoltage','mBatteryTemp','mLoadDay'):
+              assert f'id="{ident}"' in hero, ident
+          for ident in ('sunInvTemp','sunInvCurrent','sunBatteryPower','sunBatteryCurrent',
+                        'sunBatteryVoltage','sunBatteryTemp','sunLoadDay'):
+              assert f'id="{ident}"' in sun, ident
+          for ident in ('modernDetails','nativeDayBlocks','nativeLoadDayValue'):
+              assert f'id="{ident}"' not in html, ident
+          ids=re.findall(r'\bid="([^"]+)"',html)
+          assert len(ids)==len(set(ids)), 'Duplicate HTML ids'
+          jsids=re.findall(r"(?:txt|el)\('([A-Za-z0-9]+)'",html.split('<script>',1)[1])
+          assert not(set(jsids)-set(ids)), 'Missing DOM ids'
+          print('Modern and Sunsynk inline measurements: PASS')
+          PY
+
+  android:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - name: Android unit tests (no APK distributed, no signing key)
+        working-directory: android
+        run: ./gradlew --no-daemon testDebugUnitTest

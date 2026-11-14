@@ -29,8 +29,8 @@ button{font:inherit;cursor:pointer}
 .photoVal{position:absolute;z-index:2;min-width:90px;padding:8px;background:#051e30e9;border:1px solid #7ac6d1;border-radius:9px;box-shadow:0 5px 19px #0009}
 .photoVal .cap{display:block;color:#b2d5e5;font-size:10px}.photoVal strong{display:block;font-size:18px;white-space:nowrap}.photoVal .day{font-size:10px;display:block;margin-top:3px;color:#e1f4f5}
 .photoVal.pv{left:28%;top:13%;border-color:#e2b85e}.photoVal.pv strong{color:#ffe080}
-.photoVal.home{right:3%;top:48%}.photoVal.grid{left:3%;bottom:5%;border-color:#659bdc}.photoVal.bat{right:3%;bottom:5%;border-color:#45ca96}.photoVal.bat strong{color:#94ffc3}
-.photoVal.inv{left:3%;top:37%;font-size:10px}.photoVal.inv strong{font-size:14px}
+.photoVal.home{left:3%;top:37%;right:auto}.photoVal.grid{left:3%;bottom:5%;border-color:#659bdc}.photoVal.bat{right:3%;bottom:5%;border-color:#45ca96}.photoVal.bat strong{color:#94ffc3}
+.photoVal.inv{right:3%;left:auto;top:48%;font-size:10px}.photoVal.inv strong{font-size:14px}
 .hero-lines{position:absolute;inset:0;width:100%;height:100%;pointer-events:none;filter:drop-shadow(0 0 4px #000);opacity:.9}
 .hero-lines path{fill:none;stroke-width:3;stroke-dasharray:none;animation:none;opacity:.13;transition:opacity .2s}
 .hero-lines path.running{stroke-dasharray:6 9;animation:flow 1.3s linear infinite;opacity:1}
@@ -115,7 +115,21 @@ button{font:inherit;cursor:pointer}
 .kpis small{font-size:10px;color:#bbd0dd;display:block}.kpis strong{font-size:17px;display:block;margin:5px 0}
 .row{display:flex;justify-content:space-between;gap:9px;padding:8px 0;border-bottom:1px solid #274c59}
 .row:last-child{border:0}.row span{color:#b2cbd7}.row b{text-align:right}
-@media(max-width:390px){.wrap{padding:8px 5px}.hero{height:420px}.photoVal{padding:6px;min-width:78px}.photoVal strong{font-size:15px}.photoVal.pv{left:22%}.photoVal.home{right:2%;top:50%;left:auto}.photoVal.inv{left:2%;top:37%}.mppt-box .detail{font-size:9px}}
+/* Place every measurement inside its illustrated equipment, never underneath the diagram. */
+.photoVal{max-width:48%;min-width:0}
+.photoVal.home{max-width:44%}.photoVal.inv{max-width:46%}
+.photoVal.bat{max-width:52%;padding:7px}
+.photoVal .inline-detail{display:block;font-size:9px;line-height:1.25;color:#c5e2e5;margin-top:3px;overflow-wrap:anywhere}
+.photoVal.bat .inline-detail{color:#b9f9d5}
+.photoVal .inline-detail.emphasis{font-weight:bold;color:#edf9ff}
+.photoVal .day{font-size:9px;line-height:1.25}
+.flow-main .node .inline-detail,.flow-main .center .inline-detail{display:block;font-size:10px;line-height:1.25;color:#c2d3da;margin-top:3px;overflow-wrap:anywhere}
+.flow-main .center .inline-detail{font-size:9px}
+.battery-node .inline-detail{display:block;font-size:10px;line-height:1.3;color:#c1dbce;margin-top:3px;overflow-wrap:anywhere}
+.battery-node .inline-detail strong{font-size:10px}
+.flow-main .join.reverse.moving:before{animation-direction:reverse}
+@media(max-width:390px){.wrap{padding:8px 5px}.hero{height:420px}.photoVal{padding:6px;min-width:0}.photoVal strong{font-size:15px}.photoVal.pv{left:22%}.photoVal.home{left:2%;right:auto;top:37%}.photoVal.inv{right:2%;left:auto;top:50%}.photoVal.bat{right:2%;bottom:4%}.mppt-box .detail{font-size:9px}.battery-node{gap:8px}.battery-icon{width:47px;height:67px}.flow-main .node .inline-detail{font-size:9px}}
+
 </style></head>
 <body><main class="wrap">
 <header class="header"><div><div class="brand">SMART <b>ENERGY</b></div><div class="sub">Onduleurs Voltronic · Énergie en lecture seule</div></div><span class="status" id="state">En attente</span></header>
@@ -130,24 +144,14 @@ button{font:inherit;cursor:pointer}
 <div id="modern" class="view show">
 <section class="hero" id="hero"><div class="hero-title">⚡ ÉNERGIE DE LA MAISON</div>
 <svg class="hero-lines" viewBox="0 0 360 450" preserveAspectRatio="none" aria-hidden="true">
-<path class="solar" d="M122 102 Q126 161 104 212"/><path class="house" d="M138 241 Q199 252 274 252"/><path class="store" d="M133 280 Q222 313 291 356"/><path class="utility" d="M68 353 Q73 315 95 284"/>
+<path class="solar" d="M122 140 Q194 160 276 237"/><path class="house" d="M265 244 Q184 254 105 218"/><path class="store" d="M281 278 Q296 315 286 355"/><path class="utility" d="M68 353 Q137 312 267 274"/>
 </svg>
 <div class="photoVal pv"><span class="cap">☀ Solaire</span><strong id="mPv">— W</strong><span class="day" id="mPvDay">Jour : —</span></div>
-<div class="photoVal home"><span class="cap">⌂ Maison</span><strong id="mLoad">— W</strong></div>
-<div class="photoVal inv"><span class="cap">⚡ Onduleurs</span><strong id="mInv">—</strong></div>
+<div class="photoVal home"><span class="cap">⌂ Maison</span><strong id="mLoad">— W</strong><span class="inline-detail" id="mLoadDay">Jour : —</span></div>
+<div class="photoVal inv"><span class="cap">⚡ Onduleurs</span><strong id="mInv">—</strong><span class="inline-detail" id="mInverterStats">—</span></div>
 <div class="photoVal grid"><span class="cap">♧ Réseau</span><strong id="mGrid">— W</strong></div>
-<div class="photoVal bat"><span class="cap">▣ Batteries</span><strong id="mSoc">— %</strong></div>
+<div class="photoVal bat"><span class="cap">▣ Batteries</span><strong id="mSoc">— %</strong><span class="inline-detail emphasis" id="mBatteryStats">—</span><span class="inline-detail" id="mBatteryVoltage">—</span><span class="inline-detail" id="mBatteryTemp">—</span></div>
 </section>
-<div class="energy-details" id="modernDetails">
- <div><small>Onduleurs · température / sortie</small><b id="mInverterStats">—</b></div>
- <div><small>Batteries · puissance / courant</small><b id="mBatteryStats">—</b></div>
- <div><small>Batteries · tension moyenne</small><b id="mBatteryVoltage">—</b></div>
- <div><small>Batteries · température / sens</small><b id="mBatteryTemp">—</b></div>
-</div>
-<div class="daily" id="nativeDayBlocks" style="display:none">
-<div class="item" id="nativePvDayBox"><small>☀ PV jour UTC · compteur natif</small><b id="nativePvDayValue">—</b></div>
-<div class="item" id="nativeLoadDayBox"><small>⌂ Charge AC jour UTC · compteur natif</small><b id="nativeLoadDayValue">—</b></div>
-</div>
 
 </div>
 <div id="sun" class="view">
@@ -156,20 +160,11 @@ button{font:inherit;cursor:pointer}
 <div class="mppt-area" id="mpptArea"><div class="mppt-grid" id="mppts"></div><svg class="mppt-wire-svg" id="mpptWires" aria-hidden="true"></svg></div>
 <div class="flow-main">
 <div class="node grid"><span>⚡ Réseau</span><strong id="sunGrid">— W</strong><span id="sunGridInfo">Sens non vérifié</span></div>
-<div class="center"><i class="join left"></i><div class="inv">⇄</div><i class="join right"></i><div class="subtitle" id="sunInv">Onduleur</div><div class="sun-small" id="sunAc">AC : —</div></div>
-<div class="node home"><span>⌂ Maison</span><strong id="sunHome">— W</strong></div>
+<div class="center"><i class="join left"></i><div class="inv">⇄</div><i class="join right"></i><div class="subtitle" id="sunInv">Onduleur</div><div class="sun-small" id="sunAc">AC : —</div><span class="inline-detail" id="sunInvTemp">—</span><span class="inline-detail" id="sunInvCurrent">—</span></div>
+<div class="node home"><span>⌂ Maison</span><strong id="sunHome">— W</strong><span class="inline-detail" id="sunLoadDay">Jour : —</span></div>
 </div>
 <div class="battery-branch"></div>
-<div class="battery-node"><div class="battery-icon"><div class="fill"></div></div><div><strong id="sunSoc">— %</strong><div class="small" id="sunBattery">Tension : — · Courant : —</div><div class="small" id="sunBatteryDirection">Sens non mesuré</div></div></div>
-<div class="energy-details sun-details">
- <div><small>Onduleurs · température</small><b id="sunInvTemp">—</b></div>
- <div><small>Onduleurs · courant sortie AC</small><b id="sunInvCurrent">—</b></div>
- <div><small>Batteries · puissance</small><b id="sunBatteryPower">—</b></div>
- <div><small>Batteries · courant</small><b id="sunBatteryCurrent">—</b></div>
- <div><small>Batteries · tension moyenne</small><b id="sunBatteryVoltage">—</b></div>
- <div><small>Batteries · température</small><b id="sunBatteryTemp">—</b></div>
- <div><small>Maison · consommation jour UTC</small><b id="sunLoadDay">—</b></div>
-</div>
+<div class="battery-node"><div class="battery-icon"><div class="fill"></div></div><div><strong id="sunSoc">— %</strong><span class="inline-detail" id="sunBattery">Tension : —</span><span class="inline-detail" id="sunBatteryPower">Puissance : —</span><span class="inline-detail" id="sunBatteryCurrent">Courant : —</span><span class="inline-detail" id="sunBatteryVoltage">Moyenne : —</span><span class="inline-detail" id="sunBatteryTemp">Température : —</span><span class="inline-detail" id="sunBatteryDirection">Sens non mesuré</span></div></div>
 
 </section></div>
 <section class="panel" id="homeJkPanel" style="display:none" aria-label="Batteries JK enregistrées">
@@ -195,7 +190,7 @@ function n(x){return typeof x==='number'&&Number.isFinite(x)?x:null}
 function fmt(x,u,d){var v=n(x);return v==null?'—'+(u?' '+u:''):v.toLocaleString('fr-FR',{maximumFractionDigits:d||0})+(u?' '+u:'')}
 function sum(items,k){var valid=items.map(function(x){return n(x[k])}).filter(function(x){return x!==null});return valid.length?valid.reduce(function(a,b){return a+b},0):null}
 function fresh(){return (data.inverters||[]).filter(function(x){return x&&x.fresh===true})}
-function channels(items){var all=[];items.forEach(function(inv){(inv.pvChannels||[]).forEach(function(c){all.push({slot:inv.slot,index:c.index,voltageV:c.voltageV,currentA:c.currentA,powerW:c.powerW,derived:c.derived})})});return all}
+function channels(items){var all=[];items.forEach(function(inv){(inv.pvChannels||[]).forEach(function(c){all.push({slot:inv.slot,index:c.index,voltageV:c.voltageV,currentA:c.currentA,powerW:c.powerW,derived:c.derived,powerSource:c.powerSource})})});return all}
 function appNav(destination){if(window.SmartEnergyApp&&window.SmartEnergyApp.navigate)window.SmartEnergyApp.navigate(destination)}
 function setPage(page){active=page;el('pageHome').style.display=page==='home'?'':'none';el('pageInverters').style.display=page==='inverters'?'':'none';el('navHome').classList.toggle('active',page==='home');el('navInv').classList.toggle('active',page==='inverters');if(page==='inverters')renderInverters()}
 window.smartEnergySetPage=function(page){setPage(page==='inverters'?'inverters':'home')};
@@ -266,7 +261,7 @@ function renderHomeJk(jk){
   card.append(name,state,first,secondary);host.append(card);
  });
 }
-function drawMppts(list){var host=el('mppts');host.replaceChildren();list.forEach(function(c){var b=document.createElement('div');b.className='mppt-box';var name=document.createElement('div');name.className='name';name.textContent='☀ INV'+c.slot+' · MPPT'+c.index;var val=document.createElement('strong');val.textContent=fmt(c.powerW,'W');var detail=document.createElement('div');detail.className='detail';detail.textContent=fmt(c.currentA,'A',1)+' · '+fmt(c.voltageV,'V',1);var quality=document.createElement('div');quality.className='quality';quality.textContent=c.derived?'Calcul V × A · mesures ESP':'Puissance native ESP';b.append(name,val,detail,quality);host.append(b)});
+function drawMppts(list){var host=el('mppts');host.replaceChildren();list.forEach(function(c){var b=document.createElement('div');b.className='mppt-box';var name=document.createElement('div');name.className='name';name.textContent='☀ INV'+c.slot+' · MPPT'+c.index;var val=document.createElement('strong');val.textContent=fmt(c.powerW,'W');var detail=document.createElement('div');detail.className='detail';detail.textContent=fmt(c.currentA,'A',1)+' · '+fmt(c.voltageV,'V',1);var quality=document.createElement('div');quality.className='quality';quality.textContent=c.derived?'Estimation V × A':c.powerSource==='qpigs_candidate'?'Champ QPIGS 19 · à confirmer':'Puissance native onduleur';b.append(name,val,detail,quality);host.append(b)});
 if(!list.length){var none=document.createElement('div');none.className='mppt-empty';none.style.gridColumn='1/-1';none.textContent='MPPT indisponibles : aucune valeur mesurée fraîche';host.append(none)}requestAnimationFrame(wires)}
 function wires(){
  if(style!=='sunsynk'||active!=='home')return;
@@ -543,6 +538,7 @@ function render(){
      homeWire=el('sun').querySelector('.join.right'),
      batteryWire=el('sun').querySelector('.battery-branch');
  gridWire.classList.toggle('moving',flowsEnabled&&gridVerified&&n(grid)!==null&&Math.abs(grid)>1);
+ gridWire.classList.toggle('reverse',gridVerified&&n(grid)!==null&&grid<0);
  homeWire.classList.toggle('moving',flowsEnabled&&n(l)!==null&&l>1);
  batteryWire.classList.toggle('charging',flowsEnabled&&n(bpower)!==null&&bpower>5);
  batteryWire.classList.toggle('discharging',flowsEnabled&&n(bpower)!==null&&bpower< -5);
@@ -551,6 +547,8 @@ function render(){
  txt('mPv',fmt(p,'W'));txt('mLoad',fmt(l,'W'));txt('mGrid',fmt(grid,'W'));
  txt('mSoc',fmt(soc,'%'));txt('mInv',live.length+' / '+items.length+' INV');
  txt('mPvDay','PV jour UTC : '+fmt(pvDay,'kWh',2));
+ txt('mLoadDay','Jour UTC : '+fmt(loadDay,'kWh',2));
+ el('mLoadDay').style.display=loadDay===null?'none':'';
  el('mPvDay').style.display=pvDay===null?'none':'';
  txt('mInverterStats',fmt(temperature,'°C',1)+' · '+fmt(outputCurrent,'A',1));
  txt('mBatteryStats',fmt(bpower,'W')+' · '+fmt(bcur,'A',1));
@@ -558,11 +556,6 @@ function render(){
  txt('mBatteryTemp',fmt(btemp,'°C',1)+' · '+direction);
  txt('sunPv',fmt(p,'W'));txt('sunPvDay','PV jour UTC : '+fmt(pvDay,'kWh',2));
  el('sunPvDay').style.display=pvDay===null?'none':'';
- el('nativeDayBlocks').style.display=pvDay===null&&loadDay===null?'none':'grid';
- el('nativePvDayBox').style.display=pvDay===null?'none':'block';
- el('nativeLoadDayBox').style.display=loadDay===null?'none':'block';
- txt('nativePvDayValue',fmt(pvDay,'kWh',2));
- txt('nativeLoadDayValue',fmt(loadDay,'kWh',2));
  txt('sunHome',fmt(l,'W'));txt('sunGrid',fmt(grid,'W'));txt('sunGridInfo',gridInfo);
  txt('sunInv',live.length+'/'+items.length+' onduleur(s)');
  txt('sunAc',live.length===1?fmt(live[0].outputVoltageV,'V',1)+' · '+
@@ -570,13 +563,14 @@ function render(){
  txt('sunSoc',fmt(soc,'%'));
  txt('sunBattery',batLabel+' · '+fmt(bvol,'V',2));
  txt('sunBatteryDirection',direction);
- txt('sunInvTemp',fmt(temperature,'°C',1));
- txt('sunInvCurrent',fmt(outputCurrent,'A',1)+' · calculé');
- txt('sunBatteryPower',fmt(bpower,'W'));
- txt('sunBatteryCurrent',fmt(bcur,'A',1));
- txt('sunBatteryVoltage',fmt(bvol,'V',2));
- txt('sunBatteryTemp',fmt(btemp,'°C',1));
- txt('sunLoadDay',fmt(loadDay,'kWh',2));
+ txt('sunInvTemp','T° '+fmt(temperature,'°C',1));
+ txt('sunInvCurrent','Sortie '+fmt(outputCurrent,'A',1)+' · calculé');
+ txt('sunBatteryPower','Puissance : '+fmt(bpower,'W'));
+ txt('sunBatteryCurrent','Courant : '+fmt(bcur,'A',1));
+ txt('sunBatteryVoltage','Moyenne : '+fmt(bvol,'V',2));
+ txt('sunBatteryTemp','Température : '+fmt(btemp,'°C',1));
+ txt('sunLoadDay','Jour UTC : '+fmt(loadDay,'kWh',2));
+ el('sunLoadDay').style.display=loadDay===null?'none':'';
  var batteryFill=el('sun').querySelector('.battery-icon .fill');
  batteryFill.style.height=(n(soc)===null?0:Math.min(100,Math.max(0,soc)))+'%';
  drawMppts(pvs);

@@ -34,7 +34,7 @@
 #include "voltronic_protocol.h"
 #include "voltronic_edit.h"
 
-#define VT_VERSION "0.3.4-dev-ota-parameter-edit-test"
+#define VT_VERSION "0.3.5"
 #define VT_UART UART_NUM_1
 #define VT_TX GPIO_NUM_17
 #define VT_RX GPIO_NUM_16
@@ -426,8 +426,11 @@ static esp_err_t telemetry_handler(httpd_req_t *r){
         cJSON_AddNumberToObject(v,"bus_voltage_v",m.bus_voltage_v);
         cJSON_AddNumberToObject(v,"battery_voltage_from_scc_v",
                                 m.battery_voltage_from_scc_v);
-        if(m.pv1_power_native_available)
+        if(m.pv1_power_native_available) {
             cJSON_AddNumberToObject(v,"pv1_power_native_w",m.pv1_power_native_w);
+            cJSON_AddBoolToObject(v,"pv1_power_native_verified",
+                                  m.pv1_power_native_verified);
+        }
         cJSON_AddNumberToObject(v,"heatsink_temp_c",m.heat_sink_c);
         if(m.grid_power_native_available)
             cJSON_AddNumberToObject(v,"grid_power_native_w",m.grid_power_native_w);

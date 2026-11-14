@@ -70,6 +70,37 @@ static void test_qpigs_qpigs2(void) {
     n=response("(230.1 50.0 230.0 50.0 0120 0110 999 365 52.1 010 063 032 0.5 357.0 52.2 006",f);
     assert(!vt_parse_qpigs(f,n,&m));
 }
+/* Direct PV1 power must survive zero-production polls, exactly as the
+ * Node-RED flow's learned power-index state does. All replies are synthetic. */
+static void test_pv1_native_mapping_at_night(void) {
+    uint8_t f[512]={0};
+    vt_qpigs_t m={0};
+    *vt_pv1_learned_index()=-1;
+    size_t n=response("(230.1 50.0 230.0 50.0 0120 0110 009 365 52.1 010 063 032 0.0 0.0 52.2 006 0 0 0 0",f);
+    assert(vt_parse_qpigs(f,n,&m));
+    assert(m.pv1_power_native_available && !m.pv1_power_native_verified);
+    assert(m.pv1_power_native_w==0.0); /* QPIGS[19] fallback unconfirmed */
+    n=response("(230.1 50.0 230.0 50.0 0120 0110 009 365 52.1 010 063 032 1.0 350.0 52.2 006 0 0 0 350",f);
+    assert(vt_parse_qpigs(f,n,&m));
+    assert(m.pv1_power_native_available && m.pv1_power_native_verified);
+    assert(*vt_pv1_learned_index()==19 && m.pv1_power_native_w==350.0);
+    n=response("(230.1 50.0 230.0 50.0 0120 0110 009 365 52.1 010 063 032 0.0 0.0 52.2 006 0 0 0 0",f);
+    assert(vt_parse_qpigs(f,n,&m));
+    assert(m.pv1_power_native_available && m.pv1_power_native_verified);
+    assert(m.pv1_power_native_w==0.0);
+
+    /* A second inverter model may put the native PV1 watts at field 20. */
+    *vt_pv1_learned_index()=-1;
+    n=response("(230.1 50.0 230.0 50.0 0120 0110 009 365 52.1 010 063 032 1.0 450.0 52.2 006 0 0 0 0 450",f);
+    assert(vt_parse_qpigs(f,n,&m));
+    assert(m.pv1_power_native_available && m.pv1_power_native_verified);
+    assert(*vt_pv1_learned_index()==20 && m.pv1_power_native_w==450.0);
+    n=response("(230.1 50.0 230.0 50.0 0120 0110 009 365 52.1 010 063 032 0.0 0.0 52.2 006 0 0 0 0 0",f);
+    assert(vt_parse_qpigs(f,n,&m));
+    assert(m.pv1_power_native_available && m.pv1_power_native_verified);
+    assert(m.pv1_power_native_w==0.0);
+}
+
 static void test_identification_read_only(void) {
     uint8_t frame[512]={0};
     char data[96]={0};
@@ -104,6 +135,7 @@ int main(void) {
     test_command_crc_and_whitelist();
     test_streaming_frames();
     test_qpigs_qpigs2();
+    test_pv1_native_mapping_at_night();
     test_numeric_energy_and_warning();
     test_identification_read_only();
     puts("Voltronic complete native read-only serial protocol: PASS");
