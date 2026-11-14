@@ -1005,9 +1005,11 @@ class Flasher(tk.Tk):
                 f"Ajouter INV{slot} au VPN existant ?\n\n"
                 "Seuls l'IP et le code de cet onduleur seront enregistrés.\n"
                 "Wi-Fi, identité Tailscale, token et tous les lecteurs JK restent inchangés.\n\n"
-                "Branche le VPN en USB, redémarre-le puis maintiens BOOT "
-                "3 secondes pendant les 9 premières secondes après redémarrage.\n"
-                "Le firmware VPN doit prendre en charge l'ajout Voltronic ciblé."
+                "ESP32-S3 VPN 0.3.5 : câble sur COM, maintiens BOOT "
+                "4 secondes puis relâche (sans RESET) pendant l'attente USB.\n"
+                "Firmware antérieur : RESET, puis BOOT 3 secondes dans les 9 "
+                "premières secondes.\n"
+                "Aucun effacement ni nouvelle association Tailscale."
             ):
                 return
             self.secret_values=[code]
