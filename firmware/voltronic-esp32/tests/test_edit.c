@@ -6,6 +6,8 @@ int main(void) {
     const vt_edit_spec_t *v=vt_edit_find("battery_float_voltage_v");
     assert(v && v->index==11 && strcmp(v->query,"QPIRI")==0);
     assert(vt_edit_allowed(v,55.2,54.8,48));
+    assert(vt_edit_allowed(v,55.2,55.3,48));
+    assert(v->tolerance<0.05); /* 0.1 V changes must never falsely verify */
     assert(!vt_edit_allowed(v,55.2,68.0,48));
     assert(!vt_edit_allowed(v,55.2,54.85,48));
     assert(!vt_edit_allowed(v,55.2,54.8,0));
