@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Callable
 import hashlib
 import struct
 import tempfile
@@ -87,7 +88,8 @@ def check_jk_app_only(data: bytes, image_bytes: int) -> JkPreflight:
 
 
 def backup_jk_nvs(port: str, destination: Path, image_size: int,
-                  esptool_main) -> JkPreflight:
+                  esptool_main, progress: Callable[[int, str], None] | None = None
+                  ) -> JkPreflight:
     """Fail closed: both reads, table validation and persisted backup first."""
     if not destination or destination.suffix.lower() != ".bin":
         raise ValueError("Choisis un fichier de sauvegarde NVS .bin local.")
@@ -96,6 +98,8 @@ def backup_jk_nvs(port: str, destination: Path, image_size: int,
     destination.parent.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(prefix="smartenergy-jk-preflight-") as temp:
         table = Path(temp) / "partition_table.bin"
+        report = progress or (lambda _pct, _msg: None)
+        report(7, "JK · lecture de la table de partitions (4 Ko)…")
         # One bootloader entry for the whole JK backup/flash operation.
         # 115200 is slower but more tolerant of CP210x cables and serial noise.
         # Keep the bootloader alive between *independent* esptool.main calls;
@@ -108,12 +112,14 @@ def backup_jk_nvs(port: str, destination: Path, image_size: int,
         if not table.is_file():
             raise ValueError("Impossible de relire les partitions du JK.")
         checked = check_jk_app_only(table.read_bytes(), image_size)
-        # ESP32 classic VPN and JK can have the exact same memory layout.
-        # A COM port is not a device identity: refuse to reflash a VPN ESP32
-        # through the JK tab even if its NVS and partitions look compatible.
-        # The firmware's *literal* product identity must exist in app0.
+        report(13, "JK · partitions vérifiées. Identification du firmware installé…")
+        # The product literal is in the first 16KiB of the 0.3.15 JK image.
+        # Reading the *entire* 1.3MiB APP partition at 115200 baud made the
+        # Windows UI appear frozen during preflight. Read a small window
+        # instead, and fail closed when the installed firmware is not found.
+        # Wrong-device protection is retained: VPN/Voltronic are forbidden.
+        probe_bytes = min(checked.app0.length, 0x10000)
         app_probe = Path(temp) / "jk-app-identity.bin"
-        probe_bytes = min(checked.app0.length, 0x140000)
         esptool_main(args + ["--before", "no_reset", "--after", "no_reset",
                              "read_flash", hex(APP0_OFFSET),
                              hex(probe_bytes), str(app_probe)])
@@ -124,8 +130,9 @@ def backup_jk_nvs(port: str, destination: Path, image_size: int,
             b"smart-energy-vpn-gateway" in product_bytes or
             b"smart-energy-voltronic-s3" in product_bytes):
             raise ValueError(
-                "Ce port COM ne contient pas un firmware Smart JK reconnu. "
-                "Refus de reflasher un ESP VPN ou une autre carte.")
+                "Identité Smart JK non vérifiée dans le firmware actuellement installé. "
+                "Aucun flash : vérifier le lecteur sans changer ses réglages.")
+        report(22, "JK · identité vérifiée. Sauvegarde privée NVS…")
         private = Path(temp) / "nvs-private.bin"
         esptool_main(args + ["--before", "no_reset", "--after", "no_reset",
                              "read_flash", hex(checked.nvs.start),
@@ -140,4 +147,5 @@ def backup_jk_nvs(port: str, destination: Path, image_size: int,
         if hashlib.sha256(destination.read_bytes()).digest() != hashlib.sha256(raw).digest():
             destination.unlink(missing_ok=True)
             raise ValueError("Vérification de la sauvegarde NVS échouée.")
+        report(28, "JK · sauvegarde NVS vérifiée sur le PC. Préparation du flash…")
         return checked
