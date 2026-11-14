@@ -110,7 +110,12 @@ def provision_over_serial(port: str, values: dict[str, str] | None,
                           timeout_seconds: int = 50,
                           on_ready: Callable[[], None] | None = None,
                           payload_override: bytes | None = None) -> None:
-    """Never echoes passwords, tokens or the JSON payload into logs."""
+    """Reopen the SAME COM port after a reset during SEVPN_READY_V1 wait.
+
+    The only automatic retry is the unprivileged SEVPN_PING. The secret
+    configuration payload is sent ONCE, only after READY, and is NEVER retried
+    automatically after an ambiguous write/disconnect.
+    """
     payload = (payload_override if payload_override is not None
                else format_usb_configuration(values or {}))
     deadline = time.monotonic() + timeout_seconds
@@ -118,56 +123,105 @@ def provision_over_serial(port: str, values: dict[str, str] | None,
     ser.port = port
     ser.baudrate = 115200
     ser.timeout = 0.5
-    ser.write_timeout = 3
+    ser.write_timeout = 1.2
     ser.dtr = False
     ser.rts = False
-    while time.monotonic() < deadline:
-        try:
-            ser.open()
-            ser.dtr = False
-            ser.rts = False
-            break
-        except (serial.SerialException, OSError):
-            time.sleep(0.7)
-    else:
-        raise RuntimeError("Port USB indisponible après flash. "
-                           "Reconnecte le câble et utilise Configurer sans flasher.")
-
+    log("Attente du signal USB SEVPN_READY_V1. Aucun secret transmis avant la réponse.")
+    last_ping = 0.0
+    had_usb_error = False
+    connected_once = False
+    ready = False
     try:
-        log("Attente du signal USB SEVPN_READY_V1. Aucun secret transmis avant la réponse.")
-        last_ping = 0.0
         while time.monotonic() < deadline:
-            now = time.monotonic()
-            if now - last_ping > 1.5:
-                ser.write(b"SEVPN_PING\n")
-                last_ping = now
-            line = ser.readline().strip()
-            if b"SEVPN_READY_V1" in line:
-                log("Firmware VPN prêt : transmission locale de la configuration.")
-                break
-        else:
+            if not ser.is_open:
+                try:
+                    ser.open()
+                    ser.dtr = False
+                    ser.rts = False
+                    last_ping = 0.0
+                    if had_usb_error:
+                        log(f"Port {port} reconnecté : attente du mode BOOT USB.")
+                        had_usb_error = False
+                    connected_once = True
+                except (serial.SerialException, OSError):
+                    time.sleep(0.35)
+                    continue
+            try:
+                now = time.monotonic()
+                if now - last_ping >= 1.5 or last_ping == 0.0:
+                    ser.write(b"SEVPN_PING\n")
+                    last_ping = now
+                line = ser.readline().strip()
+                if b"SEVPN_READY_V1" in line:
+                    ready = True
+                    log("Firmware VPN prêt : transmission locale de la configuration.")
+                    break
+            except (serial.SerialException, serial.SerialTimeoutException, OSError):
+                # RESET can temporarily remove the USB CDC port on ESP32-S3.
+                # An unacknowledged PING has no side effects: safe to retry.
+                if not had_usb_error:
+                    log(f"Redémarrage USB détecté sur {port} : réouverture automatique. "
+                        "Ne lance pas un nouveau flash.")
+                had_usb_error = True
+                try:
+                    ser.close()
+                except (serial.SerialException, OSError):
+                    pass
+                time.sleep(0.35)
+        if not ready:
+            if connected_once:
+                raise RuntimeError(
+                    "Aucun SEVPN_READY_V1 reçu : redémarre l'ESP32 avec RESET, "
+                    "puis maintiens BOOT 3 secondes pendant les 9 secondes de "
+                    "démarrage. Si le port COM a changé, sélectionne le nouveau "
+                    "port et recommence l'ajout ciblé (sans flasher)."
+                )
             raise RuntimeError(
-                "Le firmware ne répond pas au protocole USB Smart Energy. "
-                "Sur une passerelle déjà associée, redémarre puis maintiens "
-                "BOOT pendant 3 secondes au démarrage pour autoriser la modification."
+                f"Le port {port} ne se rouvre pas après RESET. Sélectionne le "
+                "nouveau port COM dans le flasher, sans effacer la configuration."
             )
         if on_ready is not None:
             on_ready()
-        ser.write(payload)
-        ser.flush()
+        # This transmission MAY update NVS. Do not retry if it fails:
+        # data could already have been received, despite a lost USB ACK.
+        try:
+            ser.write(payload)
+            ser.flush()
+        except (serial.SerialException, serial.SerialTimeoutException, OSError):
+            raise RuntimeError(
+                "Connexion USB interrompue pendant l'envoi de configuration. "
+                "Enregistrement NON CONFIRMÉ : ne réessaie pas automatiquement. "
+                "Vérifie d'abord si l'ESP32 a redémarré et si l'onduleur est "
+                "accessible par le VPN."
+            ) from None
         confirmation_deadline = time.monotonic() + 10
         while time.monotonic() < confirmation_deadline:
-            line = ser.readline().strip()
+            try:
+                line = ser.readline().strip()
+            except (serial.SerialException, serial.SerialTimeoutException, OSError):
+                raise RuntimeError(
+                    "Port USB interrompu en attente de confirmation. "
+                    "Enregistrement NON CONFIRMÉ : vérifie l'ESP32 avant tout "
+                    "nouvel essai."
+                ) from None
             if b"SEVPN_OK_REBOOT" in line:
-                log("Configuration NVS confirmée par le firmware. Redémarrage automatique.")
+                log("Configuration NVS confirmée par le firmware. "
+                    "Redémarrage automatique.")
                 return
             if b"SEVPN_ERR_INVALID" in line:
-                raise RuntimeError("Le firmware a refusé les champs : "
-                                   "aucune configuration n'a été enregistrée.")
-        raise RuntimeError("Aucune confirmation NVS reçue. "
-                           "Vérifie l'appareil avant de retenter le flash.")
+                raise RuntimeError(
+                    "Le firmware a refusé les champs : "
+                    "aucune nouvelle configuration confirmée."
+                )
+        raise RuntimeError(
+            "Aucune confirmation NVS reçue. État NON CONFIRMÉ : "
+            "vérifie l'appareil avant de retenter l'opération."
+        )
     finally:
-        ser.close()
+        try:
+            ser.close()
+        except (serial.SerialException, OSError):
+            pass
 
 
 def add_voltronic_over_serial(port: str, slot: int, ip: str, code: str,

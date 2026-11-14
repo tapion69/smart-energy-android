@@ -2,7 +2,11 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from vpn_usb import format_usb_configuration,format_voltronic_patch,check_precompiled_image
+from unittest.mock import patch
+import serial
+
+from vpn_usb import (format_usb_configuration, format_voltronic_patch,
+                     check_precompiled_image, provision_over_serial)
 
 
 def values():
@@ -44,6 +48,81 @@ class UsbProtocolTests(unittest.TestCase):
             format_voltronic_patch(4,"192.168.1.63","TEST_ACCESS_123")
         with self.assertRaises(ValueError):
             format_voltronic_patch(1,"192.168.1.63","short")
+
+
+    def test_reset_during_ping_reopens_com_before_secret_payload(self):
+        class FakeSerial:
+            def __init__(self):
+                self.is_open=False
+                self.open_count=0
+                self.close_count=0
+                self.failed_first_ping=False
+                self.ready_was_received=False
+                self.pending=[]
+                self.payloads=[]
+            def open(self):
+                self.is_open=True
+                self.open_count+=1
+            def close(self):
+                self.is_open=False
+                self.close_count+=1
+            def write(self,packet):
+                if packet==b"SEVPN_PING\\n":
+                    if not self.failed_first_ping:
+                        self.failed_first_ping=True
+                        raise serial.SerialTimeoutException("Port reset mid-ping")
+                    self.pending.append(b"SEVPN_READY_V1\\n")
+                else:
+                    if not self.ready_was_received:
+                        raise AssertionError("Payload sent before READY")
+                    self.payloads.append(packet)
+                    self.pending.append(b"SEVPN_OK_REBOOT\\n")
+                return len(packet)
+            def readline(self):
+                line=self.pending.pop(0) if self.pending else b""
+                if b"SEVPN_READY_V1" in line:self.ready_was_received=True
+                return line
+            def flush(self):
+                return None
+        device=FakeSerial()
+        logs=[]
+        with patch("vpn_usb.serial.Serial",return_value=device), \
+             patch("vpn_usb.time.sleep",return_value=None):
+            provision_over_serial(
+                "COM7",None,logs.append,timeout_seconds=3,
+                payload_override=format_voltronic_patch(
+                    1,"192.168.1.63","EXAMPLE_CODE_123"))
+        self.assertGreaterEqual(device.open_count,2)
+        self.assertEqual(len(device.payloads),1)
+        self.assertTrue(device.ready_was_received)
+        self.assertTrue(any("réouverture automatique" in line for line in logs))
+        self.assertFalse(any("EXAMPLE_CODE_123" in line for line in logs))
+
+    def test_payload_write_failure_does_not_auto_retry(self):
+        class FakeSerial:
+            def __init__(self):
+                self.is_open=False
+                self.pending=[]
+                self.payload_count=0
+            def open(self):self.is_open=True
+            def close(self):self.is_open=False
+            def write(self,packet):
+                if packet==b"SEVPN_PING\\n":
+                    self.pending.append(b"SEVPN_READY_V1\\n")
+                    return len(packet)
+                self.payload_count+=1
+                raise serial.SerialTimeoutException("Lost connection after READY")
+            def readline(self):
+                return self.pending.pop(0) if self.pending else b""
+            def flush(self):return None
+        device=FakeSerial()
+        with patch("vpn_usb.serial.Serial",return_value=device):
+            with self.assertRaisesRegex(RuntimeError,"NON CONFIRMÉ"):
+                provision_over_serial(
+                    "COM7",None,lambda message:None,timeout_seconds=3,
+                    payload_override=format_voltronic_patch(
+                        1,"192.168.1.63","EXAMPLE_CODE_123"))
+        self.assertEqual(device.payload_count,1)
 
     def test_missing_field_fails(self):
         v = values()
