@@ -96,8 +96,14 @@ def backup_jk_nvs(port: str, destination: Path, image_size: int,
     destination.parent.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(prefix="smartenergy-jk-preflight-") as temp:
         table = Path(temp) / "partition_table.bin"
-        args = ["--chip", "esp32", "--port", port, "--baud", "460800"]
-        esptool_main(args + ["read_flash", hex(PARTITION_TABLE_OFFSET),
+        # One bootloader entry for the whole JK backup/flash operation.
+        # 115200 is slower but more tolerant of CP210x cables and serial noise.
+        # Keep the bootloader alive between *independent* esptool.main calls;
+        # otherwise every read restarts the user's JK app and the next call
+        # can see normal serial logs as "Invalid head of packet (0x65)".
+        args = ["--chip", "esp32", "--port", port, "--baud", "115200"]
+        esptool_main(args + ["--after", "no_reset",
+                             "read_flash", hex(PARTITION_TABLE_OFFSET),
                              hex(PARTITION_TABLE_BYTES), str(table)])
         if not table.is_file():
             raise ValueError("Impossible de relire les partitions du JK.")
@@ -108,7 +114,8 @@ def backup_jk_nvs(port: str, destination: Path, image_size: int,
         # The firmware's *literal* product identity must exist in app0.
         app_probe = Path(temp) / "jk-app-identity.bin"
         probe_bytes = min(checked.app0.length, 0x140000)
-        esptool_main(args + ["read_flash", hex(APP0_OFFSET),
+        esptool_main(args + ["--before", "no_reset", "--after", "no_reset",
+                             "read_flash", hex(APP0_OFFSET),
                              hex(probe_bytes), str(app_probe)])
         if not app_probe.is_file() or app_probe.stat().st_size != probe_bytes:
             raise ValueError("Lecture de l'identité firmware JK incomplète.")
@@ -120,7 +127,8 @@ def backup_jk_nvs(port: str, destination: Path, image_size: int,
                 "Ce port COM ne contient pas un firmware Smart JK reconnu. "
                 "Refus de reflasher un ESP VPN ou une autre carte.")
         private = Path(temp) / "nvs-private.bin"
-        esptool_main(args + ["read_flash", hex(checked.nvs.start),
+        esptool_main(args + ["--before", "no_reset", "--after", "no_reset",
+                             "read_flash", hex(checked.nvs.start),
                              hex(checked.nvs.length), str(private)])
         raw = private.read_bytes()
         if len(raw) != checked.nvs.length:
