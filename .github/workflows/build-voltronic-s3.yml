@@ -16,6 +16,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - name: Explicit ESP cache bridge security contract
+        run: python3 firmware/voltronic-esp32/tests/test_ha_bridge_contract.py
       - name: Strict host parser tests (no inverter, no RS232 output)
         run: |
           gcc -std=gnu11 -Wall -Wextra -Werror \
