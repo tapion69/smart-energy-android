@@ -5,6 +5,7 @@ import android.graphics.Color
 import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
 import android.view.Gravity
+import android.view.View
 import android.widget.LinearLayout
 import android.widget.TextView
 import org.json.JSONArray
@@ -150,6 +151,7 @@ class BatteryAdvancedCard(context: Context) : LinearLayout(context) {
     fun settings(index:Int, device:JSONObject?, telemetry:JSONObject? = null,
                  allowEdits:Boolean=false,
                  showDebug:Boolean=false,
+                 viaVpn:Boolean=false,
                  onModeToggle:(()->Unit)?=null,
                  onRefresh:(()->Unit)?=null,
                  onEdit: ((JSONObject)->Unit)? = null) {
@@ -160,7 +162,7 @@ class BatteryAdvancedCard(context: Context) : LinearLayout(context) {
             liveValues?.optString("frame_layout"),
             liveValues?.optInt("cell_count")
         ).joinToString()
-        val signature = "s" + index + allowEdits + showDebug +
+        val signature = "s" + index + allowEdits + showDebug + viaVpn +
             (device?.toString() ?: "") + statusSignature
         if (lastSignature == signature) return
         lastSignature = signature
@@ -181,7 +183,7 @@ class BatteryAdvancedCard(context: Context) : LinearLayout(context) {
         val pilot=device?.optJSONObject("write_pilot")
         if (pilot != null) {
             val ready=pilot.optBoolean("ready")
-            row(header,"Modifications locales",when {
+            row(header,if(viaVpn)"Modifications VPN" else "Modifications locales",when {
                 !allowEdits -> "Lecture seule"
                 ready -> "Autorisées après confirmation"
                 else -> "En attente de vérification"
@@ -203,6 +205,10 @@ class BatteryAdvancedCard(context: Context) : LinearLayout(context) {
         } else {
             if(showDebug) row(header,"Dernière lecture",s.optInt("age_seconds").toString()+" s")
             val array=s.optJSONArray("items")?:JSONArray()
+            val missing=s.optJSONArray("unavailable_items")?:JSONArray()
+            val total=s.optInt("catalog_total",0)
+            if(total>0)row(header,"Paramètres JK validés",
+                "${array.length()} / $total · ${missing.length()} non reçus")
             val groups=linkedMapOf<String,MutableList<JSONObject>>()
             for(i in 0 until array.length()){
                 val p=array.optJSONObject(i)?:continue
@@ -231,6 +237,31 @@ class BatteryAdvancedCard(context: Context) : LinearLayout(context) {
                         panel.addView(link)
                     }
                 }
+            }
+            if(missing.length()>0) {
+                val panel=panel("Paramètres non remontés par ce JK",
+                    "Absents ou hors plage dans la dernière trame type 1. "+
+                    "Aucune valeur inventée, aucune modification proposée.")
+                val heading=txt("Afficher les ${missing.length()} paramètres indisponibles  ▾",
+                    13f,true,mint)
+                val hidden=LinearLayout(context).apply {
+                    orientation=VERTICAL
+                    visibility=View.GONE
+                }
+                for(j in 0 until missing.length()) {
+                    val item=missing.optJSONObject(j)?:continue
+                    row(hidden,item.optString("label",item.optString("key")),"—")
+                }
+                heading.setPadding(dp(6),dp(10),dp(6),dp(10))
+                heading.setOnClickListener {
+                    hidden.visibility=if(hidden.visibility==View.VISIBLE)
+                        View.GONE else View.VISIBLE
+                    heading.text=if(hidden.visibility==View.VISIBLE)
+                        "Masquer les paramètres indisponibles  ▴"
+                    else "Afficher les ${missing.length()} paramètres indisponibles  ▾"
+                }
+                panel.addView(heading)
+                panel.addView(hidden)
             }
         }
         val info = device?.optJSONObject("info")
