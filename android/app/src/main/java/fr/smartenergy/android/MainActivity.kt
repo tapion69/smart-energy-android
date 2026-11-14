@@ -4147,60 +4147,108 @@ class MainActivity : Activity() {
         val code=auxiliaryCode(if(slot==1)"premium_voltronic_code_cipher"
             else "premium_voltronic_${slot}_code_cipher")
         val network=voltronicWifiNetwork()
-        if(network==null) {
-            updateFeedback.text="OTA réservée au Wi-Fi local. Connecte-toi à ta box."
+        if(network==null || selectedRoute()==JkTransportPolicy.Route.GATEWAY_VPN) {
+            updateFeedback.text="Mise à jour Voltronic : connecte-toi en Wi-Fi local, "+
+                "hors de la connexion VPN JK."
             return
         }
         if(!SunSpecReadOnly.isPrivateIPv4(host) || code.length !in 8..32) {
-            updateFeedback.text="Configure d'abord l'IP et le code du lecteur INV$slot."
+            updateFeedback.text="Configure l'IP et le code local du lecteur INV$slot."
             return
         }
-        updateFeedback.text="Vérification OTA du S3 INV$slot…"
+        updateFeedback.text="INV$slot : lecture du firmware et recherche des MAJ…"
         settingsWorker.execute {
-            val result=try {
+            try {
+                // Always read live version on the actual target, never a stale QPIGS snapshot.
+                val info=VoltronicReadOnlyClient.probe(host,code,port,network)
+                require(info.optString("product")=="smart-energy-voltronic-s3" &&
+                    info.optString("chip")=="esp32s3") {
+                    "ESP32-S3 Voltronic non reconnu"
+                }
+                val version=info.optString("version","")
+                require(version.isNotBlank()){"Version firmware illisible"}
                 val status=VoltronicLocalOta.status(host,code,port,network)
-                if(!status.optBoolean("ota_supported")) {
+                if(!status.optBoolean("ota_supported",false) ||
+                    status.optString("partition_scheme")!="dual_ota") {
                     runOnUiThread {
-                        updateFeedback.text="INV$slot : partitions OTA absentes. "+
-                            "Migration USB nécessaire ; aucune écriture effectuée."
+                        updateFeedback.text="INV$slot · firmware $version : "+
+                            "OTA indisponible (partitionnement à migrer en USB)."
                     }
                     return@execute
                 }
-                val feed=SmartEnergyUpdateFeed.parseVoltronic(
-                    SmartEnergyUpdateFeed.fetchPublicManifest(
-                        SmartEnergyUpdateFeed.VOLTRONIC_MANIFEST),
-                    voltronicFleet.snapshotFor(slot).optString("firmwareVersion",""))
-                    ?:throw IllegalStateException("Aucune version S3 plus récente publiée")
-                require(feed.compatible){"Image non compatible ESP32-S3 N16R8"}
+                val manifest=SmartEnergyUpdateFeed.fetchPublicManifest(
+                    SmartEnergyUpdateFeed.VOLTRONIC_MANIFEST)
+                val feed=SmartEnergyUpdateFeed.parseVoltronic(manifest,version)
+                if(feed==null && version=="0.3.2-dev-ota-gated-read-only") {
+                    // Backward-compatible single test image, pre-validated and embedded.
+                    // Do not route through the unpublished GitHub firmware catalog.
+                    runOnUiThread {
+                        if(!isFinishing && !isDestroyed)
+                            prepareBundledVoltronicOta(slot)
+                    }
+                    return@execute
+                }
+                if(feed==null) {
+                    runOnUiThread {
+                        updateFeedback.text="INV$slot : firmware $version. "+
+                            "Aucune mise à jour Voltronic plus récente publiée."
+                    }
+                    return@execute
+                }
+                require(feed.compatible){"Version proposée incompatible avec l'ESP32-S3"}
+                require(!status.optBoolean("rollback_pending",false)) {
+                    "Rollback en attente : mise à jour refusée"
+                }
+                if(status.has("flash_ready"))require(status.optBoolean("flash_ready")) {
+                    "ESP32 non prêt à recevoir un firmware"
+                }
                 runOnUiThread {
+                    if(isFinishing || isDestroyed)return@runOnUiThread
                     AlertDialog.Builder(this)
-                        .setTitle("OTA INV$slot — ${feed.version}")
-                        .setMessage("Le firmware vient de GitHub, avec contrôle SHA-256. "+
-                            "Le transfert utilisera uniquement le Wi-Fi local. "+
-                            "Le S3 redémarrera ; les données NVS et les réglages "+
-                            "des BMS ne sont pas modifiés. Continuer ?")
+                        .setTitle("OTA Voltronic INV$slot : ${feed.version}")
+                        .setMessage("Actuel : $version\n"+
+                            "Nouveau : ${feed.version}\n\n"+
+                            "Téléchargement GitHub contrôlé par SHA-256, "+
+                            "puis transfert Wi-Fi local avec confirmation "+
+                            "et redémarrage de l'ESP32-S3. "+
+                            "Aucun réglage JK, VPN ou onduleur n'est modifié.")
                         .setNegativeButton("Annuler",null)
-                        .setPositiveButton("Installer") { _,_ ->
-                            updateFeedback.text="OTA INV$slot en cours…"
+                        .setPositiveButton("Installer la mise à jour") { _,_ ->
+                            updateFeedback.text="INV$slot : transfert OTA…"
                             settingsWorker.execute {
                                 val message=try {
                                     VoltronicLocalOta.install(this,feed,host,code,port,
                                         network){statusText->
                                             runOnUiThread {updateFeedback.text=statusText}
                                         }
-                                    "INV$slot : OTA reçue et validée, redémarrage du S3."
-                                }catch(ex:Exception){
-                                    "OTA INV$slot refusée : "+
-                                        (ex.message?:ex.javaClass.simpleName).take(150)
+                                    var verified=false
+                                    repeat(12) {
+                                        if(!verified){
+                                            Thread.sleep(2500)
+                                            try {
+                                                verified=VoltronicReadOnlyClient.probe(
+                                                    host,code,port,network)
+                                                    .optString("version")==feed.version
+                                            }catch(_:Exception){}
+                                        }
+                                    }
+                                    if(verified)
+                                        "INV$slot : OTA ${feed.version} confirmée après redémarrage."
+                                    else "INV$slot : OTA acceptée, mais version non confirmée. "+
+                                        "Ne relance pas l'installation automatiquement."
+                                }catch(ex:Exception) {
+                                    "INV$slot : état OTA incertain ("+
+                                        (ex.message?:ex.javaClass.simpleName).take(120)+
+                                        "). Vérifie la version avant tout nouvel essai."
                                 }
-                                runOnUiThread{updateFeedback.text=message}
+                                runOnUiThread {if(!isFinishing)updateFeedback.text=message}
                             }
                         }.show()
                 }
             }catch(ex:Exception) {
-                runOnUiThread{
-                    updateFeedback.text="OTA INV$slot : "+
-                        (ex.message?:ex.javaClass.simpleName).take(150)
+                runOnUiThread {
+                    if(!isFinishing)updateFeedback.text="INV$slot : vérification impossible ("+
+                        (ex.message?:ex.javaClass.simpleName).take(135)+")."
                 }
             }
         }
