@@ -3834,13 +3834,14 @@ class MainActivity : Activity() {
         val pv1Voltage=value("pv1_voltage_v")
         val pv1Current=value("pv1_current_a")
         val pv2Power=value("pv2_power_w")
-        val pv1Power=if(pv1Voltage!=null && pv1Current!=null &&
+        val pv1Native=value("pv1_power_native_w")?.takeIf {it in 0.0..30000.0}
+        val pv1Power=pv1Native ?: if(pv1Voltage!=null && pv1Current!=null &&
             pv1Voltage in 0.0..900.0 && pv1Current in 0.0..100.0)
             pv1Voltage*pv1Current else null
         if(pv1Power!=null && pv2Power!=null &&
             pv2Power in 0.0..30000.0) {
             obj.put("pvPowerW",pv1Power+pv2Power)
-            obj.put("pvDetail","PV1 estimé + PV2 mesuré")
+            obj.put("pvDetail",(if(pv1Native!=null)"PV1 natif" else "PV1 estimé")+" + PV2 natif")
         } else {
             obj.put("pvDetail",
                 if(pv1Power!=null)"PV1 seul · PV2 indisponible" else
