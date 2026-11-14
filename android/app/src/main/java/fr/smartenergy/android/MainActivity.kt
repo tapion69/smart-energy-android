@@ -3743,6 +3743,23 @@ class MainActivity : Activity() {
         val power:Double?=if(complete && readings.all {
             it.has("power_w") && it.optDouble("power_w",Double.NaN).isFinite()
         }) readings.sumOf { it.optDouble("power_w") } else null
+        val current:Double?=if(complete && readings.all {
+            it.has("current_a") && it.optDouble("current_a",Double.NaN).isFinite()
+        }) readings.sumOf { it.optDouble("current_a") } else null
+        val meanVoltage:Double?=if(complete && readings.all {
+            it.has("voltage_v") && it.optDouble("voltage_v",Double.NaN).isFinite()
+        }) readings.map {it.optDouble("voltage_v")}.average() else null
+        // Battery probes only; MOS temperature measures the BMS electronics,
+        // not the pack. Optional probes stay absent instead of becoming 0 °C.
+        val batteryProbes=readings.flatMap { v ->
+            listOf("temp1_c","temp2_c","temp3_c","temp4_c","temp5_c")
+                .mapNotNull {key ->
+                    v.optDouble(key,Double.NaN).takeIf{
+                        v.has(key) && it.isFinite() && it in -40.0..120.0
+                    }
+                }
+        }
+        val meanBatteryTemp=batteryProbes.takeIf{it.isNotEmpty()}?.average()
         val display=JSONArray()
         devices.forEachIndexed { index,item ->
             val v=if(item.optBoolean("available"))item.optJSONObject("values") else null
@@ -3756,6 +3773,13 @@ class MainActivity : Activity() {
                     entry.put("voltage",v.optDouble("voltage_v"))
                 if(v.has("power_w") && v.optDouble("power_w",Double.NaN).isFinite())
                     entry.put("powerW",v.optDouble("power_w"))
+                if(v.has("current_a") && v.optDouble("current_a",Double.NaN).isFinite())
+                    entry.put("currentA",v.optDouble("current_a"))
+                for(key in listOf("temp1_c","temp2_c","temp3_c",
+                                  "temp4_c","temp5_c")) {
+                    if(v.has(key) && v.optDouble(key,Double.NaN).isFinite())
+                        entry.put(key,v.optDouble(key))
+                }
             }
             display.put(entry)
         }
@@ -3766,6 +3790,9 @@ class MainActivity : Activity() {
             .put("devices",display)
             .put("soc",soc ?: JSONObject.NULL)
             .put("powerW",power ?: JSONObject.NULL)
+            .put("currentA",current ?: JSONObject.NULL)
+            .put("meanVoltageV",meanVoltage ?: JSONObject.NULL)
+            .put("batteryTempC",meanBatteryTemp ?: JSONObject.NULL)
         publishPremiumDashboard()
     }
 
