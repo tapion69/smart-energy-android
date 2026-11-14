@@ -4058,6 +4058,11 @@ class MainActivity : Activity() {
         }
         updateFeedback.text="Vérification des versions de ${readers.size} lecteur(s) JK…"
         settingsWorker.execute {
+            // The catalog is read-only until an actual JK OTA handler and
+            // partition rollback have been validated on the user's hardware.
+            val catalog=try {
+                SmartEnergyUpdateFeed.fetchPublicManifest(SmartEnergyUpdateFeed.JK_MANIFEST)
+            }catch(_:Exception){null}
             val summary=readers.map { reader ->
                 try {
                     val url=URL("http://${reader.host}/api/v1/info")
@@ -4077,11 +4082,18 @@ class MainActivity : Activity() {
                         }
                         val version=data.optString("version","inconnue")
                         val ota=data.optBoolean("ota",false)
-                        if(ota)
-                            "ESP${reader.slot} · $version : OTA annoncée par le lecteur "+
-                            "(publication officielle et signature encore à valider)"
-                        else "ESP${reader.slot} · $version : OTA indisponible sur ce firmware ; "+
-                            "migration USB nécessaire avant les futures MAJ sans câble"
+                        val newer=catalog?.let { text ->
+                            SmartEnergyUpdateFeed.parseJk(text,version)
+                        }
+                        if(!ota)
+                            "ESP${reader.slot} · $version : OTA indisponible sur ce firmware ; "+
+                            "pas de flash proposé. Une migration USB sûre "+
+                            "sera nécessaire pour les futures MAJ sans câble."
+                        else if(newer!=null && newer.compatible)
+                            "ESP${reader.slot} · $version : nouvelle version "+
+                            "${newer.version} annoncée ; installation bloquée "+
+                            "tant que l'OTA JK n'est pas validée en conditions réelles."
+                        else "ESP${reader.slot} · $version : aucune MAJ JK plus récente publiée."
                     }finally{c.disconnect()}
                 }catch(ex:Exception) {
                     "ESP${reader.slot} : vérification impossible ("+
