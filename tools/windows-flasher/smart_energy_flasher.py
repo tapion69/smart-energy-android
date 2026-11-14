@@ -817,7 +817,8 @@ class Flasher(tk.Tk):
             if private_backup is None:
                 raise ValueError("Sauvegarde NVS obligatoire avant la mise à jour USB JK.")
             self._progress_stage("JK : lecture des partitions et sauvegarde NVS PRIVÉE…")
-            checked=backup_jk_nvs(port,private_backup,file.stat().st_size,esptool_main)
+            checked=backup_jk_nvs(port,private_backup,file.stat().st_size,esptool_main,
+                                  progress=self._progress_step)
             self._log("Table des partitions validée ; sauvegarde NVS conservée "+
                 "sur ton PC uniquement. Aucun code ou mot de passe affiché.")
             if checked.has_second_ota_slot:
@@ -1062,8 +1063,9 @@ class Flasher(tk.Tk):
     def _flash_percent(self, percent: int) -> None:
         # Esptool reports actual flash-writing percentage; VPN still needs
         # physical USB provisioning after image transfer.
-        bar = 5 + round((70 if self.operation_mode in ("vpn","voltronic") else 90) *
-                        percent / 100)
+        bar = (5 + round(70*percent/100)
+               if self.operation_mode in ("vpn","voltronic")
+               else 30 + round(65*percent/100))
         self.events.put(("progress", str(bar)))
         self.events.put(("stage", f"Écriture du firmware : {percent} %"))
 
