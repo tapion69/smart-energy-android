@@ -187,7 +187,9 @@ class VoltronicFleet(
                             .put("httpConsecutiveErrors",errors)
                             .put("httpErrorsTotal",httpTotalErrors[c.slot-1])
                             .put("lastHttpErrorKind",errorKind)
-                            .put("detail",if(recent)
+                            .put("detail",if(ex is VoltronicVpnHttpException)
+                                ex.userHint
+                                else if(recent)
                                 "HTTP instable · dernière mesure récente conservée"
                                 else if(errors<VoltronicHttpResilience.OFFLINE_AFTER)
                                 "HTTP instable · lecture en cours de reprise"

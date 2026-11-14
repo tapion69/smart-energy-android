@@ -19,6 +19,14 @@ internal object VoltronicHttpResilience {
 
     // No exception messages: they may contain LAN addresses or credentials.
     fun errorKind(ex:Throwable):String=when(ex) {
+        is VoltronicVpnHttpException -> when(ex.statusCode) {
+            503 -> "VPN_INV_NON_CONFIGURE_503"
+            502 -> "VPN_ESP_VOLTRONIC_INJOIGNABLE_502"
+            401 -> "VPN_TOKEN_INCORRECT_401"
+            403 -> "VPN_ACCES_REFUSE_403"
+            404 -> "VPN_FIRMWARE_SANS_ROUTE_VOLTRONIC_404"
+            else -> "VPN_REPONSE_HTTP_${ex.statusCode}"
+        }
         is SocketTimeoutException -> "DELAI_HTTP"
         is ConnectException -> "CONNEXION_REFUSEE"
         is SocketException -> "SOCKET_RESEAU"

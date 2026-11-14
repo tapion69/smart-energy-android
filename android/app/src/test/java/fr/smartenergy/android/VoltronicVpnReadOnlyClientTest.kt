@@ -10,6 +10,17 @@ class VoltronicVpnReadOnlyClientTest {
             "100.064.1.1","100.64.1.01","8.8.8.8"))
             assertFalse(x,VoltronicVpnReadOnlyClient.isTailnetIpv4(x))
     }
+    @Test fun vpnStatusDiagnosticsKeepCausesDistinct() {
+        assertEquals("VPN_INV_NON_CONFIGURE_503",
+            VoltronicHttpResilience.errorKind(VoltronicVpnHttpException(503)))
+        assertEquals("VPN_ESP_VOLTRONIC_INJOIGNABLE_502",
+            VoltronicHttpResilience.errorKind(VoltronicVpnHttpException(502)))
+        assertEquals("VPN_TOKEN_INCORRECT_401",
+            VoltronicHttpResilience.errorKind(VoltronicVpnHttpException(401)))
+        assertTrue(VoltronicVpnHttpException(503).userHint.contains("non enregistré"))
+        assertTrue(VoltronicVpnHttpException(502).userHint.contains("inaccessible"))
+        assertFalse(VoltronicVpnHttpException(503).userHint.contains("192.168"))
+    }
     @Test fun routesAreFixed() {
         assertEquals("/api/v1/voltronic/1/telemetry",
             VoltronicVpnReadOnlyClient.fixedPath(1,false))

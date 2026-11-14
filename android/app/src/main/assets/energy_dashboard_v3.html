@@ -70,6 +70,18 @@ button{font:inherit;cursor:pointer}
 .battery-icon:before{content:'';position:absolute;top:-7px;left:17px;width:14px;height:5px;background:#54ed80}
 .battery-icon .fill{background:#50df76;opacity:.8;width:100%;height:85%;margin-top:4px}
 .battery-node strong{font-size:19px}.battery-node .small{font-size:10px}
+.jk-home-title{display:flex;align-items:center;justify-content:space-between;gap:8px}
+.jk-home-title h3{margin:0;color:#e6fff7}
+.jk-home-count{font-size:11px;color:#55e9a5;white-space:nowrap}
+.jk-home-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;margin-top:10px}
+.jk-home-card{min-width:0;border:1px solid #366273;border-radius:12px;background:#132d3e;padding:11px}
+.jk-home-card.offline{border-color:#75644d;opacity:.83}
+.jk-home-card strong{display:block;color:#61ecc3;font-size:13px;overflow-wrap:anywhere}
+.jk-home-card .jk-state{font-size:10px;color:#b8d3de;margin:2px 0 5px}
+.jk-home-card.offline .jk-state{color:#e6ba84}
+.jk-home-card .jk-reading{font-weight:750;font-size:17px;line-height:1.45}
+.jk-home-card .jk-secondary{color:#b7d0dc;font-size:11px}
+@media(max-width:320px){.jk-home-grid{grid-template-columns:1fr}}
 .native-section{border:1px solid #326477;border-radius:9px;margin:8px 0;padding:9px;background:#082735}
 .native-section summary{color:#97e7c5;font-weight:bold;cursor:pointer}
 .raw-params{max-height:235px;overflow-y:auto}
@@ -127,6 +139,12 @@ button{font:inherit;cursor:pointer}
 <div class="battery-node"><div class="battery-icon"><div class="fill"></div></div><div><strong id="sunSoc">— %</strong><div class="small" id="sunBattery">Tension : — · Courant : —</div></div></div>
 
 </section></div>
+<section class="panel" id="homeJkPanel" style="display:none" aria-label="Batteries JK enregistrées">
+  <div class="jk-home-title"><h3>▣ Batteries JK BMS</h3><span class="jk-home-count" id="homeJkCount">—</span></div>
+  <div class="jk-home-grid" id="homeJkCards"></div>
+  <div class="muted" style="font-size:10px;margin-top:9px">Mesures des passerelles JK déjà configurées. Appuie sur Batteries pour les détails et paramètres.</div>
+</section>
+<div class="note" id="vpnVoltronicNote" style="display:none"></div>
 <div class="note" id="qualityNote">Valeurs indisponibles = « — ». Une puissance réseau native n'indique pas à elle seule un import EDF.</div>
 </div>
 <div id="pageInverters" style="display:none">
@@ -159,6 +177,52 @@ el('configureInverter').onclick=function(){appNav('configuration')};
 el('modernBtn').onclick=function(){setStyle('modern',true)};
 el('sunBtn').onclick=function(){setStyle('sunsynk',true)};
 function row(parent,a,b){var wrap=document.createElement('div');wrap.className='row';var x=document.createElement('span');x.textContent=a;var y=document.createElement('b');y.textContent=b;wrap.append(x,y);parent.append(wrap)}
+function renderVpnVoltronicStatus(items){
+ var warnings=[];
+ items.forEach(function(inv){
+  if(!inv||inv.fresh===true)return;
+  var k=inv.lastHttpErrorKind||'';
+  var m=k==='VPN_INV_NON_CONFIGURE_503'?
+   'non enregistré dans la passerelle VPN (503) : vérifier la confirmation NVS':
+   k==='VPN_ESP_VOLTRONIC_INJOIGNABLE_502'?
+   'passerelle VPN joignable, mais ESP32-S3 Voltronic inaccessible (502)':
+   k==='VPN_TOKEN_INCORRECT_401'?'token VPN refusé (401)':
+   k==='VPN_FIRMWARE_SANS_ROUTE_VOLTRONIC_404'?'firmware VPN trop ancien (404)':
+   k==='VPN_ACCES_REFUSE_403'?'accès hors VPN refusé (403)':'';
+  if(m)warnings.push('INV'+inv.slot+' : '+m);
+ });
+ var box=el('vpnVoltronicNote');
+ box.style.display=warnings.length?'':'none';
+ box.textContent=warnings.join(' · ');
+}
+function renderHomeJk(jk){
+ var devices=Array.isArray(jk.devices)?jk.devices:[];
+ var panel=el('homeJkPanel'),host=el('homeJkCards');
+ panel.style.display=devices.length?'':'none';
+ if(!devices.length){host.replaceChildren();return}
+ var online=devices.filter(function(x){return x&&x.available===true}).length;
+ txt('homeJkCount',online+' / '+devices.length+' en ligne');
+ // Rebuild only small read-only cards; never touch BLE, associations or BMS tabs.
+ host.replaceChildren();
+ devices.forEach(function(bms,index){
+  if(!bms||typeof bms!=='object')return;
+  var card=document.createElement('div');
+  card.className='jk-home-card'+(bms.available===true?'':' offline');
+  var name=document.createElement('strong');
+  name.textContent=(typeof bms.name==='string'&&bms.name.trim())?bms.name:'Batt-'+(index+1);
+  var state=document.createElement('div');state.className='jk-state';
+  state.textContent=bms.available===true?'En ligne':'Hors ligne · dernière mesure non affichée';
+  var first=document.createElement('div');first.className='jk-reading';
+  first.textContent=bms.available===true?fmt(bms.soc,'%'):'— %';
+  var secondary=document.createElement('div');secondary.className='jk-secondary';
+  secondary.textContent=bms.available===true?
+    'Tension : '+fmt(bms.voltage,'V',2)+
+    (n(bms.powerW)!==null?' · '+fmt(bms.powerW,'W'):'')+
+    (n(bms.currentA)!==null?' · '+fmt(bms.currentA,'A',1):''):
+    'Mesures indisponibles';
+  card.append(name,state,first,secondary);host.append(card);
+ });
+}
 function drawMppts(list){var host=el('mppts');host.replaceChildren();list.forEach(function(c){var b=document.createElement('div');b.className='mppt-box';var name=document.createElement('div');name.className='name';name.textContent='☀ INV'+c.slot+' · MPPT'+c.index;var val=document.createElement('strong');val.textContent=fmt(c.powerW,'W');var detail=document.createElement('div');detail.className='detail';detail.textContent=fmt(c.currentA,'A',1)+' · '+fmt(c.voltageV,'V',1);var quality=document.createElement('div');quality.className='quality';quality.textContent=c.derived?'Puissance estimée':'Lecture native';b.append(name,val,detail,quality);host.append(b)});
 if(!list.length){var none=document.createElement('div');none.className='mppt-empty';none.style.gridColumn='1/-1';none.textContent='MPPT indisponibles : aucune valeur mesurée fraîche';host.append(none)}requestAnimationFrame(wires)}
 function wires(){if(style!=='sunsynk'||active!=='home')return;var area=el('mpptArea'),box=el('mppts'),svg=el('mpptWires'),nodes=Array.from(box.querySelectorAll('.mppt-box'));var a=area.getBoundingClientRect();var cx=a.width/2,bus=a.height-23;svg.setAttribute('viewBox','0 0 '+a.width+' '+a.height);svg.replaceChildren();if(!nodes.length)return;function addPath(d){var p=document.createElementNS('http://www.w3.org/2000/svg','path');p.setAttribute('d',d);svg.append(p)};nodes.forEach(function(node){var r=node.getBoundingClientRect();var x=r.left-a.left+r.width/2,y=r.bottom-a.top;addPath('M '+x+' '+y+' V '+bus+' H '+cx)});addPath('M '+cx+' '+bus+' V '+(a.height-1));var dot=document.createElementNS('http://www.w3.org/2000/svg','circle');dot.setAttribute('cx',cx);dot.setAttribute('cy',bus);dot.setAttribute('r',3.6);svg.append(dot)}
@@ -351,7 +415,9 @@ txt('nativePvDayValue',fmt(pvDay,'kWh',2));
 txt('nativeLoadDayValue',fmt(loadDay,'kWh',2));
 txt('sunHome',fmt(l,'W'));txt('sunGrid',fmt(grid,'W'));txt('sunGridInfo',gridInfo);txt('sunInv',live.length+'/'+items.length+' onduleur(s)');txt('sunAc',live.length===1?fmt(live[0].outputVoltageV,'V',1)+' · '+fmt(live[0].outputHz,'Hz',2):'Voir onglets Onduleurs');txt('sunSoc',fmt(soc,'%'));txt('sunBattery',(batLabel||'Batterie sans mesure')+' · '+(bvol===null?'—':fmt(bvol,'V',1))+(bcur===null?'':' · '+fmt(bcur,'A',1)));drawMppts(pvs);
 txt('route',data.route||'Local');txt('count',items.length+' INV · '+pvs.length+' MPPT frais');txt('updated',data.updated||'—');
-txt('qualityNote',items.length===0?'Ajoute un ESP32-S3 Voltronic dans Configuration pour obtenir des mesures. Aucune valeur fictive n’est affichée.':unstable?'HTTP momentanément instable : les dernières mesures sont récentes, les flux sont suspendus et une nouvelle tentative est prévue.':stale?'Les dernières mesures restent consultables dans Onduleurs mais ne sont pas considérées comme actuelles.':'Les totaux excluent les onduleurs sans mesure fraîche. Réseau : sens à vérifier, jamais assimilé à un achat EDF. MPPT non détectés non affichés.');
+renderHomeJk(jk);
+ renderVpnVoltronicStatus(items);
+ txt('qualityNote',items.length===0?'Ajoute un ESP32-S3 Voltronic dans Configuration pour obtenir des mesures. Aucune valeur fictive n’est affichée.':unstable?'HTTP momentanément instable : les dernières mesures sont récentes, les flux sont suspendus et une nouvelle tentative est prévue.':stale?'Les dernières mesures restent consultables dans Onduleurs mais ne sont pas considérées comme actuelles.':'Les totaux excluent les onduleurs sans mesure fraîche. Réseau : sens à vérifier, jamais assimilé à un achat EDF. MPPT non détectés non affichés.');
 renderInverters()}
 window.updateSmartEnergy=function(d){if(!d||typeof d!=='object')return;data=d;setStyle(d.style||style,false);render()};
 window.updateSmartEnergy(data);

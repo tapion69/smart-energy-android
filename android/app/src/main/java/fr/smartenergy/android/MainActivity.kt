@@ -1127,8 +1127,11 @@ class MainActivity : Activity() {
                     if(obj.optBoolean("available"))
                         "INV1 : télémétrie Voltronic reçue par VPN."
                     else "INV1 : relais joint, mesure QPIGS indisponible."
+                }catch(ex:VoltronicVpnHttpException){
+                    "VPN INV1 : "+ex.userHint
                 }catch(ex:Exception){
-                    "VPN INV1 : "+(ex.message?:"lecture impossible").take(100)
+                    "VPN INV1 : échec réseau ou délai expiré ("+
+                        ex.javaClass.simpleName.take(45)+")"
                 }
                 runOnUiThread { state(result) }
             }
@@ -3657,6 +3660,8 @@ class MainActivity : Activity() {
                     entry.put("soc",v.optDouble("soc_pct"))
                 if(v.has("voltage_v") && v.optDouble("voltage_v",Double.NaN).isFinite())
                     entry.put("voltage",v.optDouble("voltage_v"))
+                if(v.has("power_w") && v.optDouble("power_w",Double.NaN).isFinite())
+                    entry.put("powerW",v.optDouble("power_w"))
             }
             display.put(entry)
         }
