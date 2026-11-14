@@ -328,6 +328,9 @@ class Flasher(tk.Tk):
                    command=self._flash_vpn).pack(side="right", padx=5)
         ttk.Button(vpn.actions, text="Ajouter INV sans effacer le reste",
                    command=self._add_voltronic_only).pack(side="left", padx=5)
+        ttk.Button(vpn.actions, text="Corriger IP ESP JK dans VPN",
+                   command=self._patch_jk_vpn).pack(side="left", padx=5)
+
         ttk.Button(vpn.actions,text="Autoriser écritures VPN (USB)",
                    command=lambda:self._set_vpn_remote_writes(True)).pack(side="left",padx=3)
         ttk.Button(vpn.actions,text="Bloquer écritures VPN (USB)",
@@ -568,6 +571,17 @@ class Flasher(tk.Tk):
                   "clique « Ajouter INV sans effacer le reste » en bas de l'écran.",
                   wraplength=680).grid(
                    row=1,column=0,columnspan=3,pady=(6,2))
+        update_jk=ttk.LabelFrame(root,text="Corriger un ESP JK · conserver tout le VPN",padding=6)
+        update_jk.grid(row=11,column=0,columnspan=3,sticky="ew",padx=8,pady=6)
+        ttk.Label(update_jk,text="Lecteur JK à corriger :").grid(row=0,column=0,padx=5)
+        self.vpn_jk_patch_slot=tk.StringVar(value="2")
+        ttk.Combobox(update_jk,textvariable=self.vpn_jk_patch_slot,
+                     values=["1","2","3"],state="readonly",width=5).grid(
+                     row=0,column=1,sticky="w",padx=4)
+        ttk.Label(update_jk,text="Renseigne seulement la nouvelle IP JK dans les champs ci-dessus. "+
+                  "Laisse son code vide s'il n'a pas changé : il sera conservé dans le VPN. "+
+                  "Puis clique « Corriger IP ESP JK dans VPN » en bas.",
+                  wraplength=700).grid(row=1,column=0,columnspan=3,pady=(6,2))
         ttk.Button(root, text="Reconfigurer TOUT via USB (remplace anciens réglages)",
                    command=self._configure_only).grid(
             row=10, column=0, columnspan=3, pady=(0, 6))
@@ -995,6 +1009,35 @@ class Flasher(tk.Tk):
                 mode="config")
         except Exception as exc:
             messagebox.showerror("Écritures VPN",str(exc))
+
+    def _patch_jk_vpn(self) -> None:
+        """Repair one saved JK LAN target; never replace VPN credentials."""
+        try:
+            from vpn_usb import update_jk_target_over_serial, format_jk_target_patch
+            port=self._assert_ready()
+            slot=int(self.vpn_jk_patch_slot.get())
+            ip=self.fields[f"jk{slot}_ip"].get().strip()
+            code=self.fields[f"jk{slot}_code"].get()
+            format_jk_target_patch(slot,ip,code)
+            if not messagebox.askyesno(
+                "VPN · corriger uniquement le JK",
+                f"Corriger l'adresse IP du lecteur ESP JK{slot} dans la passerelle VPN ?\n\n"
+                "Seule la cible JK choisie sera modifiée.\n"
+                "Si le code est vide, le code JK déjà enregistré sera conservé.\n"
+                "Wi-Fi, Tailscale, token VPN, autorisation des écritures, "
+                "autres JK et Voltronic restent inchangés.\n\n"
+                "Cette opération nécessite le firmware ESP VPN 0.3.8 ou supérieur "
+                "et un accès USB physique BOOT, sans reflash JK."
+            ): return
+            self.secret_values=[code] if code else []
+            self._run_async(
+                lambda:update_jk_target_over_serial(
+                    port,slot,ip,code,self._log,
+                    on_ready=lambda:self._progress_step(
+                        88,f"ESP VPN : mise à jour ciblée de JK{slot}…")),
+                mode="config")
+        except Exception as exc:
+            messagebox.showerror("VPN · IP JK",str(exc))
 
     def _add_voltronic_only(self) -> None:
         """Only volt{n}_ip and volt{n}_code change; preserve other NVS keys."""
