@@ -18,6 +18,13 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 
+// Each device has its own NVS record. The firmware contains NO user tokens.
+// WARNING: initial prototype does NOT yet enable ESP32 flash encryption.
+// Treat lost/stolen physical ESP32 boards as secret exposure.
+#define CFG_NAMESPACE "se_vpn_cfg"
+#define CFG_KEY "json"
+#define LINE_MAX 1600
+static const char *TAG="SE-VPN-USB";
 #if CONFIG_IDF_TARGET_ESP32S3
 /*
  * A physical hold/release on BOOT while running requests a ONE-TIME,
@@ -51,13 +58,6 @@ static void usb_maintenance_watch_task(void *unused) {
 }
 #endif
 
-// Each device has its own NVS record. The firmware contains NO user tokens.
-// WARNING: initial prototype does NOT yet enable ESP32 flash encryption.
-// Treat lost/stolen physical ESP32 boards as secret exposure.
-#define CFG_NAMESPACE "se_vpn_cfg"
-#define CFG_KEY "json"
-#define LINE_MAX 1600
-static const char *TAG="SE-VPN-USB";
 static se_vpn_config_t current;
 static char line_buffer[LINE_MAX];
 
