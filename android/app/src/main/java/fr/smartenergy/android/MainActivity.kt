@@ -4276,9 +4276,13 @@ class MainActivity : Activity() {
                 .setPositiveButton("Compris",null).show()
             return
         }
-        AlertDialog.Builder(this).setTitle("Chargement des réglages INV$slot")
-            .setMessage("Lecture des paramètres natifs QPIRI/QDOP en cours…")
-            .setPositiveButton("OK",null).show()
+        // A blocking informational dialog used to remain on top of the actual
+        // editor after every read, even when a write was already completed.
+        // Use a non-blocking toast; the actual settings/error dialog appears
+        // only after the background read finishes.
+        android.widget.Toast.makeText(this,
+            "INV$slot : relecture QPIRI/QDOP…",
+            android.widget.Toast.LENGTH_SHORT).show()
         settingsWorker.execute {
             val settings=try {
                 VoltronicParameterEditor.current(host,code,port,network)
