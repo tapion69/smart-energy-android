@@ -22,3 +22,19 @@ assert 'puts(line_buffer)' not in source
 assert 'printf("%s",line_buffer)' not in source
 assert 'uart_write_bytes(UART_NUM_0,message,strlen(message))' in source
 print("USB provisioning architecture: ESP32 classic + S3 native and CH343 UART0 supported")
+
+# Runtime BOOT maintenance: no fragile RESET/BOOT timing, no write over LAN/VPN.
+assert 'RTC_NOINIT_ATTR static uint32_t usb_maintenance_request' in source
+assert 'SE_USB_MAINT_MAGIC' in source
+assert 'consecutive_low>=35' in source
+assert 'if(armed)' in source
+assert 'usb_maintenance_request=SE_USB_MAINT_MAGIC' in source
+assert 'esp_restart()' in source
+assert 'esp_reset_reason()==ESP_RST_SW' in source
+assert 'usb_maintenance_request=0' in source
+assert 'runtime_physical_request || physical_reconfigure_requested()' in source
+assert 'se_vpn_start_physical_maintenance_monitor(void)' in source
+assert 'usb_maintenance_watch_task' in source
+main=(Path(__file__).resolve().parents[1] / "main" / "main.c").read_text()
+assert '#define GATEWAY_VERSION "0.3.5-dev-boot-anytime-usb"' in main
+assert 'se_vpn_start_physical_maintenance_monitor();' in main
