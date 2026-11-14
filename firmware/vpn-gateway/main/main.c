@@ -261,16 +261,21 @@ static bool get_target(se_route_t route, lan_target_t *out) {
     }
     if(route == SE_ROUTE_VOLT_STATUS || route == SE_ROUTE_VOLT1_DETAILS ||
        route == SE_ROUTE_VOLT2_TELEMETRY || route == SE_ROUTE_VOLT2_DETAILS ||
+       route == SE_ROUTE_VOLT1_INFO || route == SE_ROUTE_VOLT2_INFO ||
+       route == SE_ROUTE_VOLT3_INFO ||
        route == SE_ROUTE_VOLT3_TELEMETRY || route == SE_ROUTE_VOLT3_DETAILS) {
         const int slot=(route==SE_ROUTE_VOLT3_TELEMETRY ||
-            route==SE_ROUTE_VOLT3_DETAILS)?2:
+            route==SE_ROUTE_VOLT3_DETAILS || route==SE_ROUTE_VOLT3_INFO)?2:
             (route==SE_ROUTE_VOLT2_TELEMETRY ||
-             route==SE_ROUTE_VOLT2_DETAILS)?1:0;
+             route==SE_ROUTE_VOLT2_DETAILS || route==SE_ROUTE_VOLT2_INFO)?1:0;
         const bool details=(route==SE_ROUTE_VOLT1_DETAILS ||
             route==SE_ROUTE_VOLT2_DETAILS || route==SE_ROUTE_VOLT3_DETAILS);
         out->host=personal ? personal->voltronic_ip[slot]:"";
         out->access_code=personal ? personal->voltronic_code[slot]:"";
-        out->path=details?"/api/v1/details":"/api/v1/telemetry";
+        const bool info=(route==SE_ROUTE_VOLT1_INFO ||
+            route==SE_ROUTE_VOLT2_INFO || route==SE_ROUTE_VOLT3_INFO);
+        out->path=info?"/api/v1/info":
+            details?"/api/v1/details":"/api/v1/telemetry";
         out->port=18081;
         return se_is_private_ipv4(out->host) &&
             strlen(out->access_code)>=8 && strlen(out->access_code)<=32;
@@ -442,9 +447,11 @@ static bool parse_jk_status_mac(httpd_req_t *req,char result[18]) {
     // Android URLEncoder encodes MAC colon as %3A. Decode ONLY that syntax;
     // reject all other encodings, extra query delimiters and path injection.
     size_t output=0;
-    for(size_t i=0;mac[i] && output<17;i++) {
+    const size_t mac_length=strlen(mac);
+    for(size_t i=0;i<mac_length && output<17;i++) {
         if(mac[i]=='%') {
-            if(mac[i+1]!='3' || (mac[i+2]!='A' && mac[i+2]!='a'))
+            if(i+2>=mac_length || mac[i+1]!='3' ||
+               (mac[i+2]!='A' && mac[i+2]!='a'))
                 return false;
             result[output++]=':';i+=2;
         }else result[output++]=mac[i];
@@ -569,7 +576,7 @@ static esp_err_t relay_parameter_control(httpd_req_t *req) {
 static void start_private_http(void) {
     httpd_config_t cfg = HTTPD_DEFAULT_CONFIG();
     cfg.server_port = GATEWAY_PORT;
-    cfg.max_uri_handlers = 40;
+    cfg.max_uri_handlers = 44;
     cfg.stack_size = 8192;
     cfg.max_open_sockets = 4;
     cfg.lru_purge_enable = true;
@@ -588,6 +595,9 @@ static void start_private_http(void) {
         {.uri="/api/v1/jk/2/details", .method=HTTP_GET, .handler=relay_read},
         {.uri="/api/v1/jk/3/telemetry", .method=HTTP_GET, .handler=relay_read},
         {.uri="/api/v1/jk/3/details", .method=HTTP_GET, .handler=relay_read},
+        {.uri="/api/v1/voltronic/1/info",.method=HTTP_GET,.handler=relay_read},
+        {.uri="/api/v1/voltronic/2/info",.method=HTTP_GET,.handler=relay_read},
+        {.uri="/api/v1/voltronic/3/info",.method=HTTP_GET,.handler=relay_read},
         {.uri="/api/v1/voltronic/status", .method=HTTP_GET, .handler=relay_read},
         {.uri="/api/v1/voltronic/1/telemetry",.method=HTTP_GET,.handler=relay_read},
         {.uri="/api/v1/voltronic/1/details",.method=HTTP_GET,.handler=relay_read},
