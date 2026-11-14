@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import json
 import time
+import ipaddress
 from pathlib import Path
 from typing import Callable
 
@@ -18,6 +19,7 @@ def format_usb_configuration(values: dict[str, str]) -> bytes:
     expected = {
         "wifi_ssid", "wifi_password", "tailscale_key", "gateway_token",
         "jk1_ip", "jk1_code", "jk2_ip", "jk2_code", "jk3_ip", "jk3_code",
+        "volt1_ip", "volt1_code", "volt2_ip", "volt2_code", "volt3_ip", "volt3_code",
     }
     if not expected.issubset(values):
         raise ValueError("Champs VPN manquants.")
@@ -29,6 +31,24 @@ def format_usb_configuration(values: dict[str, str]) -> bytes:
     if len(data) > 1599 or b"\x00" in data:
         raise ValueError("La configuration VPN dépasse la taille USB autorisée.")
     return data
+
+
+def format_voltronic_patch(slot: int, ip: str, code: str) -> bytes:
+    """USB-only change of one target; never sends VPN/JK credentials."""
+    if slot not in (1, 2, 3):
+        raise ValueError("Choisis INV1, INV2 ou INV3.")
+    try:
+        address=ipaddress.IPv4Address(ip.strip())
+        private=any(address in ipaddress.ip_network(network) for network in
+                    ("10.0.0.0/8","172.16.0.0/12","192.168.0.0/16"))
+    except ValueError:
+        private=False
+    if not private:raise ValueError("Adresse IP Voltronic privée invalide.")
+    if not 8<=len(code)<=32 or any(ch in code for ch in "\r\n\x00"):
+        raise ValueError("Code Voltronic invalide (8–32 caractères).")
+    data=json.dumps({"slot":slot,"ip":ip.strip(),"code":code},
+                    ensure_ascii=True,separators=(",",":"))
+    return ("SEVPN_ADD_VOLTRONIC "+data+"\n").encode("ascii")
 
 
 def check_precompiled_image(image: Path, mode: str, chip: str = "esp32") -> int:
@@ -85,12 +105,14 @@ def flash_precompiled(port: str, image: Path, mode: str,
     log("Firmware précompilé transféré. Configuration physique USB en cours.")
 
 
-def provision_over_serial(port: str, values: dict[str, str],
+def provision_over_serial(port: str, values: dict[str, str] | None,
                           log: Callable[[str], None],
                           timeout_seconds: int = 50,
-                          on_ready: Callable[[], None] | None = None) -> None:
+                          on_ready: Callable[[], None] | None = None,
+                          payload_override: bytes | None = None) -> None:
     """Never echoes passwords, tokens or the JSON payload into logs."""
-    payload = format_usb_configuration(values)
+    payload = (payload_override if payload_override is not None
+               else format_usb_configuration(values or {}))
     deadline = time.monotonic() + timeout_seconds
     ser = serial.Serial()
     ser.port = port
@@ -146,3 +168,11 @@ def provision_over_serial(port: str, values: dict[str, str],
                            "Vérifie l'appareil avant de retenter le flash.")
     finally:
         ser.close()
+
+
+def add_voltronic_over_serial(port: str, slot: int, ip: str, code: str,
+                              log: Callable[[str], None],
+                              on_ready: Callable[[], None] | None = None) -> None:
+    """Preserve NVS keys other than volt{slot}_ip/code, via physical BOOT."""
+    payload=format_voltronic_patch(slot,ip,code)
+    provision_over_serial(port,None,log,on_ready=on_ready,payload_override=payload)

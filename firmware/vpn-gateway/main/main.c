@@ -35,7 +35,7 @@
 #include "gateway_policy.h"
 #include "vpn_provision.h"
 
-#define GATEWAY_VERSION "0.3.2-dev-voltronic-relay"
+#define GATEWAY_VERSION "0.3.3-dev-voltronic-preserving-usb-add"
 #define GATEWAY_PORT 18767
 #define MAX_JSON_BYTES 32768
 

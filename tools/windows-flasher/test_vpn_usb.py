@@ -2,7 +2,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from vpn_usb import format_usb_configuration, check_precompiled_image
+from vpn_usb import format_usb_configuration,format_voltronic_patch,check_precompiled_image
 
 
 def values():
@@ -13,6 +13,8 @@ def values():
         "gateway_token": "ABCDEF0123456789ABCDEFGH",
         "jk1_ip": "192.168.1.10", "jk1_code": "EXAMPLE123",
         "jk2_ip": "", "jk2_code": "", "jk3_ip": "", "jk3_code": "",
+        "volt1_ip":"","volt1_code":"","volt2_ip":"","volt2_code":"",
+        "volt3_ip":"","volt3_code":"",
     }
 
 
@@ -24,6 +26,24 @@ class UsbProtocolTests(unittest.TestCase):
         self.assertTrue(packet.endswith(b"}\n"))
         self.assertEqual(packet.count(b"\n"), 1)
         self.assertLess(len(packet), 1600)
+
+    def test_voltronic_add_never_sends_existing_secrets(self):
+        packet=format_voltronic_patch(1,"192.168.1.63","TEST_ACCESS_123")
+        self.assertTrue(packet.startswith(b"SEVPN_ADD_VOLTRONIC "))
+        self.assertEqual(packet.count(b"\n"),1)
+        self.assertNotIn(b"tailscale",packet)
+        self.assertNotIn(b"wifi_",packet)
+        self.assertNotIn(b"jk1",packet)
+        self.assertNotIn(b"gateway_token",packet)
+
+    def test_voltronic_add_validates_address_and_slot(self):
+        for ip in ("8.8.8.8","100.64.0.4","169.254.3.4","bad-ip"):
+            with self.assertRaises(ValueError):
+                format_voltronic_patch(1,ip,"TEST_ACCESS_123")
+        with self.assertRaises(ValueError):
+            format_voltronic_patch(4,"192.168.1.63","TEST_ACCESS_123")
+        with self.assertRaises(ValueError):
+            format_voltronic_patch(1,"192.168.1.63","short")
 
     def test_missing_field_fails(self):
         v = values()

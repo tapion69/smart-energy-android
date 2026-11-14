@@ -474,9 +474,19 @@ class Flasher(tk.Tk):
         ttk.Button(root, text="Flasher et configurer l'ESP32 VPN",
                    command=self._flash_vpn).grid(
             row=8, column=0, columnspan=3, pady=(8, 4))
-        ttk.Button(root, text="Configurer via USB sans reflasher",
+        append=ttk.LabelFrame(root,text="Ajouter un onduleur · conserver VPN et JK",padding=6)
+        append.grid(row=9,column=0,columnspan=3,sticky="ew",padx=8,pady=6)
+        ttk.Label(append,text="INV à ajouter :").grid(row=0,column=0,padx=5)
+        self.vpn_patch_slot=tk.StringVar(value="1")
+        ttk.Combobox(append,textvariable=self.vpn_patch_slot,
+                     values=["1","2","3"],state="readonly",width=5).grid(
+                     row=0,column=1,sticky="w",padx=4)
+        ttk.Button(append,text="Ajouter cet onduleur via USB sans effacer le reste",
+                   command=self._add_voltronic_only).grid(
+                   row=1,column=0,columnspan=3,pady=(6,2))
+        ttk.Button(root, text="Reconfigurer TOUT via USB (remplace anciens réglages)",
                    command=self._configure_only).grid(
-            row=9, column=0, columnspan=3, pady=(0, 6))
+            row=10, column=0, columnspan=3, pady=(0, 6))
 
     def _build_voltronic(self, root: ttk.Frame) -> None:
         ttk.Label(root,
@@ -827,6 +837,35 @@ class Flasher(tk.Tk):
                 92, "ESP32 prêt : configuration VPN en cours d'enregistrement…"))
         self._progress_step(98, "Configuration VPN enregistrée et confirmée par l'ESP32.")
 
+    def _add_voltronic_only(self) -> None:
+        """Only volt{n}_ip and volt{n}_code change; preserve other NVS keys."""
+        try:
+            from vpn_usb import add_voltronic_over_serial, format_voltronic_patch
+            port=self._assert_ready()
+            slot=int(self.vpn_patch_slot.get())
+            ip=self.fields[f"volt{slot}_ip"].get().strip()
+            code=self.fields[f"volt{slot}_code"].get()
+            format_voltronic_patch(slot,ip,code)
+            if not messagebox.askyesno(
+                "Ajout Voltronic sans effacement",
+                f"Ajouter INV{slot} au VPN existant ?\n\n"
+                "Seuls l'IP et le code de cet onduleur seront enregistrés.\n"
+                "Wi-Fi, identité Tailscale, token et tous les lecteurs JK restent inchangés.\n\n"
+                "Branche le VPN en USB, redémarre-le puis maintiens BOOT "
+                "3 secondes pendant les 9 premières secondes après redémarrage.\n"
+                "Le firmware VPN doit prendre en charge l'ajout Voltronic ciblé."
+            ):
+                return
+            self.secret_values=[code]
+            self._run_async(
+                lambda:add_voltronic_over_serial(
+                    port,slot,ip,code,self._log,
+                    on_ready=lambda:self._progress_step(
+                        88,"VPN prêt : ajout du seul onduleur sélectionné…")),
+                mode="config")
+        except Exception as exc:
+            messagebox.showerror("Ajout Voltronic",str(exc))
+
     def _configure_only(self) -> None:
         try:
             port = self._assert_ready()
@@ -838,8 +877,9 @@ class Flasher(tk.Tk):
                 "Pour une passerelle déjà configurée : redémarre-la, "
                 "puis maintiens BOOT pendant 3 secondes dans les 9 secondes "
                 "suivant son démarrage (pas pendant la mise sous tension).\n\n"
-                "Cette action ne flashe aucun firmware et n'efface pas les BMS. "
-                "Continuer ?"
+                "ATTENTION : cette opération remplace TOUTE la configuration "
+                "Wi-Fi, Tailscale et lecteurs JK. Pour ajouter seulement "
+                "un Voltronic, utilise le bouton dédié. Continuer ?"
             ):
                 return
             from vpn_usb import provision_over_serial
