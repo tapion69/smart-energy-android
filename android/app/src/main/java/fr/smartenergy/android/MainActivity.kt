@@ -4441,7 +4441,7 @@ class MainActivity : Activity() {
                 }else AlertDialog.Builder(this)
                     .setTitle("Paramètres Voltronic · INV$slot")
                     .setItems(settings.map {
-                        "${it.label} : ${it.value} ${it.unit}"+
+                        VoltronicParameterEditor.settingDescription(it)+
                             if(it.editable)"  ✎" else "  🔒"
                     }.toTypedArray()) { _,index ->
                         val item=settings[index]
@@ -4449,9 +4449,8 @@ class MainActivity : Activity() {
                             AlertDialog.Builder(this)
                                 .setTitle("INV$slot · lecture seule")
                                 .setMessage("${item.label} : ${item.value} ${item.unit}\n\n"+
-                                    "Cette valeur est bien remontée dans les données natives, "+
-                                    "mais l'écriture n'est pas autorisée : "+
-                                    "commande non validée ou autorisation VPN USB absente. "+
+                                    "La valeur est disponible en lecture, mais l'écriture n'est "+
+                                    "pas autorisée sur ce firmware ou sur le VPN. "+
                                     "Aucune commande envoyée.")
                                 .setPositiveButton("OK",null).show()
                         }else proposeVoltronicChange(slot,host,port,code,network,route,
@@ -4461,11 +4460,30 @@ class MainActivity : Activity() {
         }
     }
 
+
     private fun proposeVoltronicChange(
         slot:Int,host:String,port:Int,code:String,network:Network?,
         route:VoltronicVpnRoute?,setting:VoltronicParameterEditor.Setting
     ) {
         if(!setting.editable)return
+        val priorities=VoltronicParameterEditor.priorityChoices(setting.key)
+        if(priorities.isNotEmpty()) {
+            // POP / PCP are restricted integer choices, not free-form text.
+            // Current code is explicitly labelled to prevent confusion.
+            AlertDialog.Builder(this)
+                .setTitle("INV$slot · ${setting.label}")
+                .setItems(priorities.map { (value,title) ->
+                    "${value.toInt()} · $title"+
+                        if(value==setting.value)"  ✓ actuel" else ""
+                }.toTypedArray()) { _,index ->
+                    val desired=priorities[index].first
+                    if(desired!=setting.value)
+                        confirmVoltronicChange(slot,host,port,code,network,
+                            route,setting,desired)
+                }
+                .setNegativeButton("Annuler",null).show()
+            return
+        }
         val value=input("Nouvelle valeur ${setting.unit}")
         value.inputType=android.text.InputType.TYPE_CLASS_NUMBER or
             android.text.InputType.TYPE_NUMBER_FLAG_DECIMAL or
@@ -4473,62 +4491,76 @@ class MainActivity : Activity() {
         value.setText(setting.value.toString())
         AlertDialog.Builder(this)
             .setTitle("INV$slot · ${setting.label}")
-            .setMessage("Valeur actuelle native : ${setting.value} ${setting.unit}. "+
-                "Entre la nouvelle valeur. Le firmware refusera un pas "+
-                "ou une plage non compatibles.")
+            .setMessage("Valeur actuelle : ${setting.value} ${setting.unit}. "+
+                "Le firmware contrôle les limites et les pas autorisés.")
             .setView(value)
             .setNegativeButton("Annuler",null)
             .setPositiveButton("Continuer") { _,_ ->
-                val desired=value.text.toString().trim().replace(',','.').toDoubleOrNull()
-                if(desired==null || !desired.isFinite() || desired==setting.value) {
+                val desired=value.text.toString().trim()
+                    .replace(',','.').toDoubleOrNull()
+                if(desired==null || !desired.isFinite() ||
+                   desired==setting.value) {
                     AlertDialog.Builder(this).setTitle("Valeur incorrecte")
                         .setMessage("Indique une nouvelle valeur numérique différente.")
                         .setPositiveButton("OK",null).show()
-                }else {
-                    AlertDialog.Builder(this)
-                        .setTitle("Confirmer l'écriture INV$slot")
-                        .setMessage("${setting.label}\n"+
-                            "Valeur actuelle : ${setting.value} ${setting.unit}\n"+
-                            "Nouvelle valeur : $desired ${setting.unit}\n\n"+
-                            "La valeur sera relue juste avant l'écriture. "+
-                            (if(route!=null)
-                                "MODIFICATION À DISTANCE via VPN Tailscale. "+
-                                "Le changement sera appliqué sur l'onduleur réel. "
-                              else "")+
-                            "Une seule commande sera envoyée, puis une "+
-                            "relecture native immédiate vérifiera le résultat. "+
-                            "Si la confirmation échoue, aucun nouvel essai "+
-                            "ne sera déclenché automatiquement.")
-                        .setNegativeButton("Annuler",null)
-                        .setPositiveButton("Confirmer et vérifier") { _,_ ->
-                            updateFeedback.text="INV$slot : transaction en cours. "+
-                                "Ne lance pas une seconde modification."
-                            settingsWorker.execute {
-                                val status=try {
-                                    val result=VoltronicParameterEditor.change(
-                                        host,code,port,network,setting.key,
-                                        setting.value,desired,route,slot)
-                                    if(result.optBoolean("verified",false))
-                                        "INV$slot : paramètre vérifié par relecture native."
-                                    else "INV$slot : modification NON CONFIRMÉE ("+
-                                        result.optString("result","inconnu")+"). "+
-                                        "Relis les paramètres avant toute autre action."
-                                }catch(ex:Exception){
-                                    "INV$slot : état non confirmé ("+
-                                        (ex.message?:ex.javaClass.simpleName).take(130)+
-                                        "). Vérifie l'onduleur, sans réessai automatique."
-                                }
-                                runOnUiThread {
-                                    if(!isFinishing){
-                                        updateFeedback.text=status
-                                        AlertDialog.Builder(this)
-                                            .setTitle("Résultat Voltronic · INV$slot")
-                                            .setMessage(status)
-                                            .setPositiveButton("OK",null).show()
-                                    }
-                                }
-                            }
-                        }.show()
+                } else confirmVoltronicChange(slot,host,port,code,network,
+                    route,setting,desired)
+            }.show()
+    }
+
+    private fun confirmVoltronicChange(
+        slot:Int,host:String,port:Int,code:String,network:Network?,
+        route:VoltronicVpnRoute?,setting:VoltronicParameterEditor.Setting,
+        desired:Double
+    ) {
+        if(!setting.editable || !desired.isFinite() || desired==setting.value)return
+        val oldText=VoltronicParameterEditor.settingDescription(setting)
+        val choice=VoltronicParameterEditor.priorityChoices(setting.key)
+            .find { kotlin.math.abs(it.first-desired)<0.01 }?.second
+        val newText=choice?.let { "$it (code ${desired.toInt()})" }
+            ?: "$desired ${setting.unit}"
+        AlertDialog.Builder(this)
+            .setTitle("Confirmer le changement · INV$slot")
+            .setMessage("${setting.label}\n"+
+                "Actuel : $oldText\n"+
+                "Nouveau : $newText\n\n"+
+                "L'ESP32 vérifie l'ancienne valeur juste avant l'écriture. "+
+                (if(route!=null)
+                    "MODIFICATION À DISTANCE via VPN Tailscale. "+
+                    "Elle agit sur l'onduleur réel. " else "")+
+                "Une seule commande sera envoyée, avec une relecture native. "+
+                "Aucun nouvel essai automatique en cas de doute.")
+            .setNegativeButton("Annuler",null)
+            .setPositiveButton("Confirmer et vérifier") { _,_ ->
+                updateFeedback.text="INV$slot : modification en cours. "+
+                    "Ne lance pas une seconde commande."
+                settingsWorker.execute {
+                    val status=try {
+                        val result=VoltronicParameterEditor.change(
+                            host,code,port,network,setting.key,
+                            setting.value,desired,route,slot)
+                        if(result.optBoolean("verified",false))
+                            "INV$slot : valeur confirmée par relecture native."
+                        else "INV$slot : modification NON CONFIRMÉE ("+
+                            result.optString("result","inconnu")+"). "+
+                            "Relis les paramètres avant toute autre action."
+                    }catch(ex:Exception) {
+                        "INV$slot : état non confirmé ("+
+                            (ex.message?:ex.javaClass.simpleName).take(130)+
+                            "). Vérifie l'onduleur sans réessai automatique."
+                    }
+                    runOnUiThread {
+                        if(!isFinishing && !isDestroyed) {
+                            updateFeedback.text=status
+                            AlertDialog.Builder(this)
+                                .setTitle("Résultat Voltronic · INV$slot")
+                                .setMessage(status)
+                                .setNegativeButton("Fermer",null)
+                                .setPositiveButton("Relire les paramètres") { _,_ ->
+                                    loadEditableVoltronicSettings(slot)
+                                }.show()
+                        }
+                    }
                 }
             }.show()
     }
