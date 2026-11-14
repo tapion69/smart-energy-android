@@ -1246,10 +1246,11 @@ class MainActivity : Activity() {
         },7)
         val jkUpdates=section(updatesPage,"Firmware ESP32 JK · mises à jour",true)
         add(jkUpdates,label("Vérification des lecteurs ESP1 / ESP2 / ESP3 "+
-            "sans interrompre le Bluetooth. L'OTA reste désactivée sur les "+
-            "firmwares JK actuels qui annoncent ota=false. Une mise à jour "+
-            "ne sera jamais tentée tant que le lecteur ne dispose pas de "+
-            "partitions et d'un service OTA validés.",12f,color=subdued))
+            "sans interrompre le Bluetooth. Une OTA depuis GitHub sera "+
+            "proposée seulement si le firmware du lecteur annonce une "+
+            "partition OTA prête et qu'une image plus récente avec "+
+            "SHA-256 est publiée. Les firmwares JK historiques ota=false "+
+            "exigent une première migration USB sans effacement NVS.",12f,color=subdued))
         add(jkUpdates,action("Vérifier les MAJ des ESP JK") {
             checkJkFirmwareUpdates()
         },7)
@@ -4041,7 +4042,7 @@ class MainActivity : Activity() {
         val wifi=voltronicWifiNetwork()
         if(wifi==null || selectedRoute()==JkTransportPolicy.Route.GATEWAY_VPN) {
             updateFeedback.text="ESP JK : vérification firmware réservée au Wi-Fi local. "+
-                "Désactive le VPN pour cette opération."
+                "Le VPN ne permet pas de flasher un lecteur."
             return
         }
         data class Reader(val slot:Int,val host:String,val code:String)
@@ -4058,11 +4059,12 @@ class MainActivity : Activity() {
         }
         updateFeedback.text="Vérification des versions de ${readers.size} lecteur(s) JK…"
         settingsWorker.execute {
-            // The catalog is read-only until an actual JK OTA handler and
-            // partition rollback have been validated on the user's hardware.
+            // No automatic flash: two checks before offering the OTA,
+            // the official SHA-pinned catalog and the reader's live partition.
             val catalog=try {
                 SmartEnergyUpdateFeed.fetchPublicManifest(SmartEnergyUpdateFeed.JK_MANIFEST)
             }catch(_:Exception){null}
+            val available=mutableListOf<Pair<Reader,SmartEnergyUpdateFeed.FirmwareRelease>>()
             val summary=readers.map { reader ->
                 try {
                     val url=URL("http://${reader.host}/api/v1/info")
@@ -4081,19 +4083,30 @@ class MainActivity : Activity() {
                             "Appareil JK non reconnu"
                         }
                         val version=data.optString("version","inconnue")
-                        val ota=data.optBoolean("ota",false)
-                        val newer=catalog?.let { text ->
-                            SmartEnergyUpdateFeed.parseJk(text,version)
+                        val advertised=data.optBoolean("ota",false)
+                        val newer=catalog?.let {
+                            SmartEnergyUpdateFeed.parseJk(it,version)
                         }
-                        if(!ota)
-                            "ESP${reader.slot} · $version : OTA indisponible sur ce firmware ; "+
-                            "pas de flash proposé. Une migration USB sûre "+
-                            "sera nécessaire pour les futures MAJ sans câble."
-                        else if(newer!=null && newer.compatible)
-                            "ESP${reader.slot} · $version : nouvelle version "+
-                            "${newer.version} annoncée ; installation bloquée "+
-                            "tant que l'OTA JK n'est pas validée en conditions réelles."
-                        else "ESP${reader.slot} · $version : aucune MAJ JK plus récente publiée."
+                        if(!advertised)
+                            "ESP${reader.slot} · $version : pas encore d'OTA sur ce firmware. "+
+                            "Première migration USB nécessaire, sans effacer NVS."
+                        else {
+                            val ready=try {
+                                JkLocalOta.status(reader.host,reader.code,wifi)
+                            }catch(_:Exception){null}
+                            if(ready?.optBoolean("flash_ready")==true &&
+                               ready.optString("partition_scheme")=="dual_ota" &&
+                               newer?.compatible==true) {
+                                available.add(reader to newer)
+                                "ESP${reader.slot} · $version → ${newer.version} : mise à jour disponible."
+                            }else if(ready==null)
+                                "ESP${reader.slot} · $version : vérifier le service OTA (aucun flash)."
+                            else if(!ready.optBoolean("ota_supported") ||
+                                    !ready.optBoolean("flash_ready"))
+                                "ESP${reader.slot} · $version : OTA momentanément bloquée "+
+                                "(partition ou firmware non prêt)."
+                            else "ESP${reader.slot} · $version : aucune nouvelle MAJ JK publiée."
+                        }
                     }finally{c.disconnect()}
                 }catch(ex:Exception) {
                     "ESP${reader.slot} : vérification impossible ("+
@@ -4101,8 +4114,51 @@ class MainActivity : Activity() {
                 }
             }.joinToString("\n")
             runOnUiThread {
-                if(!isFinishing && ::updateFeedback.isInitialized)
-                    updateFeedback.text=summary
+                if(isFinishing || !::updateFeedback.isInitialized)return@runOnUiThread
+                updateFeedback.text=summary
+                if(available.isNotEmpty()) {
+                    val choices=available.map {
+                        "ESP${it.first.slot} → ${it.second.version}"
+                    }.toTypedArray()
+                    AlertDialog.Builder(this)
+                        .setTitle("Mise à jour OTA JK disponible")
+                        .setMessage("Choisis un lecteur. Vérification SHA-256 et confirmation "+
+                            "avant le flash. Conserve son alimentation, et ses paramètres "+
+                            "Wi-Fi, BLE et association en NVS.")
+                        .setItems(choices) { _,which ->
+                            val (reader,release)=available[which]
+                            AlertDialog.Builder(this)
+                                .setTitle("CONFIRMER OTA JK · ESP${reader.slot}")
+                                .setMessage("Installer ${release.version} sur ESP${reader.slot} "+
+                                    "depuis GitHub, exclusivement en Wi-Fi local ? "+
+                                    "Ne débranche pas l'ESP32 pendant l'opération.")
+                                .setNegativeButton("Annuler",null)
+                                .setPositiveButton("Installer") { _,_ ->
+                                    updateFeedback.text="ESP${reader.slot} : OTA JK en cours…"
+                                    settingsWorker.execute {
+                                        val message=try {
+                                            JkLocalOta.install(this,release,reader.host,
+                                                reader.code,wifi) {
+                                                progress->runOnUiThread {
+                                                    updateFeedback.text=progress
+                                                }
+                                            }
+                                            if(JkLocalOta.confirmVersion(reader.host,
+                                                    reader.code,wifi,release.version))
+                                                "ESP${reader.slot} : firmware ${release.version} "+
+                                                "confirmé après redémarrage."
+                                            else "ESP${reader.slot} : OTA reçue, mais version "+
+                                                "non confirmée. Contrôle l'ESP avant tout nouvel essai."
+                                        }catch(ex:Exception) {
+                                            "ESP${reader.slot} : mise à jour non confirmée ("+
+                                                (ex.message?:ex.javaClass.simpleName).take(120)+
+                                                "). Aucun nouvel essai automatique."
+                                        }
+                                        runOnUiThread {if(!isFinishing)updateFeedback.text=message}
+                                    }
+                                }.show()
+                        }.setNegativeButton("Plus tard",null).show()
+                }
             }
         }
     }
