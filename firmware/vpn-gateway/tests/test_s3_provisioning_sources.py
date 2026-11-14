@@ -36,7 +36,7 @@ assert 'runtime_physical_request || physical_reconfigure_requested()' in source
 assert 'se_vpn_start_physical_maintenance_monitor(void)' in source
 assert 'usb_maintenance_watch_task' in source
 main=(Path(__file__).resolve().parents[1] / "main" / "main.c").read_text()
-assert '#define GATEWAY_VERSION "0.3.6-dev-usb-verified-ack"' in main
+assert '#define GATEWAY_VERSION "0.3.7-dev-usb-nvs-stack"' in main
 assert 'se_vpn_start_physical_maintenance_monitor();' in main
 
 # Never trust unsolicited READY as proof of a bidirectional USB link.
