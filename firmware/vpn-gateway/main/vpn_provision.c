@@ -126,6 +126,9 @@ static bool parse_config(const char *line,se_vpn_config_t *out) {
         if(has_ip)any_target=true;
     }
     if(!any_target)ok=false;
+    const cJSON *writes=cJSON_GetObjectItemCaseSensitive(doc,"remote_writes_enabled");
+    if(writes && !cJSON_IsBool(writes))ok=false;
+    result.remote_writes_enabled=cJSON_IsTrue(writes);
     cJSON_Delete(doc);
     if(ok)*out=result;
     return ok;
@@ -226,6 +229,36 @@ finish:
     return success;
 }
 
+/* USB-only opt-in; preserve every existing JK, Voltronic, Wi-Fi and
+ * TailTiny secret. No network endpoint can enable remote control. */
+static bool patch_remote_writes(bool enabled) {
+    char stored[LINE_MAX]={0};
+    nvs_handle_t h;
+    size_t size=sizeof stored;
+    if(nvs_open(CFG_NAMESPACE,NVS_READONLY,&h)!=ESP_OK)return false;
+    const esp_err_t status=nvs_get_str(h,CFG_KEY,stored,&size);
+    nvs_close(h);
+    if(status!=ESP_OK || size==0 || size>=LINE_MAX)return false;
+    se_vpn_config_t before={0},after={0};
+    if(!parse_config(stored,&before))return false;
+    cJSON *doc=cJSON_Parse(stored);
+    if(!cJSON_IsObject(doc)) {cJSON_Delete(doc);return false;}
+    cJSON_DeleteItemFromObjectCaseSensitive(doc,"remote_writes_enabled");
+    cJSON_AddBoolToObject(doc,"remote_writes_enabled",enabled);
+    char *merged=cJSON_PrintUnformatted(doc);
+    bool ok=merged && strlen(merged)<LINE_MAX && parse_config(merged,&after);
+    if(ok) {
+        // Compare all other fields, including unknown optional reader slots.
+        before.remote_writes_enabled=enabled;
+        ok=memcmp(&before,&after,sizeof(before))==0 && save_config(merged);
+    }
+    if(merged)free(merged);
+    cJSON_Delete(doc);
+    memset(&before,0,sizeof before);
+    memset(&after,0,sizeof after);
+    memset(stored,0,sizeof stored);
+    return ok;
+}
 static void serial_prepare(void) {
     // Do not use either USB transport for OTA, LAN or user access. Physical
     // cable only. Separate sources prevent interleaving partial JSON lines.
@@ -280,6 +313,16 @@ static void provisioning_loop(void) {
                     usb_ack(port,"SEVPN_READY_V1");
                     memset(buffer,0,LINE_MAX);*used=0;
                     continue;
+                }
+                if(strcmp(buffer,"SEVPN_REMOTE_WRITES_ON")==0 ||
+                   strcmp(buffer,"SEVPN_REMOTE_WRITES_OFF")==0) {
+                    const bool enable=strcmp(buffer,"SEVPN_REMOTE_WRITES_ON")==0;
+                    if(patch_remote_writes(enable)) {
+                        usb_ack(port,"SEVPN_OK_REBOOT");
+                        memset(buffer,0,LINE_MAX);
+                        vTaskDelay(pdMS_TO_TICKS(1200));
+                        esp_restart();
+                    }
                 }
                 const char add_volt[]="SEVPN_ADD_VOLTRONIC ";
                 if(*used>sizeof(add_volt)-1 &&
