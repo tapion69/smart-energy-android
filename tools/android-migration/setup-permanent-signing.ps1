@@ -40,8 +40,8 @@ if (!(Test-Path $Store)) {
     if (!$row) { throw 'Signing recovery password is missing' }
     $Pass = $row.Substring('STORE_PASSWORD='.Length)
 }
-$keyDetails = & $Keytool -list -v -keystore $Store -storepass $Pass -alias $Alias
-if ($LASTEXITCODE -ne 0) { throw 'Cannot read permanent signing key' }
+$keyDetails = & $Keytool -list -v -storetype PKCS12 -keystore $Store -storepass $Pass -alias $Alias
+if ($LASTEXITCODE -ne 0) { throw 'Cannot read permanent signing key. The existing key and recovery file were preserved. Check the keytool output above; never delete the backup.' }
 $match = [regex]::Match(($keyDetails -join [Environment]::NewLine),'SHA256:\s*([0-9A-Fa-f:]{95})')
 if (!$match.Success) { throw 'SHA256 certificate fingerprint not found' }
 $CertificateSha256 = $match.Groups[1].Value.Replace(':','').ToLowerInvariant()
