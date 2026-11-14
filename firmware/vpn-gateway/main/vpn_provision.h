@@ -17,6 +17,11 @@ typedef struct {
 } se_vpn_config_t;
 
 // Loads complete credentials, else remains in local physical USB provisioning.
-// When already configured, GPIO0 (BOOT) held for 3 seconds DURING the initial
-// post-boot 9-second window can reopen USB provisioning without an erase.
+// An initial 3-second hold on BOOT in the first 9 seconds still works.
+// S3 maintenance monitor additionally supports BOOT hold then release while
+// the gateway is running. Never erases NVS, never opens a network write toggle.
 const se_vpn_config_t *se_vpn_provision_or_load(void);
+
+// S3 only: starts a background, physical GPIO0 hold/release detector.
+// A physical 3.5s hold then release requests ONE offline maintenance boot.
+void se_vpn_start_physical_maintenance_monitor(void);
