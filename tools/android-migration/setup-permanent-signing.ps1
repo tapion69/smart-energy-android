@@ -40,8 +40,27 @@ if (!(Test-Path $Store)) {
     if (!$row) { throw 'Signing recovery password is missing' }
     $Pass = $row.Substring('STORE_PASSWORD='.Length)
 }
-$keyDetails = & $Keytool -list -v -storetype PKCS12 -keystore $Store -storepass $Pass -alias $Alias
-if ($LASTEXITCODE -ne 0) { throw 'Cannot read permanent signing key. The existing key and recovery file were preserved. Check the keytool output above; never delete the backup.' }
+# Capture keytool diagnostics safely: never echo the password or keystore contents.
+# On Windows PowerShell 5.1, native programs may send errors to stderr.
+$previousErrorAction = $ErrorActionPreference
+$keyDetails = @()
+try {
+    $ErrorActionPreference = 'Continue'
+    $keyDetails = @(& $Keytool -list -v -storetype PKCS12 -keystore $Store -storepass $Pass -alias $Alias 2>&1 | ForEach-Object { $_.ToString() })
+    $keyExit = $LASTEXITCODE
+} finally {
+    $ErrorActionPreference = $previousErrorAction
+}
+if ($keyExit -ne 0) {
+    $safeDetails = (($keyDetails -join [Environment]::NewLine).Replace($Pass, '[REDACTED]').Replace($Store, '[KEYSTORE_PATH]'))
+    if ($safeDetails.Length -gt 1400) { $safeDetails = $safeDetails.Substring(0,1400) }
+    Write-Host ('Keytool used: ' + $Keytool)
+    Write-Host ('Keytool exit code: ' + $keyExit)
+    Write-Host ('Keystore exists: ' + (Test-Path $Store))
+    Write-Host ('Recovery file exists: ' + (Test-Path $Recovery))
+    Write-Host ('Keytool error (secrets redacted): ' + $safeDetails)
+    throw 'Cannot read permanent signing key. Keep both original backup files. Please share only the sanitized diagnostic lines above.'
+}
 $match = [regex]::Match(($keyDetails -join [Environment]::NewLine),'SHA256:\s*([0-9A-Fa-f:]{95})')
 if (!$match.Success) { throw 'SHA256 certificate fingerprint not found' }
 $CertificateSha256 = $match.Groups[1].Value.Replace(':','').ToLowerInvariant()
