@@ -38,7 +38,7 @@
 #include "cJSON.h"
 #include <math.h>
 
-#define GATEWAY_VERSION "0.3.6-dev-usb-verified-ack"
+#define GATEWAY_VERSION "0.3.7-dev-usb-nvs-stack"
 #define GATEWAY_PORT 18767
 #define MAX_JSON_BYTES 32768
 
