@@ -4413,10 +4413,22 @@ class MainActivity : Activity() {
                         .setPositiveButton("OK",null).show()
                 }else AlertDialog.Builder(this)
                     .setTitle("Paramètres Voltronic · INV$slot")
-                    .setItems(settings.map { "${it.label} : ${it.value} ${it.unit}" }
-                        .toTypedArray()) { _,index ->
-                        proposeVoltronicChange(slot,host,port,code,network,route,
-                            settings[index])
+                    .setItems(settings.map {
+                        "${it.label} : ${it.value} ${it.unit}"+
+                            if(it.editable)"  ✎" else "  🔒"
+                    }.toTypedArray()) { _,index ->
+                        val item=settings[index]
+                        if(!item.editable) {
+                            AlertDialog.Builder(this)
+                                .setTitle("INV$slot · lecture seule")
+                                .setMessage("${item.label} : ${item.value} ${item.unit}\n\n"+
+                                    "Cette valeur est bien remontée dans les données natives, "+
+                                    "mais l'écriture n'est pas autorisée : "+
+                                    "commande non validée ou autorisation VPN USB absente. "+
+                                    "Aucune commande envoyée.")
+                                .setPositiveButton("OK",null).show()
+                        }else proposeVoltronicChange(slot,host,port,code,network,route,
+                            item)
                     }.show()
             }
         }
@@ -4426,6 +4438,7 @@ class MainActivity : Activity() {
         slot:Int,host:String,port:Int,code:String,network:Network?,
         route:VoltronicVpnRoute?,setting:VoltronicParameterEditor.Setting
     ) {
+        if(!setting.editable)return
         val value=input("Nouvelle valeur ${setting.unit}")
         value.inputType=android.text.InputType.TYPE_CLASS_NUMBER or
             android.text.InputType.TYPE_NUMBER_FLAG_DECIMAL or
