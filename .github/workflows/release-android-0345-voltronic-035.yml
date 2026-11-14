@@ -91,7 +91,7 @@ jobs:
           "$APKSIGNER" verify "$OLD"
           get_cert() {
             "$APKSIGNER" verify --print-certs "$1" |
-              sed -n 's/.*Signer #1 certificate SHA-256 digest: //p' |
+              grep -Eio '([[:xdigit:]]{2}:){31}[[:xdigit:]]{2}|[[:xdigit:]]{64}' |
               head -n 1 | tr -d ':' | tr '[:upper:]' '[:lower:]'
           }
           CURRENT=$(get_cert "$OLD")
@@ -197,7 +197,7 @@ jobs:
           APKSIGNER=$(find "$ANDROID_HOME/build-tools" -type f -name apksigner | sort -V | tail -n 1)
           AAPT=$(find "$ANDROID_HOME/build-tools" -type f -name aapt | sort -V | tail -n 1)
           "$APKSIGNER" verify "$APK"
-          CERT=$("$APKSIGNER" verify --print-certs "$APK" | sed -n 's/.*Signer #1 certificate SHA-256 digest: //p' | head -n 1 | tr '[:upper:]' '[:lower:]')
+          CERT=$("$APKSIGNER" verify --print-certs "$APK" | grep -Eio '([[:xdigit:]]{2}:){31}[[:xdigit:]]{2}|[[:xdigit:]]{64}' | head -n 1 | tr '[:upper:]' '[:lower:]')
           EXPECTED=$(printf '%s' "$TRUSTED_CERT" | tr '[:upper:]' '[:lower:]')
           [[ "$CERT" =~ ^[a-f0-9]{64}$ ]] && test "$CERT" = "$EXPECTED"
           "$AAPT" dump badging "$APK" > /tmp/verified-package
