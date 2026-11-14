@@ -174,6 +174,7 @@ class MainActivity : Activity() {
     }
     private val voltronicProfiles by lazy { VoltronicProfileStore(prefs) }
     private lateinit var voltronicProfileFeedback:TextView
+    private lateinit var migrationFeedback:TextView
     // Bound to a physical Wi-Fi transport, not to an active Tailscale tunnel.
     // Voltronic is read-only and must never expose its setup code to a VPN proxy.
     private fun voltronicWifiNetwork():android.net.Network? =
@@ -1247,6 +1248,39 @@ class MainActivity : Activity() {
         },6)
 
         add(settingsPage,label("Réglages de l'application",25f,true),16)
+        val migration=section(settingsPage,"Sauvegarde / migration de configuration",true)
+        add(migration,label("Une mise à jour Android signée avec le même certificat "+
+            "conserve automatiquement toutes les données, y compris les codes "+
+            "chiffrés. Une ancienne APK signée différemment ne peut pas être "+
+            "remplacée directement : importer ici la sauvegarde non secrète "+
+            "créée depuis l'ancienne APK sur le PC. Les codes ESP32 et le "+
+            "token VPN devront être saisis une seule fois après migration.",
+            12f,color=subdued))
+        add(migration,action("Exporter ma configuration non secrète en JSON") {
+            try {
+                startActivityForResult(Intent(Intent.ACTION_CREATE_DOCUMENT).apply {
+                    addCategory(Intent.CATEGORY_OPENABLE)
+                    type="application/json"
+                    putExtra(Intent.EXTRA_TITLE,"SmartEnergy_Configuration.json")
+                },713)
+            }catch(ex:Exception) {
+                migrationFeedback.text="Export indisponible : "+ex.javaClass.simpleName
+            }
+        },8)
+        add(migration,action("Importer une configuration depuis l'ancienne APK") {
+            try {
+                startActivityForResult(Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
+                    addCategory(Intent.CATEGORY_OPENABLE)
+                    type="application/json"
+                },714)
+            }catch(ex:Exception) {
+                migrationFeedback.text="Import indisponible : "+ex.javaClass.simpleName
+            }
+        },8)
+        migrationFeedback=label("Aucune configuration importée. L'APK existante "+
+            "doit rester installée jusqu'à validation de la migration.",
+            12f,false,subdued)
+        add(migration,migrationFeedback,8)
         val voltProfiles=section(settingsPage,
             "Profils Voltronic · apprentissage et sauvegarde",true)
         add(voltProfiles,label("L'application apprend les capacités et les "+
@@ -3776,8 +3810,75 @@ class MainActivity : Activity() {
     @Deprecated("Legacy Activity result for a local SAF JSON backup")
     override fun onActivityResult(requestCode:Int,resultCode:Int,data:Intent?) {
         super.onActivityResult(requestCode,resultCode,data)
-        if(resultCode!=RESULT_OK || requestCode !in listOf(711,712))return
+        if(resultCode!=RESULT_OK || requestCode !in listOf(711,712,713,714))return
         val uri=data?.data ?: return
+        if(requestCode==713) {
+            val json=SmartEnergySettingsMigration.sanitized(prefs)
+            settingsWorker.execute {
+                val msg=try {
+                    val stream=contentResolver.openOutputStream(uri,"w")
+                        ?:throw IllegalStateException("Destination indisponible")
+                    stream.bufferedWriter(Charsets.UTF_8).use {it.write(json)}
+                    "Configuration non secrète exportée. Ne partage pas ce fichier publiquement."
+                }catch(ex:Exception) {
+                    "Export échoué : "+ex.javaClass.simpleName
+                }
+                runOnUiThread {
+                    if(::migrationFeedback.isInitialized)migrationFeedback.text=msg
+                }
+            }
+            return
+        }
+        if(requestCode==714) {
+            settingsWorker.execute {
+                try {
+                    val stream=contentResolver.openInputStream(uri)
+                        ?:throw IllegalStateException("Fichier inaccessible")
+                    val buffer=java.io.ByteArrayOutputStream()
+                    stream.use { input ->
+                        val chunk=ByteArray(2048)
+                        while(true) {
+                            val n=input.read(chunk)
+                            if(n<0)break
+                            buffer.write(chunk,0,n)
+                            require(buffer.size()<=65536){"Fichier trop volumineux"}
+                        }
+                    }
+                    val raw=buffer.toString("UTF-8")
+                    val (count,summary)=SmartEnergySettingsMigration.preview(raw)
+                    runOnUiThread {
+                        AlertDialog.Builder(this)
+                            .setTitle("Restaurer $count réglage(s) ?")
+                            .setMessage(summary+"\n\n"+
+                                "Aucun code ni token n'est importé. "+
+                                "Les modifications restent locales : aucun "+
+                                "équipement n'est commandé. Après validation, "+
+                                "ferme et rouvre l'application puis renseigne "+
+                                "les codes dans Configuration.")
+                            .setNegativeButton("Annuler",null)
+                            .setPositiveButton("Importer") { _,_ ->
+                                val msg=try {
+                                    val done=SmartEnergySettingsMigration.importApproved(prefs,raw)
+                                    "$done réglage(s) enregistrés. "+
+                                    "Redémarre l'application et renseigne les "+
+                                    "codes ESP32 et le token VPN."
+                                }catch(ex:Exception){
+                                    "Import refusé : "+(ex.message?:"données invalides")
+                                }
+                                if(::migrationFeedback.isInitialized)
+                                    migrationFeedback.text=msg
+                            }.show()
+                    }
+                }catch(ex:Exception) {
+                    runOnUiThread {
+                        if(::migrationFeedback.isInitialized)
+                            migrationFeedback.text="Import refusé : "+
+                                (ex.message?:"fichier incompatible")
+                    }
+                }
+            }
+            return
+        }
         if(requestCode==711) {
             val json=voltronicProfiles.exportedJson()
             settingsWorker.execute {

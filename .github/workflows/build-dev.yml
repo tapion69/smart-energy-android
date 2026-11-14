@@ -44,38 +44,58 @@ jobs:
           echo "SMART_ENERGY_ANDROID_KEY_ALIAS=$SE_KEY_ALIAS" >> "$GITHUB_ENV"
           echo "SMART_ENERGY_ANDROID_KEY_PASSWORD=$SE_KEY_PASSWORD" >> "$GITHUB_ENV"
           echo "configured=true" >> "$GITHUB_OUTPUT"
-      # Reuse the permanent signing identity for *debug* too, if configured.
-      # GitHub runners otherwise create a fresh debug keystore each run and
-      # Android refuses in-place updates of the same test package ID.
-      - name: Build Android debug APK and unit tests
+      # Debug Android binaries use temporary keys on fresh GitHub runners.
+      # Execute tests but NEVER distribute such APKs as upgrades.
+      - name: Test Android code (debug tests are NOT distributed)
         working-directory: android
-        run: ./gradlew --no-daemon testDebugUnitTest assembleDebug
+        run: ./gradlew --no-daemon testDebugUnitTest
+      - name: Explain missing production signing
+        if: steps.signing.outputs.configured != 'true'
+        run: echo "::warning::No APK published. Run tools/android-migration/setup-permanent-signing.ps1 locally, then re-run workflow."
       - name: Build permanently signed APK (only when secrets configured)
         if: steps.signing.outputs.configured == 'true'
         working-directory: android
         run: ./gradlew --no-daemon assembleRelease
-      - name: Verify signed APK
+      - name: Verify original permanent signing certificate (fail closed)
         if: steps.signing.outputs.configured == 'true'
         shell: bash
+        env:
+          EXPECTED_CERT: ${{ secrets.SMART_ENERGY_ANDROID_CERT_SHA256 }}
         run: |
           set -euo pipefail
           test -s android/app/build/outputs/apk/release/app-release.apk
+          if [[ ! "$EXPECTED_CERT" =~ ^[A-Fa-f0-9]{64}$ ]]; then
+            echo "::error::Missing permanent certificate fingerprint secret"
+            exit 1
+          fi
           APKSIGNER=$(find "$ANDROID_HOME/build-tools" -type f -name apksigner | sort -V | tail -n 1)
-          "$APKSIGNER" verify --verbose android/app/build/outputs/apk/release/app-release.apk
-      - name: Upload permanently signed APK
+          APK=android/app/build/outputs/apk/release/app-release.apk
+          "$APKSIGNER" verify --verbose "$APK"
+          ACTUAL=$("$APKSIGNER" verify --print-certs "$APK" |
+            sed -n 's/.*Signer #1 certificate SHA-256 digest: //p' | head -n 1 | tr '[:upper:]' '[:lower:]')
+          TRUSTED=$(printf '%s' "$EXPECTED_CERT" | tr '[:upper:]' '[:lower:]')
+          if [[ -z "$ACTUAL" || "$ACTUAL" != "$TRUSTED" ]]; then
+            echo "::error::APK not signed by trusted permanent signing certificate"
+            exit 1
+          fi
+      - name: Upload signed release APK ONLY
         if: steps.signing.outputs.configured == 'true'
         uses: actions/upload-artifact@v4
         with:
-          name: smart-energy-android-signed
+          name: smart-energy-android-signed-upgradeable
           path: android/app/build/outputs/apk/release/app-release.apk
           retention-days: 30
-      - name: Upload debug APK (not suitable for upgrades)
-        if: success()
-        uses: actions/upload-artifact@v4
+
+  migration-backup-policy:
+    name: Validate legacy backup excludes private credentials
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
         with:
-          name: smart-energy-android-debug
-          path: android/app/build/outputs/apk/debug/app-debug.apk
-          retention-days: 7
+          python-version: '3.11'
+      - name: Test nonsecret ADB settings extractor
+        run: python -m unittest discover -s tools/android-migration -p 'test_*.py' -v
 
   jk-esp32:
     name: ESP32 JK provisioning firmware
