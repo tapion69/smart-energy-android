@@ -625,6 +625,14 @@ static esp_err_t bridge_snapshot_handler(httpd_req_t *r) {
     cJSON_AddBoolToObject(doc,"cache_only",true);
     cJSON_AddNumberToObject(doc,"uptime_ms",now);
     cJSON_AddNumberToObject(doc,"max_seq",max_seq);
+    cJSON *stats=cJSON_AddObjectToObject(doc,"uart_stats");
+    cJSON_AddNumberToObject(stats,"tx_commands",snap.tx_commands);
+    cJSON_AddNumberToObject(stats,"polls_ok",snap.polls_ok);
+    cJSON_AddNumberToObject(stats,"timeouts",snap.timeouts);
+    cJSON_AddNumberToObject(stats,"naks",snap.naks);
+    cJSON_AddNumberToObject(stats,"crc_rejects",snap.crc_rejects);
+    cJSON_AddNumberToObject(stats,"last_serial_exchange_ms",
+                            snap.last_serial_exchange_ms);
     cJSON *array=cJSON_AddArrayToObject(doc,"replies");
     for(size_t i=0;i<VT_BRIDGE_CACHE;i++){
         // Copy one record at a time; 20 x 512 B on the HTTP stack would
