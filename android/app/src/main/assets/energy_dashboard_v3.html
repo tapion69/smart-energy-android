@@ -374,10 +374,18 @@ function renderNativeParameters(target,d){
  if(!holder.children.length)row(holder,'Champs bruts','Non disponibles');
 }
 function renderInverters(){
- var tabs=el('tabs'),details=el('inverterDetails'),items=data.inverters||[];
- captureExpandedSections(details);
- tabs.replaceChildren();details.replaceChildren();
- if(!items.length){renderedInverterSlot=null;row(details,'Aucun onduleur','Ajouter depuis Configuration');return}
+ var tabs=el('tabs'),host=el('inverterDetails'),details=document.createElement('div'),
+     items=data.inverters||[];
+ captureExpandedSections(host);
+ tabs.replaceChildren();
+ // Render offscreen and replace the existing tree ATOMICALLY. Previously,
+ // emptying the visible tree on every telemetry tick made Android's outer
+ // ScrollView jump or temporarily lose touch-scroll during long pages.
+ if(!items.length){
+  renderedInverterSlot=null;
+  row(details,'Aucun onduleur','Ajouter depuis Configuration');
+  host.replaceChildren(details);return
+ }
  if(selected>=items.length)selected=0;
  items.forEach(function(inv,i){
   var b=document.createElement('button');b.className=i===selected?'active':'';
@@ -475,6 +483,7 @@ function renderInverters(){
  ].forEach(function(x){showNumber(diag,x[1],v[x[0]],x[2],x[3])});
  if(v.lastHttpErrorKind)row(diag,'Dernier incident HTTP',v.lastHttpErrorKind);
  if(v.firmwareVersion)row(diag,'Firmware ESP32-S3',v.firmwareVersion);
+ host.replaceChildren(details)
 }
 function render(){
  var items=data.inverters||[],live=fresh(),pvs=channels(live),
