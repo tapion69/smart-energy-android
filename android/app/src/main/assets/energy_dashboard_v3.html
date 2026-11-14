@@ -236,12 +236,23 @@ function renderHomeJk(jk){
  txt('homeJkCount',online+' / '+devices.length+' en ligne');
  // Rebuild only small read-only cards; never touch BLE, associations or BMS tabs.
  host.replaceChildren();
- devices.forEach(function(bms,index){
+ // Numeric order regardless of BLE discovery order: Batt-1, Batt-2, Batt-10.
+ var ordered=devices.map(function(bms,index){return {bms:bms,original:index}});
+ function numFromName(name){
+  var m=String(name||'').match(/(?:Batt[- _]*)?(\d+)\s*$/i);
+  return m?Number(m[1]):Number.POSITIVE_INFINITY
+ }
+ ordered.sort(function(a,b){
+  return numFromName(a.bms&&a.bms.name)-numFromName(b.bms&&b.bms.name)||
+         a.original-b.original
+ });
+ ordered.forEach(function(item,index){
+  var bms=item.bms;
   if(!bms||typeof bms!=='object')return;
   var card=document.createElement('div');
   card.className='jk-home-card'+(bms.available===true?'':' offline');
   var name=document.createElement('strong');
-  name.textContent=(typeof bms.name==='string'&&bms.name.trim())?bms.name:'Batt-'+(index+1);
+  name.textContent=(typeof bms.name==='string'&&bms.name.trim())?bms.name:'Batt-'+(item.original+1);
   var state=document.createElement('div');state.className='jk-state';
   state.textContent=bms.available===true?'En ligne':'Hors ligne · dernière mesure non affichée';
   var first=document.createElement('div');first.className='jk-reading';
@@ -255,9 +266,28 @@ function renderHomeJk(jk){
   card.append(name,state,first,secondary);host.append(card);
  });
 }
-function drawMppts(list){var host=el('mppts');host.replaceChildren();list.forEach(function(c){var b=document.createElement('div');b.className='mppt-box';var name=document.createElement('div');name.className='name';name.textContent='☀ INV'+c.slot+' · MPPT'+c.index;var val=document.createElement('strong');val.textContent=fmt(c.powerW,'W');var detail=document.createElement('div');detail.className='detail';detail.textContent=fmt(c.currentA,'A',1)+' · '+fmt(c.voltageV,'V',1);var quality=document.createElement('div');quality.className='quality';quality.textContent=c.derived?'Puissance estimée':'Lecture native';b.append(name,val,detail,quality);host.append(b)});
+function drawMppts(list){var host=el('mppts');host.replaceChildren();list.forEach(function(c){var b=document.createElement('div');b.className='mppt-box';var name=document.createElement('div');name.className='name';name.textContent='☀ INV'+c.slot+' · MPPT'+c.index;var val=document.createElement('strong');val.textContent=fmt(c.powerW,'W');var detail=document.createElement('div');detail.className='detail';detail.textContent=fmt(c.currentA,'A',1)+' · '+fmt(c.voltageV,'V',1);var quality=document.createElement('div');quality.className='quality';quality.textContent=c.derived?'Calcul V × A · mesures ESP':'Puissance native ESP';b.append(name,val,detail,quality);host.append(b)});
 if(!list.length){var none=document.createElement('div');none.className='mppt-empty';none.style.gridColumn='1/-1';none.textContent='MPPT indisponibles : aucune valeur mesurée fraîche';host.append(none)}requestAnimationFrame(wires)}
-function wires(){if(style!=='sunsynk'||active!=='home')return;var area=el('mpptArea'),box=el('mppts'),svg=el('mpptWires'),nodes=Array.from(box.querySelectorAll('.mppt-box'));var a=area.getBoundingClientRect();var cx=a.width/2,bus=a.height-23;svg.setAttribute('viewBox','0 0 '+a.width+' '+a.height);svg.replaceChildren();if(!nodes.length)return;function addPath(d){var p=document.createElementNS('http://www.w3.org/2000/svg','path');p.setAttribute('d',d);svg.append(p)};nodes.forEach(function(node){var r=node.getBoundingClientRect();var x=r.left-a.left+r.width/2,y=r.bottom-a.top;addPath('M '+x+' '+y+' V '+bus+' H '+cx)});addPath('M '+cx+' '+bus+' V '+(a.height-1));var dot=document.createElementNS('http://www.w3.org/2000/svg','circle');dot.setAttribute('cx',cx);dot.setAttribute('cy',bus);dot.setAttribute('r',3.6);svg.append(dot)}
+function wires(){
+ if(style!=='sunsynk'||active!=='home')return;
+ var area=el('mpptArea'),box=el('mppts'),svg=el('mpptWires'),
+     nodes=Array.from(box.querySelectorAll('.mppt-box')),
+     liveChannels=channels(fresh()),a=area.getBoundingClientRect(),
+     cx=a.width/2,bus=a.height-23;
+ svg.setAttribute('viewBox','0 0 '+a.width+' '+a.height);svg.replaceChildren();
+ if(!nodes.length)return;
+ function addPath(d,running){
+  var path=document.createElementNS('http://www.w3.org/2000/svg','path');
+  path.setAttribute('d',d);if(running)path.classList.add('running');svg.append(path)
+ }
+ nodes.forEach(function(node,i){
+  var r=node.getBoundingClientRect(),x=r.left-a.left+r.width/2,y=r.bottom-a.top;
+  addPath('M '+x+' '+y+' V '+bus+' H '+cx,n(liveChannels[i]&&liveChannels[i].powerW)>0)
+ });
+ addPath('M '+cx+' '+bus+' V '+(a.height-1),liveChannels.some(function(c){return n(c.powerW)>0}));
+ var dot=document.createElementNS('http://www.w3.org/2000/svg','circle');
+ dot.setAttribute('cx',cx);dot.setAttribute('cy',bus);dot.setAttribute('r',3.6);svg.append(dot)
+}
 window.addEventListener('resize',function(){requestAnimationFrame(wires)});
 
 // Keep the expanded sections stable across 2.5s telemetry updates and
@@ -371,7 +401,7 @@ function renderInverters(){
  nativeEnergy(solar,d,'pv','Production PV native');
  (v.pvChannels||[]).forEach(function(ch){
   var box=section(solar,'MPPT '+ch.index,true,'mppt-'+ch.index);
-  showNumber(box,'Puissance'+(ch.derived?' · estimée V × A':''),ch.powerW,'W',0);
+  showNumber(box,'Puissance'+(ch.derived?' · calcul V × A':''),ch.powerW,'W',0);
   showNumber(box,'Tension',ch.voltageV,'V',1);
   showNumber(box,'Courant',ch.currentA,'A',2);
  });
@@ -380,7 +410,7 @@ function renderInverters(){
  row(output,'Mode',v.operationMode||d&&d.operation_mode||'—');
  showNumber(output,'Tension sortie AC',v.outputVoltageV,'V',1);
  showNumber(output,'Fréquence sortie AC',v.outputHz,'Hz',2);
- showNumber(output,'Courant sortie estimé',v.outputCurrentEstimateA,'A',1);
+ showNumber(output,'Courant sortie AC · calculé',v.outputCurrentEstimateA,'A',1);
  showNumber(output,'Température dissipateur',v.temperatureC,'°C',0);
  showNumber(output,'Tension du bus',v.busVoltageV,'V',0);
  renderNativeIdentification(output,d);
@@ -394,7 +424,7 @@ function renderInverters(){
  showNumber(house,'Puissance active AC',v.loadW,'W',0);
  showNumber(house,'Puissance apparente',v.apparentPowerVa,'VA',0);
  showNumber(house,'Charge de sortie',v.loadPercent,'%',0);
- showNumber(house,'Courant AC (estimation)',v.outputCurrentA,'A',1);
+ showNumber(house,'Courant AC calculé',v.outputCurrentEstimateA,'A',1);
  showNumber(house,'Consommation jour UTC · native',v.loadDayKwh,'kWh',2);
  nativeEnergy(house,d,'load','Consommation native');
  var grid=section(details,'♧ Réseau électrique',false,'grid');
