@@ -102,6 +102,23 @@ def backup_jk_nvs(port: str, destination: Path, image_size: int,
         if not table.is_file():
             raise ValueError("Impossible de relire les partitions du JK.")
         checked = check_jk_app_only(table.read_bytes(), image_size)
+        # ESP32 classic VPN and JK can have the exact same memory layout.
+        # A COM port is not a device identity: refuse to reflash a VPN ESP32
+        # through the JK tab even if its NVS and partitions look compatible.
+        # The firmware's *literal* product identity must exist in app0.
+        app_probe = Path(temp) / "jk-app-identity.bin"
+        probe_bytes = min(checked.app0.length, 0x140000)
+        esptool_main(args + ["read_flash", hex(APP0_OFFSET),
+                             hex(probe_bytes), str(app_probe)])
+        if not app_probe.is_file() or app_probe.stat().st_size != probe_bytes:
+            raise ValueError("Lecture de l'identité firmware JK incomplète.")
+        product_bytes = app_probe.read_bytes()
+        if (b"smart-jk-esp32" not in product_bytes or
+            b"smart-energy-vpn-gateway" in product_bytes or
+            b"smart-energy-voltronic-s3" in product_bytes):
+            raise ValueError(
+                "Ce port COM ne contient pas un firmware Smart JK reconnu. "
+                "Refus de reflasher un ESP VPN ou une autre carte.")
         private = Path(temp) / "nvs-private.bin"
         esptool_main(args + ["read_flash", hex(checked.nvs.start),
                              hex(checked.nvs.length), str(private)])
