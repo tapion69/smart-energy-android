@@ -3151,7 +3151,8 @@ class MainActivity : Activity() {
     private fun checkWriteReadinessAfterCooldown(mac:String,reader:Int) {
         if(!parameterEditingEnabled || selectedBmsMac!=mac ||
            reader!=activeReaderSlot || !lanVerified || setupTransport ||
-           remoteVpnConnection || remoteGatewayConnection)return
+           (remoteGatewayConnection && !gatewayRemoteParameterWritesAvailable) ||
+           (remoteVpnConnection && !remoteGatewayConnection))return
         settingsWorker.execute {
             try {
                 var latest:JSONObject?=null
