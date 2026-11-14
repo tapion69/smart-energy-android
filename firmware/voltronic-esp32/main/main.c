@@ -1236,7 +1236,17 @@ static void perform_parameter_edit(
         edit_result(result,"post_write_read_failed");return;
     }
     xSemaphoreTake(state_lock,portMAX_DELAY);
-    interpret_reply(spec->query,&after,esp_log_timestamp());
+    const uint32_t verified_sample_ms=esp_log_timestamp();
+    interpret_reply(spec->query,&after,verified_sample_ms);
+    // Publish the immediate verified readback into the same cache consumed by
+    // Smart Voltronic learning/state feedback; never require a second UART
+    // polling task or issue a raw-command HTTP request.
+    for(size_t j=0;j<VT_JOBS;j++){
+        if(strcmp(jobs[j].command,spec->query)==0){
+            bridge_store_reply(j,spec->query,&after,verified_sample_ms);
+            break;
+        }
+    }
     xSemaphoreGive(state_lock);
     if(fabs(check[spec->index]-request->new_value)>spec->tolerance){
         edit_result(result,"readback_does_not_match");return;
