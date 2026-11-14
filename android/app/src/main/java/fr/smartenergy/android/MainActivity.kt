@@ -80,6 +80,7 @@ class MainActivity : Activity() {
     @Volatile private var lanVerified = false
     @Volatile private var remoteVpnConnection = false
     @Volatile private var remoteGatewayConnection = false
+    @Volatile private var gatewayRemoteParameterWritesAvailable = false
     @Volatile private var gatewayHost = ""
     @Volatile private var gatewaySecret = ""
     private lateinit var gatewayIpEdit: EditText
@@ -1574,9 +1575,14 @@ class MainActivity : Activity() {
         require(path.startsWith("/api/v1/"))
         if (remoteGatewayConnection && !setupTransport) {
             if (!vpnConnected()) throw IllegalStateException("Tailscale doit être actif pour joindre l'ESP32 VPN.")
-            if (method != "GET" || path !in setOf(
-                    "/api/v1/health", "/api/v1/telemetry", "/api/v1/details")) {
-                throw IllegalStateException("Passerelle VPN : seules les lectures JK sont autorisées.")
+            val isRead=method=="GET" && path in setOf(
+                "/api/v1/health","/api/v1/telemetry",
+                "/api/v1/details","/api/v1/info")
+            val isParameter=JkTransportPolicy.vpnParameterPath(
+                activeReaderSlot,method,path)!=null
+            if(!isRead && (!gatewayRemoteParameterWritesAvailable || !isParameter)) {
+                throw IllegalStateException("Écriture VPN non autorisée : "+
+                    "nouveau firmware ESP VPN et accord USB explicite requis.")
             }
         } else if (remoteVpnConnection && !setupTransport) {
             if (!vpnConnected()) throw IllegalStateException("VPN absent : aucun accès distant ni envoi de code.")
@@ -1606,6 +1612,7 @@ class MainActivity : Activity() {
                     throw IllegalStateException("ESP32 VPN inaccessible : vérifie Tailscale et l'adresse 100.x.x.x.")
                 }
                 val route=JkTransportPolicy.vpnReadPath(activeReaderSlot,path)
+                    ?: JkTransportPolicy.vpnParameterPath(activeReaderSlot,method,path)
                     ?: throw IllegalStateException("Route non autorisée sur la passerelle VPN.")
                 URL("http://" + host + ":18767" + route).openConnection() as HttpURLConnection
             } else {
@@ -1620,10 +1627,11 @@ class MainActivity : Activity() {
         }
         return try {
             conn.connectTimeout = 8000
-            conn.readTimeout = 15000
+            conn.readTimeout = if(remoteGatewayConnection && method=="POST")25000 else 15000
             conn.requestMethod = method
             conn.setRequestProperty("Accept", "application/json")
             if (remoteGatewayConnection && !setupTransport) {
+                if(method=="POST")conn.setRequestProperty("X-Remote-Write-Confirmed","yes")
                 if (path != "/api/v1/health") {
                     if (!validGatewayToken(gatewaySecret)) throw IllegalStateException("Code VPN invalide.")
                     conn.setRequestProperty("X-Gateway-Token", gatewaySecret)
@@ -1856,6 +1864,7 @@ class MainActivity : Activity() {
         lanConnectionPending = true
         lanVerified = false
         lastLanFirmwareVersion = ""
+        gatewayRemoteParameterWritesAvailable = false
         releaseConnection()
         remoteVpnConnection = true
         remoteGatewayConnection = true
@@ -1887,7 +1896,23 @@ class MainActivity : Activity() {
                 if (!matchesPairing) {
                     throw IllegalStateException("La passerelle VPN ne présente pas la batterie JK associée localement. Vérifie sa configuration.")
                 }
+                // Do not trust a global capability alone: match the exact
+                // originally paired JK device and require write-capable firmware.
+                var remoteVersion=""
+                val canWriteRemote=if(health.optBoolean("remote_parameter_writes_opt_in",false)){
+                    try {
+                        val remoteInfo=httpCall("GET","/api/v1/info")
+                        remoteVersion=remoteInfo.optString("version","")
+                        val parts=SmartEnergyUpdateFeed.versionParts(remoteVersion)
+                        remoteInfo.optString("product")=="smart-jk-esp32" &&
+                            remoteInfo.optString("device_id")==expectedDeviceId &&
+                            parts!=null && (parts[0]>0 || parts[1]>3 ||
+                                (parts[1]==3 && parts[2]>=7))
+                    }catch(_:Exception){false}
+                }else false
                 if (!vpnConnected()) throw IllegalStateException("Tailscale s'est déconnecté.")
+                lastLanFirmwareVersion=if(canWriteRemote)remoteVersion else ""
+                gatewayRemoteParameterWritesAvailable=canWriteRemote
                 // Save only after successfully checking gateway identity,
                 // read token, and consistency with a locally paired JK.
                 saveGatewayToken(secret)
@@ -1895,7 +1920,9 @@ class MainActivity : Activity() {
                 lanVerified = true
                 runOnUiThread {
                     gatewayTokenEdit.text.clear()
-                    remoteStatus.text = "ESP32 VPN connecté en lecture seule."
+                    remoteStatus.text = if(gatewayRemoteParameterWritesAvailable)
+                        "ESP32 VPN : lecture et écritures vérifiées autorisées."
+                        else "ESP32 VPN connecté en lecture seule."
                     wifiBtn.isEnabled = false
                     state("Accès distant sécurisé confirmé · JK associé reconnu.")
                     showTelemetry(telemetry,newRead=true)
@@ -2777,11 +2804,11 @@ class MainActivity : Activity() {
             writeFeedback("Active d'abord le mode modifications dans Paramètres.")
             return
         }
-        if(remoteGatewayConnection || remoteVpnConnection) {
+        if((remoteGatewayConnection && !gatewayRemoteParameterWritesAvailable) ||
+           (remoteVpnConnection && !remoteGatewayConnection)) {
             AlertDialog.Builder(this).setTitle("Écriture distante désactivée")
-                .setMessage("Notre ESP32 VPN est exclusivement en lecture. " +
-                    "Pour modifier un BMS, connecte-toi directement à l'ESP32 JK " +
-                    "sur le Wi-Fi de confiance.")
+                .setMessage("La passerelle VPN n'a pas encore été autorisée "+
+                    "physiquement pour les écritures. L'accès reste en lecture seule.")
                 .setPositiveButton("Compris",null).show()
             return
         }
@@ -2866,7 +2893,8 @@ class MainActivity : Activity() {
                                 if(!isFinishing && activeReaderSlot==readerAtStart &&
                                    selectedBmsMac==mac && currentTab==2 &&
                                    parameterEditingEnabled && lanVerified &&
-                                   !remoteVpnConnection && !remoteGatewayConnection) {
+                                   (!remoteVpnConnection ||
+                                    (remoteGatewayConnection && gatewayRemoteParameterWritesAvailable))) {
                                     // The write was ALREADY verified by a
                                     // fresh BMS settings frame. Query only the
                                     // ESP32 cache now: no extra BLE read needed.
@@ -3173,8 +3201,10 @@ class MainActivity : Activity() {
     }
 
     private fun requestFreshSettingsForEditing() {
-        if(!parameterEditingEnabled || !lanVerified || remoteGatewayConnection ||
-           remoteVpnConnection || setupTransport || selectedBmsMac.isBlank())return
+        if(!parameterEditingEnabled || !lanVerified ||
+           (remoteGatewayConnection && !gatewayRemoteParameterWritesAvailable) ||
+           (remoteVpnConnection && !remoteGatewayConnection) ||
+           setupTransport || selectedBmsMac.isBlank())return
         if(settingsRefreshBusy) {
             writeFeedback("Actualisation des réglages déjà en cours.")
             return
@@ -3240,8 +3270,11 @@ class MainActivity : Activity() {
             lastTelemetry?.let { showTelemetry(it) }
             return
         }
-        if(remoteGatewayConnection || remoteVpnConnection || !lanVerified || setupTransport) {
-            writeFeedback("Les modifications exigent une connexion locale directe au lecteur JK.")
+        if((remoteGatewayConnection && !gatewayRemoteParameterWritesAvailable) ||
+           (remoteVpnConnection && !remoteGatewayConnection) ||
+           !lanVerified || setupTransport) {
+            writeFeedback("Écriture distante non autorisée : vérifier "+
+                "le firmware VPN et activer l'option par USB, ou utiliser le Wi-Fi local.")
             return
         }
         if(selectedBmsMac.isBlank()) {
@@ -3250,7 +3283,15 @@ class MainActivity : Activity() {
         }
         AlertDialog.Builder(this)
             .setTitle("Attention : modifications des paramètres")
-            .setMessage("Tu entres dans les modifications de paramètres du BMS. Des valeurs incorrectes peuvent endommager la batterie ou neutraliser des protections. Chaque changement demandera une confirmation individuelle ; les protections critiques exigent une confirmation supplémentaire. Aucune modification automatique.")
+            .setMessage((if(remoteGatewayConnection)
+                "MODE DISTANT : les commandes passeront par Tailscale et "+
+                "agiront immédiatement sur la batterie réelle. "
+                else "")+
+                "Tu entres dans les modifications de paramètres du BMS. "+
+                "Des valeurs incorrectes peuvent endommager la batterie ou "+
+                "neutraliser des protections. Chaque changement demande "+
+                "une confirmation individuelle ; les protections critiques "+
+                "exigent une confirmation supplémentaire. Aucun réessai automatique.")
             .setNegativeButton("Annuler",null)
             .setPositiveButton("Activer le mode modification") { _,_ ->
                 parameterEditingEnabled=true
