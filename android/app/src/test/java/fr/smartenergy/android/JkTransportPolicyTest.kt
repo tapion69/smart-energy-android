@@ -54,6 +54,28 @@ class JkTransportPolicyTest {
             JkTransportPolicy.select(false,"auto",false,false,false))
     }
 
+    @Test fun remoteParameterRoutesRemainStrictlyAllowlisted() {
+        assertEquals("/api/v1/jk/1/info",
+            JkTransportPolicy.vpnParameterPath(1,"GET","/api/v1/info"))
+        assertEquals("/api/v1/jk/2/write-arm",
+            JkTransportPolicy.vpnParameterPath(2,"POST","/api/v1/jk/write-arm"))
+        assertEquals("/api/v1/jk/3/write",
+            JkTransportPolicy.vpnParameterPath(3,"POST","/api/v1/jk/write"))
+        assertEquals("/api/v1/jk/1/settings-refresh",
+            JkTransportPolicy.vpnParameterPath(1,"POST","/api/v1/jk/settings-refresh"))
+        assertEquals("/api/v1/jk/2/write-status?mac=AA%3ABB%3ACC%3ADD%3AEE%3AFF",
+            JkTransportPolicy.vpnParameterPath(2,"GET",
+                "/api/v1/jk/write-status?mac=AA%3ABB%3ACC%3ADD%3AEE%3AFF"))
+        for(path in listOf("/api/v1/wifi","/api/v1/access",
+                "/api/v1/bms","/api/v1/jk/bms/scan",
+                "/api/v1/ota/image","/api/v1/jk/write?host=evil"))
+            org.junit.Assert.assertNull(JkTransportPolicy.vpnParameterPath(1,"POST",path))
+        org.junit.Assert.assertNull(
+            JkTransportPolicy.vpnParameterPath(1,"GET",
+                "/api/v1/jk/write-status?mac=AA%3ABB%3ACC%3ADD%3AEE%3AGG"))
+        org.junit.Assert.assertNull(
+            JkTransportPolicy.vpnParameterPath(4,"POST","/api/v1/jk/write"))
+    }
     @org.junit.Test fun vpnReaderSlotsKeepLegacyAndRejectUnknownRoutes() {
         org.junit.Assert.assertEquals("/api/v1/jk/telemetry",
             JkTransportPolicy.vpnReadPath(1,"/api/v1/telemetry"))
