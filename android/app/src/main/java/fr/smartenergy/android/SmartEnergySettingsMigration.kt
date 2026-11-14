@@ -21,6 +21,7 @@ internal object SmartEnergySettingsMigration {
         "inverter_2_ip","inverter_3_ip")
     private val safeBooleans=setOf(
         "remote_gateway_enabled","remote_voltronic_enabled",
+        "inverter_probe_validated","inverter_2_validated","inverter_3_validated",
         "bms_alarm_notifications","debug_enabled",
         "alert_bms_alarm_enabled","alert_global_soc_enabled",
         "alert_bms_soc_enabled","alert_cell_high_enabled","alert_temp_high_enabled")
