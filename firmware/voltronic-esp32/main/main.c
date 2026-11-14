@@ -34,7 +34,7 @@
 #include "voltronic_protocol.h"
 #include "voltronic_edit.h"
 
-#define VT_VERSION "0.3.4-dev-ota-parameter-edit-test"
+#define VT_VERSION "0.3.5"
 #define VT_UART UART_NUM_1
 #define VT_TX GPIO_NUM_17
 #define VT_RX GPIO_NUM_16
