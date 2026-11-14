@@ -241,19 +241,24 @@ typedef struct {
 static bool get_target(se_route_t route, lan_target_t *out) {
     memset(out, 0, sizeof(*out));
     if (route == SE_ROUTE_JK_TELEMETRY || route == SE_ROUTE_JK_DETAILS ||
+        route==SE_ROUTE_JK1_INFO || route==SE_ROUTE_JK2_INFO ||
+        route==SE_ROUTE_JK3_INFO ||
         route == SE_ROUTE_JK2_TELEMETRY || route == SE_ROUTE_JK2_DETAILS ||
         route == SE_ROUTE_JK3_TELEMETRY || route == SE_ROUTE_JK3_DETAILS) {
         const bool second = route == SE_ROUTE_JK2_TELEMETRY ||
-                            route == SE_ROUTE_JK2_DETAILS;
+                            route == SE_ROUTE_JK2_DETAILS || route==SE_ROUTE_JK2_INFO;
         const bool third = route == SE_ROUTE_JK3_TELEMETRY ||
-                           route == SE_ROUTE_JK3_DETAILS;
+                           route == SE_ROUTE_JK3_DETAILS || route==SE_ROUTE_JK3_INFO;
         const int slot = third ? 2 : second ? 1 : 0;
         out->host = personal ? personal->jk_ip[slot] : "";
         out->access_code = personal ? personal->jk_code[slot] : "";
         const bool details = route == SE_ROUTE_JK_DETAILS ||
                              route == SE_ROUTE_JK2_DETAILS ||
                              route == SE_ROUTE_JK3_DETAILS;
-        out->path = details ? "/api/v1/details" : "/api/v1/telemetry";
+        const bool info=route==SE_ROUTE_JK1_INFO ||
+            route==SE_ROUTE_JK2_INFO || route==SE_ROUTE_JK3_INFO;
+        out->path=info?"/api/v1/info":
+            details?"/api/v1/details":"/api/v1/telemetry";
         out->port=80;
         // No dynamic host, URL or credentials ever accepted from VPN callers.
         return se_is_private_ipv4(out->host) &&
@@ -576,7 +581,7 @@ static esp_err_t relay_parameter_control(httpd_req_t *req) {
 static void start_private_http(void) {
     httpd_config_t cfg = HTTPD_DEFAULT_CONFIG();
     cfg.server_port = GATEWAY_PORT;
-    cfg.max_uri_handlers = 44;
+    cfg.max_uri_handlers = 48;
     cfg.stack_size = 8192;
     cfg.max_open_sockets = 4;
     cfg.lru_purge_enable = true;
@@ -587,6 +592,9 @@ static void start_private_http(void) {
     ESP_ERROR_CHECK(httpd_start(&http_server, &cfg));
     const httpd_uri_t uris[] = {
         {.uri="/api/v1/health", .method=HTTP_GET, .handler=health_handler},
+        {.uri="/api/v1/jk/1/info",.method=HTTP_GET,.handler=relay_read},
+        {.uri="/api/v1/jk/2/info",.method=HTTP_GET,.handler=relay_read},
+        {.uri="/api/v1/jk/3/info",.method=HTTP_GET,.handler=relay_read},
         {.uri="/api/v1/jk/telemetry", .method=HTTP_GET, .handler=relay_read},
         {.uri="/api/v1/jk/details", .method=HTTP_GET, .handler=relay_read},
         {.uri="/api/v1/jk/1/telemetry", .method=HTTP_GET, .handler=relay_read},
