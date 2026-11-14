@@ -17,7 +17,9 @@ for required in (
     'X-Image-SHA256',
 ):
     assert required in s,required
-assert '#define VT_VERSION "0.3.4-dev-ota-parameter-edit-test"' in s
+# This test follows the OTA version compiled in the firmware under test.
+# The old hard-coded 0.3.4 assertion blocked the safe 0.3.5 release.
+assert '#define VT_VERSION "0.3.5"' in s
 assert "esp_ota_get_state_partition" in s
 assert "VT_JOBS 18" in s
 print("OTA status remains read-only; guarded parameter writes are separate; rollback and SHA256 retained")
