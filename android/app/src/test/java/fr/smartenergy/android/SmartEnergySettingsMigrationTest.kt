@@ -8,6 +8,9 @@ class SmartEnergySettingsMigrationTest {
         assertEquals("string",SmartEnergySettingsMigration.typeFor("reader_3_local_ip"))
         assertEquals("string",SmartEnergySettingsMigration.typeFor("bms_name_AABBCCDDEEFF"))
         assertEquals("boolean",SmartEnergySettingsMigration.typeFor("remote_voltronic_enabled"))
+        for (slotKey in listOf("inverter_probe_validated","inverter_2_validated","inverter_3_validated")) {
+            assertEquals("boolean",SmartEnergySettingsMigration.typeFor(slotKey))
+        }
         for(key in listOf("pairing_code_cipher","reader_1_pairing_code_cipher",
             "remote_gateway_token_cipher","premium_voltronic_code_cipher",
             "premium_voltronic_3_code_cipher","tailscale_key","wifi_password")) {
