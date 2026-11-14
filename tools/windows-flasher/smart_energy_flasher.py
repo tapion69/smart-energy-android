@@ -828,7 +828,11 @@ class Flasher(tk.Tk):
                     "mais ne crée PAS de partition OTA supplémentaire.")
         self._progress_stage("Connexion à l'ESP32 JK et écriture du firmware…")
         with monitor_esptool_progress(self._flash_percent):
-            esptool_main(["--chip", "esp32", "--port", port, "--baud", "460800",
+            esptool_main(["--chip", "esp32", "--port", port, "--baud", "115200",
+                          # USB backup leaves the ROM/stub in download mode.
+                          # DO NOT reset/re-enter bootloader for the actual write.
+                          * (["--before", "no_reset"] if offset=="0x10000" else []),
+                          "--after", "hard_reset",
                           "write_flash", "--flash_mode", "dio", "--flash_freq", "40m",
                           "--flash_size", "4MB", offset, str(file)])
         self._progress_step(98, "Image JK écrite et vérifiée.")
