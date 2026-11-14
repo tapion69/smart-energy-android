@@ -13,9 +13,13 @@
 #include "boot_pair_policy.h"
 #include "jk_identity_policy.h"
 #include <ArduinoJson.h>
+#include <Update.h>
+#include <esp_ota_ops.h>
+#include <esp_partition.h>
+#include <mbedtls/sha256.h>
 #include <ctype.h>
 
-static const char *VERSION = "0.3.14-dev";
+static const char *VERSION = "0.3.15-dev-ota-preview";
 static const uint32_t WIFI_JOIN_TIMEOUT_MS = 30000; // Return to temporary setup after 30s
 static const uint32_t SETUP_AUTORETRY_MS = 120000; // Retry saved Wi-Fi after brief fallback
 static const int SETUP_BUTTON = 0; // BOOT is physical proof for pairing recovery.
@@ -54,6 +58,14 @@ volatile uint32_t wifiDropCount = 0; // since ESP boot, no persistent storage
 // Parameter writes are disabled by default, per-device, and expire quickly.
 uint32_t writeArmUntil = 0;
 String writeArmMac;
+
+// No update attempt without an explicit authenticated local user request.
+// The current JK settings, BLE list, Wi-Fi and pairing codes remain in NVS.
+static bool otaInProgress=false, otaAuthorized=false, otaSuccess=false;
+static uint32_t otaReceived=0, otaMaximum=0;
+static String otaExpectedHash, otaError;
+static mbedtls_sha256_context otaSha;
+static bool otaShaActive=false;
 
 // A brief, physically requested, one-client onboarding AP. It is open ONLY
 // during physical pairing, and no normal JK API is accessible over it.
@@ -235,7 +247,8 @@ void onInfo() {
   doc["telemetry"] = true;
   doc["telemetry_experimental"] = true;
   doc["ble_simultaneous_target"] = 4;
-  doc["ota"] = false;
+  doc["ota"] = esp_ota_get_next_update_partition(NULL)!=nullptr;
+  doc["ota_version"] = 1;
   doc["parameter_writes"] = "experimental_all_jk02_protection_confirmation_local_only";
   doc["physical_recovery"] = true; // does NOT reveal the old password.
   doc["boot_pairing"] = true;
@@ -665,6 +678,124 @@ void onParameterWriteStatus() {
   jkreader::fillWriteStatus(out,mac.c_str());
   respond(200,out);
 }
+/* ESP32 classic OTA: the /ota/status preflight is read-only.
+ * An older reader without these routes must first get the app-only firmware
+ * by physical USB, using its existing dual-OTA partition layout. No NVS erase. */
+static const esp_partition_t* jkOtaTarget() {
+  return esp_ota_get_next_update_partition(NULL);
+}
+static void otaFail(const char *why) {
+  otaError=why;
+  if(otaInProgress)Update.abort();
+  otaInProgress=false;otaAuthorized=false;otaSuccess=false;
+  if(otaShaActive) {
+    mbedtls_sha256_free(&otaSha);
+    otaShaActive=false;
+  }
+}
+void onJkOtaStatus() {
+  if(!requireControl())return;
+  const esp_partition_t *current=esp_ota_get_running_partition();
+  const esp_partition_t *next=jkOtaTarget();
+  esp_ota_img_states_t state=ESP_OTA_IMG_UNDEFINED;
+  const bool rollback=current &&
+      esp_ota_get_state_partition(current,&state)==ESP_OK &&
+      state==ESP_OTA_IMG_PENDING_VERIFY;
+  JsonDocument doc;
+  doc["product"]="smart-jk-esp32";
+  doc["source"]="smart-jk-ota-status";
+  doc["version"]=VERSION;
+  doc["target"]="esp32dev";
+  doc["partition_scheme"]=next?"dual_ota":"single_app";
+  doc["running_partition"]=current?current->label:"unknown";
+  doc["max_image_bytes"]=next?next->size:0;
+  doc["rollback_pending"]=rollback;
+  doc["ota_supported"]=next && !setupMode && !physicalPairing;
+  doc["requires_usb_migration"]=!next;
+  doc["flash_ready"]=next && !rollback && !otaInProgress &&
+      !setupMode && !physicalPairing && WiFi.status()==WL_CONNECTED;
+  respond(200,doc);
+}
+static bool validOtaHash(const String &hash) {
+  if(hash.length()!=64)return false;
+  for(unsigned i=0;i<hash.length();++i)
+    if(!isxdigit(static_cast<unsigned char>(hash[i])))return false;
+  return true;
+}
+static void otaChunk() {
+  HTTPUpload &u=http.upload();
+  if(u.status==UPLOAD_FILE_START) {
+    otaError="";
+    otaSuccess=false;otaAuthorized=false;otaReceived=0;
+    const esp_partition_t *target=jkOtaTarget();
+    esp_ota_img_states_t state=ESP_OTA_IMG_UNDEFINED;
+    const esp_partition_t *current=esp_ota_get_running_partition();
+    const bool pending=current &&
+        esp_ota_get_state_partition(current,&state)==ESP_OK &&
+        state==ESP_OTA_IMG_PENDING_VERIFY;
+    otaExpectedHash=http.header("X-Image-SHA256");
+    otaExpectedHash.toLowerCase();
+    if(http.header("X-Setup-Code")!=setupCode ||
+       http.header("X-OTA-Confirmed")!="yes" ||
+       setupMode || physicalPairing || WiFi.status()!=WL_CONNECTED ||
+       !target || pending || !validOtaHash(otaExpectedHash)) {
+      otaFail("ota_preflight_refused");return;
+    }
+    otaMaximum=target->size;
+    if(!Update.begin(otaMaximum,U_FLASH)) {
+      otaFail("partition_write_begin_failed");return;
+    }
+    mbedtls_sha256_init(&otaSha);
+    if(mbedtls_sha256_starts_ret(&otaSha,0)!=0) {
+      otaFail("sha256_unavailable");return;
+    }
+    otaShaActive=true;otaAuthorized=true;otaInProgress=true;
+  } else if(u.status==UPLOAD_FILE_WRITE) {
+    if(!otaAuthorized || !otaInProgress)return;
+    if(u.currentSize==0 ||
+       otaReceived+u.currentSize>otaMaximum ||
+       Update.write(u.buf,u.currentSize)!=u.currentSize ||
+       mbedtls_sha256_update_ret(&otaSha,u.buf,u.currentSize)!=0) {
+      otaFail("ota_data_rejected");return;
+    }
+    otaReceived+=u.currentSize;
+  } else if(u.status==UPLOAD_FILE_END) {
+    if(!otaAuthorized || !otaInProgress)return;
+    unsigned char digest[32]={0};
+    if(otaReceived<16384 ||
+       mbedtls_sha256_finish_ret(&otaSha,digest)!=0) {
+      otaFail("ota_truncated_or_hash_failed");return;
+    }
+    mbedtls_sha256_free(&otaSha);otaShaActive=false;
+    char actual[65]={0};
+    for(int i=0;i<32;i++)snprintf(actual+i*2,3,"%02x",digest[i]);
+    if(otaExpectedHash!=String(actual)) {
+      otaFail("ota_sha256_mismatch");return;
+    }
+    // Arduino Update verifies the ESP image and switches boot slot only
+    // after the complete transport hash matches the published release.
+    if(!Update.end(true)) {
+      otaFail("ota_image_invalid");return;
+    }
+    otaSuccess=true;otaInProgress=false;otaAuthorized=false;
+  } else if(u.status==UPLOAD_FILE_ABORTED) {
+    otaFail("ota_transfer_aborted");
+  }
+}
+void onJkOtaFinished() {
+  if(!requireControl())return;
+  if(!otaSuccess) {
+    error(409,otaError.isEmpty()?"ota_not_confirmed":otaError.c_str());
+    return;
+  }
+  otaSuccess=false;
+  JsonDocument doc;
+  doc["accepted"]=true;doc["rebooting"]=true;
+  doc["received_bytes"]=otaReceived;
+  respond(200,doc);
+  restartAt=millis()+2500;
+}
+
 void onTelemetry() {
   if (!requireControl()) return;
   JsonDocument doc;
@@ -716,8 +847,8 @@ void setup() {
   jkreader::loadConfigured(prefs.getString("bmsList", "[]"));
   WiFi.onEvent(onWifiEvent);
 
-  const char *headerKeys[] = {"X-Setup-Code"};
-  http.collectHeaders(headerKeys, 1);
+  const char *headerKeys[] = {"X-Setup-Code","X-OTA-Confirmed","X-Image-SHA256"};
+  http.collectHeaders(headerKeys, 3);
   http.on("/api/v1/info", HTTP_GET, onInfo);
   http.on("/api/v1/bms", HTTP_GET, onConfiguredBms);
   http.on("/api/v1/bms/scan", HTTP_GET, onScan);
@@ -731,6 +862,8 @@ void setup() {
   http.on("/api/v1/pair/boot/commit", HTTP_POST, onPhysicalCommit);
   http.on("/api/v1/telemetry", HTTP_GET, onTelemetry);
   http.on("/api/v1/details", HTTP_GET, onDetails);
+  http.on("/api/v1/ota/status", HTTP_GET, onJkOtaStatus);
+  http.on("/api/v1/ota/image", HTTP_POST,onJkOtaFinished,otaChunk);
   http.on("/api/v1/jk/settings-refresh", HTTP_POST, onSettingsRefresh);
   http.on("/api/v1/jk/write-arm", HTTP_POST, onArmParameterWrite);
   http.on("/api/v1/jk/write", HTTP_POST, onWriteParameter);
