@@ -746,6 +746,76 @@ static esp_err_t ota_image_handler(httpd_req_t *req){
     xTaskCreate(ota_restart,"ota_restart",2048,NULL,3,NULL);
     return reply;
 }
+/* Authenticated, opt-in parameter writes. The HTTP task never uses UART;
+ * the existing polling task performs preflight, SET and readback atomically.
+ * No raw serial command can be supplied by an HTTP client. */
+static esp_err_t edit_parameter_handler(httpd_req_t *r){
+    if(!authorized(r))return deny(r);
+    char confirmed[8]={0};
+    if(httpd_req_get_hdr_value_str(r,"X-Write-Confirmed",
+                                   confirmed,sizeof(confirmed))!=ESP_OK ||
+       strcmp(confirmed,"yes")!=0)
+        return httpd_resp_send_err(r,HTTPD_403_FORBIDDEN,"explicit confirmation required");
+    if(r->content_len<2||r->content_len>255)
+        return httpd_resp_send_err(r,HTTPD_400_BAD_REQUEST,"invalid JSON size");
+    char body[256]={0};
+    int received=0;
+    while(received<r->content_len){
+        int n=httpd_req_recv(r,body+received,r->content_len-received);
+        if(n<=0)return httpd_resp_send_err(r,HTTPD_400_BAD_REQUEST,"body incomplete");
+        received+=n;
+    }
+    body[received]=0;
+    cJSON *doc=cJSON_Parse(body);
+    if(!doc)return httpd_resp_send_err(r,HTTPD_400_BAD_REQUEST,"invalid JSON");
+    const cJSON *key=cJSON_GetObjectItemCaseSensitive(doc,"parameter");
+    const cJSON *old=cJSON_GetObjectItemCaseSensitive(doc,"old");
+    const cJSON *value=cJSON_GetObjectItemCaseSensitive(doc,"value");
+    const cJSON *user=cJSON_GetObjectItemCaseSensitive(doc,"confirmed");
+    const vt_edit_spec_t *spec=
+        cJSON_IsString(key)&&key->valuestring?vt_edit_find(key->valuestring):NULL;
+    bool valid=spec&&cJSON_IsNumber(old)&&cJSON_IsNumber(value)&&
+        cJSON_IsTrue(user)&&isfinite(old->valuedouble)&&
+        isfinite(value->valuedouble);
+    if(!valid){
+        cJSON_Delete(doc);
+        return httpd_resp_send_err(r,HTTPD_400_BAD_REQUEST,"unsupported semantic parameter");
+    }
+    if(xSemaphoreTake(edit_lock,pdMS_TO_TICKS(100))!=pdTRUE){
+        cJSON_Delete(doc);
+        return httpd_resp_send_err(r,HTTPD_503_SERVICE_UNAVAILABLE,"edit busy");
+    }
+    if(edit_request.pending){
+        xSemaphoreGive(edit_lock);cJSON_Delete(doc);
+        return httpd_resp_send_err(r,HTTPD_409_CONFLICT,"previous edit unresolved");
+    }
+    memset(&edit_request,0,sizeof(edit_request));
+    snprintf(edit_request.key,sizeof(edit_request.key),"%s",spec->key);
+    edit_request.old_value=old->valuedouble;
+    edit_request.new_value=value->valuedouble;
+    edit_request.pending=true;
+    xSemaphoreGive(edit_lock);
+    cJSON_Delete(doc);
+    /* No automatic retries, even if the HTTP connection disappears. */
+    if(xSemaphoreTake(edit_completed,pdMS_TO_TICKS(15000))!=pdTRUE){
+        return httpd_resp_send_err(r,HTTPD_503_SERVICE_UNAVAILABLE,
+            "edit state uncertain; no retry; inspect inverter");
+    }
+    xSemaphoreTake(edit_lock,portMAX_DELAY);
+    bool verified=edit_request.verified;
+    bool acknowledged=edit_request.set_acknowledged;
+    char result[64]={0};
+    snprintf(result,sizeof(result),"%s",edit_request.result);
+    memset(&edit_request,0,sizeof(edit_request));
+    xSemaphoreGive(edit_lock);
+    cJSON *answer=base_json("voltronic-parameter-verification");
+    cJSON_ReplaceItemInObject(answer,"read_only",cJSON_CreateBool(false));
+    cJSON_AddBoolToObject(answer,"verified",verified);
+    cJSON_AddBoolToObject(answer,"set_acknowledged",acknowledged);
+    cJSON_AddStringToObject(answer,"result",result);
+    return send_json(r,answer);
+}
+
 static void start_api(void){
     httpd_config_t conf=HTTPD_DEFAULT_CONFIG();
     conf.server_port=VT_HTTP_PORT;
@@ -774,6 +844,9 @@ static void start_api(void){
         .handler=ota_image_handler};
     ESP_ERROR_CHECK(httpd_register_uri_handler(server,&ota_status));
     ESP_ERROR_CHECK(httpd_register_uri_handler(server,&ota_image));
+    httpd_uri_t change={.uri="/api/v1/parameters/change",
+        .method=HTTP_POST,.handler=edit_parameter_handler};
+    ESP_ERROR_CHECK(httpd_register_uri_handler(server,&change));
 }
 static void serial_start(void){
     const uart_config_t u={
