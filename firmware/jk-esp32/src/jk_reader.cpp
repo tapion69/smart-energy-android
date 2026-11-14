@@ -930,9 +930,23 @@ void fillDetails(JsonDocument &out) {
     if (available) {
       settings["age_seconds"] = (now - item.lastSettingsMs) / 1000;
       JsonArray items = settings["items"].to<JsonArray>();
+      // A decoded type-1 frame may omit a field on this BMS variant.
+      // Keep the complete source catalog visible as unavailable rather than
+      // silently hiding it or inventing a default value for protection logic.
+      JsonArray unavailable = settings["unavailable_items"].to<JsonArray>();
+      settings["catalog_total"] = jkextra::PARAM_COUNT;
+      unsigned available_count = 0;
       for (size_t p = 0; p < jkextra::PARAM_COUNT; ++p) {
-        if (!item.settings.available[p]) continue;
         const jkextra::Param &def = jkextra::PARAMS[p];
+        if (!item.settings.available[p]) {
+          JsonObject missing=unavailable.add<JsonObject>();
+          missing["key"]=def.key;
+          missing["label"]=def.label;
+          missing["group"]=def.group;
+          missing["reason"]="not_validated_from_bms";
+          continue;
+        }
+        ++available_count;
         JsonObject value = items.add<JsonObject>();
         value["key"] = def.key;
         value["editable"] = jkwrite::editable(p);
@@ -950,6 +964,7 @@ void fillDetails(JsonDocument &out) {
           value["value"] = item.settings.value[p];
         }
       }
+      settings["available_count"]=available_count;
     } else {
       settings["reason"] = "no_fresh_crc_checked_settings_frame";
     }
