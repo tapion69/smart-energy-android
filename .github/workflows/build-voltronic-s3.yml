@@ -1,7 +1,7 @@
 name: Smart Energy Voltronic ESP32-S3 parameter-write experimental
 on:
   push:
-    branches: [dev]
+    branches: [dev, 'test/esp32-ha-bridge']
     paths:
       - 'firmware/voltronic-esp32/**'
       - '.github/workflows/build-voltronic-s3.yml'
