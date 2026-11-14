@@ -612,11 +612,9 @@ static esp_err_t details_handler(httpd_req_t *r){
 static esp_err_t bridge_snapshot_handler(httpd_req_t *r) {
     if(!authorized(r))return deny(r);
     vol_state_t snap;
-    vt_bridge_record_t copy[VT_BRIDGE_CACHE];
     uint32_t max_seq;
     xSemaphoreTake(state_lock,portMAX_DELAY);
     snap=state;
-    memcpy(copy,bridge_cache,sizeof(copy));
     max_seq=bridge_seq;
     xSemaphoreGive(state_lock);
     uint32_t now=esp_log_timestamp();
@@ -629,8 +627,14 @@ static esp_err_t bridge_snapshot_handler(httpd_req_t *r) {
     cJSON_AddNumberToObject(doc,"max_seq",max_seq);
     cJSON *array=cJSON_AddArrayToObject(doc,"replies");
     for(size_t i=0;i<VT_BRIDGE_CACHE;i++){
-        const vt_bridge_record_t *e=&copy[i];
-        if(!e->seq || !e->command[0])continue;
+        // Copy one record at a time; 20 x 512 B on the HTTP stack would
+        // exceed ESP-IDF's configured 8 KB server stack.
+        vt_bridge_record_t record;
+        xSemaphoreTake(state_lock,portMAX_DELAY);
+        record=bridge_cache[i];
+        xSemaphoreGive(state_lock);
+        const vt_bridge_record_t *e=&record;
+        if(!e->seq || !e->command[0] || e->seq>max_seq)continue;
         cJSON *rec=cJSON_CreateObject();
         cJSON_AddStringToObject(rec,"command",e->command);
         cJSON_AddStringToObject(rec,"payload",e->payload);
