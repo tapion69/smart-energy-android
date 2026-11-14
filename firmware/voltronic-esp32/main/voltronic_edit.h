@@ -21,16 +21,16 @@ typedef struct {
  * Candidate opcodes match the original Smart Voltronic flow, with no
  * ambiguous fallback and no auto-learning before verified readback. */
 static const vt_edit_spec_t VT_EDIT_SPECS[] = {
-    {"battery_recharge_voltage_v","QPIRI","PBCV",8,12,65,0.1,0.11,true},
-    {"battery_under_voltage_v","QPIRI","PSDV",9,12,65,0.1,0.11,true},
-    {"battery_bulk_voltage_v","QPIRI","PCVV",10,12,65,0.1,0.11,true},
-    {"battery_float_voltage_v","QPIRI","PBFT",11,12,65,0.1,0.11,true},
+    {"battery_recharge_voltage_v","QPIRI","PBCV",8,12,65,0.1,0.04,true},
+    {"battery_under_voltage_v","QPIRI","PSDV",9,12,65,0.1,0.04,true},
+    {"battery_bulk_voltage_v","QPIRI","PCVV",10,12,65,0.1,0.04,true},
+    {"battery_float_voltage_v","QPIRI","PBFT",11,12,65,0.1,0.04,true},
     {"battery_type_code","QPIRI","PBT",12,0,9,1,0.01,false},
     {"max_ac_charging_current_a","QPIRI","MUCHGC",13,0,200,10,1,false},
     {"max_charging_current_a","QPIRI","MNCHGC",14,0,200,10,1,false},
     {"output_source_priority_code","QPIRI","POP",16,0,2,1,0.01,false},
     {"charger_source_priority_code","QPIRI","PCP",17,1,3,1,0.01,false},
-    {"battery_re_discharge_voltage_v","QPIRI","PBDV",22,12,65,0.1,0.11,true},
+    {"battery_re_discharge_voltage_v","QPIRI","PBDV",22,12,65,0.1,0.04,true},
     {"max_discharging_current_a","QPIRI","PBATMAXDISC",27,10,200,10,1,false},
     {"battery_recharge_capacity_pct","QDOP","PBCC",8,5,95,1,0.01,false},
     {"battery_redischarge_capacity_pct","QDOP","PBDC",9,10,100,1,0.01,false},
