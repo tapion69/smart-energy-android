@@ -195,7 +195,7 @@ static void usb_begin(void) {
     bridge_ready=err==ESP_OK || err==ESP_ERR_INVALID_STATE;
     if(!bridge_ready)
         ESP_LOGE(TAG,"USB-UART bridge init failed %s",esp_err_to_name(err));
-    const usb_serial_jtag_driver_config_t native={
+    usb_serial_jtag_driver_config_t native={
         .rx_buffer_size=1024,.tx_buffer_size=1024
     };
     err=usb_serial_jtag_driver_install(&native);
@@ -783,11 +783,11 @@ static esp_err_t edit_parameter_handler(httpd_req_t *r){
     }
     if(xSemaphoreTake(edit_lock,pdMS_TO_TICKS(100))!=pdTRUE){
         cJSON_Delete(doc);
-        return httpd_resp_send_err(r,HTTPD_503_SERVICE_UNAVAILABLE,"edit busy");
+        return httpd_resp_send_err(r,HTTPD_500_INTERNAL_SERVER_ERROR,"edit busy");
     }
     if(edit_request.pending){
         xSemaphoreGive(edit_lock);cJSON_Delete(doc);
-        return httpd_resp_send_err(r,HTTPD_503_SERVICE_UNAVAILABLE,"previous edit unresolved");
+        return httpd_resp_send_err(r,HTTPD_500_INTERNAL_SERVER_ERROR,"previous edit unresolved");
     }
     memset(&edit_request,0,sizeof(edit_request));
     snprintf(edit_request.key,sizeof(edit_request.key),"%s",spec->key);
@@ -798,7 +798,7 @@ static esp_err_t edit_parameter_handler(httpd_req_t *r){
     cJSON_Delete(doc);
     /* No automatic retries, even if the HTTP connection disappears. */
     if(xSemaphoreTake(edit_completed,pdMS_TO_TICKS(15000))!=pdTRUE){
-        return httpd_resp_send_err(r,HTTPD_503_SERVICE_UNAVAILABLE,
+        return httpd_resp_send_err(r,HTTPD_500_INTERNAL_SERVER_ERROR,
             "edit state uncertain; no retry; inspect inverter");
     }
     xSemaphoreTake(edit_lock,portMAX_DELAY);
