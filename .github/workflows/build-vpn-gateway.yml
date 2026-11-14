@@ -26,6 +26,8 @@ jobs:
         run: python firmware/vpn-gateway/tests/test_s3_provisioning_sources.py
       - name: Verify Voltronic-only USB addition preserves NVS
         run: python firmware/vpn-gateway/tests/test_voltronic_patch_sources.py
+      - name: Verify OTA preflight keeps rollback, SHA256 and existing polling
+        run: python firmware/voltronic-esp32/tests/test_ota_preflight_sources.py
 
   esp32:
     name: Build isolated classic ESP32 VPN gateway
@@ -233,6 +235,7 @@ jobs:
           cp firmware/voltronic-esp32/build_ota/bootloader/bootloader.bin firmware/voltronic-esp32/dist-ota/voltronic-s3-ota-bootloader.bin
           cp firmware/voltronic-esp32/build_ota/partition_table/partition-table.bin firmware/voltronic-esp32/dist-ota/voltronic-s3-ota-partition-table.bin
           cp firmware/voltronic-esp32/build_ota/smart_energy_voltronic_s3.bin firmware/voltronic-esp32/dist-ota/voltronic-s3-ota-app.bin
+          cp firmware/voltronic-esp32/build_ota/smart_energy_voltronic_s3.bin firmware/voltronic-esp32/dist-ota/smart-energy-voltronic-S3-OTA.bin
           python - <<'PY'
           import sys
           from pathlib import Path
@@ -252,6 +255,13 @@ jobs:
         with:
           name: SmartEnergy-VOLTRONIC-S3-OTA-MIGRATION
           path: firmware/voltronic-esp32/dist-ota/voltronic-s3-ota-*.bin
+          if-no-files-found: error
+          retention-days: 30
+      - name: Upload experimental app-only OTA file for user-controlled GitHub release
+        uses: actions/upload-artifact@v4
+        with:
+          name: SmartEnergy-VOLTRONIC-S3-OTA-0.3.3-PREFLIGHT
+          path: firmware/voltronic-esp32/dist-ota/smart-energy-voltronic-S3-OTA.bin
           if-no-files-found: error
           retention-days: 30
 

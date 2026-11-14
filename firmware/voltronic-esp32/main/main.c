@@ -33,7 +33,7 @@
 #include "cJSON.h"
 #include "voltronic_protocol.h"
 
-#define VT_VERSION "0.3.2-dev-ota-gated-read-only"
+#define VT_VERSION "0.3.3-dev-ota-preflight-read-only"
 #define VT_UART UART_NUM_1
 #define VT_TX GPIO_NUM_17
 #define VT_RX GPIO_NUM_16
@@ -626,6 +626,22 @@ static esp_err_t ota_status_handler(httpd_req_t *req){
     cJSON_AddNumberToObject(doc,"max_image_bytes",
         next ? next->size : 0);
     cJSON_AddBoolToObject(doc,"requires_explicit_confirmation",true);
+    /* Read-only, no flash operations: unambiguous OTA readiness indicators. */
+    const esp_partition_t *running=esp_ota_get_running_partition();
+    const esp_partition_t *boot=esp_ota_get_boot_partition();
+    cJSON_AddStringToObject(doc,"running_partition",
+        running ? running->label : "unknown");
+    cJSON_AddStringToObject(doc,"boot_partition",
+        boot ? boot->label : "unknown");
+    cJSON_AddStringToObject(doc,"running_firmware",VT_VERSION);
+    cJSON_AddBoolToObject(doc,"flash_ready",next!=NULL &&
+        running!=NULL && boot!=NULL);
+    esp_ota_img_states_t image_state=ESP_OTA_IMG_UNDEFINED;
+    bool pending=running &&
+        esp_ota_get_state_partition(running,&image_state)==ESP_OK &&
+        image_state==ESP_OTA_IMG_PENDING_VERIFY;
+    cJSON_AddBoolToObject(doc,"rollback_pending",pending);
+    cJSON_AddBoolToObject(doc,"requires_usb_migration",next==NULL);
     return send_json(req,doc);
 }
 static int ota_hex_nibble(char ch){
