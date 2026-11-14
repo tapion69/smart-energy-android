@@ -37,15 +37,22 @@ internal object VoltronicParameterEditor {
         require(port in 1..65535){"Port S3 invalide"}
     }
     fun current(
-        host:String,code:String,port:Int,network:Network?
+        host:String,code:String,port:Int,network:Network?,
+        route:VoltronicVpnRoute?=null,slot:Int=1
     ):List<Setting> {
-        validateLocal(host,code,port,network)
-        val info=VoltronicReadOnlyClient.probe(host,code,port,network)
+        if(route==null)validateLocal(host,code,port,network)
+        else require(VoltronicVpnReadOnlyClient.remoteWritesEnabled(route)) {
+            "Écriture à distance désactivée sur la passerelle VPN. "+
+            "Le nouveau firmware VPN et une autorisation physique USB sont requis."
+        }
+        val info=if(route!=null)VoltronicVpnReadOnlyClient.info(slot,route)
+                 else VoltronicReadOnlyClient.probe(host,code,port,network)
         require(info.optBoolean("parameter_edit_supported",false) &&
             info.optString("parameter_edit_protocol")=="verified-write-v1"){
             "Ce firmware Voltronic ne permet pas les modifications vérifiées"
         }
-        val details=VoltronicReadOnlyClient.details(host,code,port,network)
+        val details=if(route!=null)VoltronicVpnReadOnlyClient.read(slot,true,route)
+                    else VoltronicReadOnlyClient.details(host,code,port,network)
         val native=details.optJSONObject("parameters")
             ?:throw IllegalStateException("Valeurs natives indisponibles")
         return specifications.mapNotNull { spec ->
@@ -59,11 +66,14 @@ internal object VoltronicParameterEditor {
     }
     fun change(
         host:String,code:String,port:Int,network:Network?,
-        key:String,old:Double,new:Double
+        key:String,old:Double,new:Double,
+        route:VoltronicVpnRoute?=null,slot:Int=1
     ):JSONObject {
-        validateLocal(host,code,port,network)
+        if(route==null)validateLocal(host,code,port,network)
         require(specifications.any {it.key==key}){"Paramètre inconnu"}
         require(old.isFinite()&&new.isFinite()&&old!=new){"Nouvelle valeur invalide"}
+        if(route!=null)return VoltronicVpnReadOnlyClient.change(
+            slot,route,key,old,new)
         val body=JSONObject().put("parameter",key).put("old",old)
             .put("value",new).put("confirmed",true).toString()
         val url=URL("http://$host:$port/api/v1/parameters/change")
