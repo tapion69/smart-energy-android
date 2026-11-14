@@ -66,7 +66,7 @@ jobs:
           fi
           gh release create "$TAG" release-files/SmartEnergy-Android-0.3.43.apk \
             --repo "$REPO" \
-            --target 8bacb77a238b4d1fedbe5083f4893c4d0ebee75f \
+            --target e47bda6fa2fc20f688297411c2f223334e6f42fb \
             --title "Smart Energy Android 0.3.43 — JK & Voltronic parameter coverage + safe VPN editing" \
             --prerelease \
             --notes "Signed app versionCode 57. Installs over signed 0.3.42 preserving all settings. Full JK source-catalog coverage including unavailable settings (requires new JK firmware), native Voltronic QPIRI/QDOP supplement rows locked read-only without verified commands, and remote JK/Voltronic parameter editing when the updated VPN gateway is physically USB-opted-in. No automatic critical BMS writes. JK dashboard, OTA test image and BLE pairings preserved."
