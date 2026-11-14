@@ -137,18 +137,18 @@ class UsbProtocolTests(unittest.TestCase):
             def close(self):self.is_open=False
             def write(self,packet):
                 if packet.startswith(b"SEVPN_PING "):
-                    self.pending.append(b"SEVPN_READY_V1\\n")
+                    self.pending.append(b"SEVPN_READY_V1\n")
                 else:self.payload_count+=1
                 return len(packet)
             def readline(self):
                 return self.pending.pop(0) if self.pending else b""
             def flush(self):pass
         device=TxOnlySerial()
-        with patch("vpn_usb.serial.Serial",return_value=device), \\
+        with patch("vpn_usb.serial.Serial",return_value=device), \
              patch("vpn_usb.time.monotonic",side_effect=[0,0,1,2,3,4,5]):
             with self.assertRaisesRegex(RuntimeError,"SEVPN_PONG"):
                 provision_over_serial("COM11",None,lambda m:None,
-                    timeout_seconds=3,payload_override=b"SEVPN_REMOTE_WRITES_ON\\n")
+                    timeout_seconds=3,payload_override=b"SEVPN_REMOTE_WRITES_ON\n")
         self.assertEqual(device.payload_count,0)
 
     def test_missing_field_fails(self):
