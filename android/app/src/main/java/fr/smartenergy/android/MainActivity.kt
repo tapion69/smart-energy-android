@@ -1265,6 +1265,22 @@ class MainActivity : Activity() {
         },6)
 
         add(settingsPage,label("Réglages de l'application",25f,true),16)
+        val voltEdit=section(settingsPage,"Modifier les paramètres Voltronic",true)
+        add(voltEdit,label("Uniquement en Wi-Fi local sur un ESP32-S3 compatible. "+
+            "Chaque modification demande une confirmation, puis le S3 vérifie "+
+            "la nouvelle valeur par une relecture QPIRI/QDOP. "+
+            "Aucune commande ne part sans validation. "+
+            "Les paramètres JK et le VPN ne sont pas touchés.",12f,color=subdued))
+        add(voltEdit,action("Lire / modifier un paramètre Voltronic") {
+            val slots=(1..3).filter {voltronicFleet.configured(it)}
+            if(slots.isEmpty()){
+                updateFeedback.text="Configure un onduleur Voltronic avant de modifier ses paramètres."
+            }else AlertDialog.Builder(this)
+                .setTitle("Choisir l'onduleur à modifier")
+                .setItems(slots.map{"INV$it"}.toTypedArray()) { _,index ->
+                    loadEditableVoltronicSettings(slots[index])
+                }.show()
+        },8)
         val migration=section(settingsPage,"Sauvegarde / migration de configuration",true)
         add(migration,label("Une mise à jour Android signée avec le même certificat "+
             "conserve automatiquement toutes les données, y compris les codes "+
@@ -4061,6 +4077,124 @@ class MainActivity : Activity() {
                 }
             }
         }
+    }
+
+    private fun loadEditableVoltronicSettings(slot:Int) {
+        if(slot !in 1..3 || !voltronicFleet.configured(slot))return
+        val host=if(slot==1)prefs.getString("inverter_probe_ip","")?:""
+            else prefs.getString("inverter_${slot}_ip","")?:""
+        val port=if(slot==1)prefs.getInt("inverter_probe_port",18081)
+            else prefs.getInt("inverter_${slot}_port",18081)
+        val code=auxiliaryCode(if(slot==1)"premium_voltronic_code_cipher"
+            else "premium_voltronic_${slot}_code_cipher")
+        val network=voltronicWifiNetwork()
+        if(network==null || !SunSpecReadOnly.isPrivateIPv4(host) ||
+            code.length !in 8..32) {
+            AlertDialog.Builder(this).setTitle("INV$slot · accès local requis")
+                .setMessage("Connecte le téléphone au Wi-Fi local et renseigne "+
+                    "l'adresse privée et le code de cet ESP32-S3 dans Configuration. "+
+                    "Les écritures par VPN ne sont pas autorisées.")
+                .setPositiveButton("Compris",null).show()
+            return
+        }
+        AlertDialog.Builder(this).setTitle("Chargement des réglages INV$slot")
+            .setMessage("Lecture des paramètres natifs QPIRI/QDOP en cours…")
+            .setPositiveButton("OK",null).show()
+        settingsWorker.execute {
+            val settings=try {
+                VoltronicParameterEditor.current(host,code,port,network)
+            }catch(ex:Exception) {
+                runOnUiThread {
+                    if(!isFinishing)AlertDialog.Builder(this)
+                        .setTitle("Paramètres INV$slot indisponibles")
+                        .setMessage(ex.message?:ex.javaClass.simpleName)
+                        .setPositiveButton("OK",null).show()
+                }
+                return@execute
+            }
+            runOnUiThread {
+                if(isFinishing||isDestroyed)return@runOnUiThread
+                if(settings.isEmpty()){
+                    AlertDialog.Builder(this)
+                        .setTitle("INV$slot · aucune valeur fraîche")
+                        .setMessage("Attends une lecture QPIRI/QDOP valide sur le "+
+                            "lecteur S3. Aucun paramètre n'a été modifié.")
+                        .setPositiveButton("OK",null).show()
+                }else AlertDialog.Builder(this)
+                    .setTitle("Paramètres Voltronic · INV$slot")
+                    .setItems(settings.map { "${it.label} : ${it.value} ${it.unit}" }
+                        .toTypedArray()) { _,index ->
+                        proposeVoltronicChange(slot,host,port,code,network,settings[index])
+                    }.show()
+            }
+        }
+    }
+
+    private fun proposeVoltronicChange(
+        slot:Int,host:String,port:Int,code:String,network:Network,
+        setting:VoltronicParameterEditor.Setting
+    ) {
+        val value=input("Nouvelle valeur ${setting.unit}")
+        value.inputType=android.text.InputType.TYPE_CLASS_NUMBER or
+            android.text.InputType.TYPE_NUMBER_FLAG_DECIMAL or
+            android.text.InputType.TYPE_NUMBER_FLAG_SIGNED
+        value.setText(setting.value.toString())
+        AlertDialog.Builder(this)
+            .setTitle("INV$slot · ${setting.label}")
+            .setMessage("Valeur actuelle native : ${setting.value} ${setting.unit}. "+
+                "Entre la nouvelle valeur. Le firmware refusera un pas "+
+                "ou une plage non compatibles.")
+            .setView(value)
+            .setNegativeButton("Annuler",null)
+            .setPositiveButton("Continuer") { _,_ ->
+                val desired=value.text.toString().trim().replace(',','.').toDoubleOrNull()
+                if(desired==null || !desired.isFinite() || desired==setting.value) {
+                    AlertDialog.Builder(this).setTitle("Valeur incorrecte")
+                        .setMessage("Indique une nouvelle valeur numérique différente.")
+                        .setPositiveButton("OK",null).show()
+                }else {
+                    AlertDialog.Builder(this)
+                        .setTitle("Confirmer l'écriture INV$slot")
+                        .setMessage("${setting.label}\n"+
+                            "Valeur actuelle : ${setting.value} ${setting.unit}\n"+
+                            "Nouvelle valeur : $desired ${setting.unit}\n\n"+
+                            "La valeur sera relue juste avant l'écriture. "+
+                            "Une seule commande sera envoyée, puis une "+
+                            "relecture native immédiate vérifiera le résultat. "+
+                            "Si la confirmation échoue, aucun nouvel essai "+
+                            "ne sera déclenché automatiquement.")
+                        .setNegativeButton("Annuler",null)
+                        .setPositiveButton("Confirmer et vérifier") { _,_ ->
+                            updateFeedback.text="INV$slot : transaction en cours. "+
+                                "Ne lance pas une seconde modification."
+                            settingsWorker.execute {
+                                val status=try {
+                                    val result=VoltronicParameterEditor.change(
+                                        host,code,port,network,setting.key,
+                                        setting.value,desired)
+                                    if(result.optBoolean("verified",false))
+                                        "INV$slot : paramètre vérifié par relecture native."
+                                    else "INV$slot : modification NON CONFIRMÉE ("+
+                                        result.optString("result","inconnu")+"). "+
+                                        "Relis les paramètres avant toute autre action."
+                                }catch(ex:Exception){
+                                    "INV$slot : état non confirmé ("+
+                                        (ex.message?:ex.javaClass.simpleName).take(130)+
+                                        "). Vérifie l'onduleur, sans réessai automatique."
+                                }
+                                runOnUiThread {
+                                    if(!isFinishing){
+                                        updateFeedback.text=status
+                                        AlertDialog.Builder(this)
+                                            .setTitle("Résultat Voltronic · INV$slot")
+                                            .setMessage(status)
+                                            .setPositiveButton("OK",null).show()
+                                    }
+                                }
+                            }
+                        }.show()
+                }
+            }.show()
     }
 
     private fun installAndroidRelease(release:SmartEnergyUpdateFeed.AndroidRelease) {
