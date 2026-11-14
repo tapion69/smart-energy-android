@@ -62,9 +62,9 @@ if ($keyExit -ne 0) {
     Write-Host ('Keytool error (secrets redacted): ' + $safeDetails)
     throw 'Could not export the public signing certificate; existing backup is intact.'
 }
-$pem = [regex]::Match($certificateText,'(?s)-----BEGIN CERTIFICATE-----\\s*([A-Za-z0-9+/=\\r\\n]+?)\\s*-----END CERTIFICATE-----')
+$pem = [regex]::Match($certificateText,'(?s)-----BEGIN CERTIFICATE-----\s*([A-Za-z0-9+/=\s]+?)-----END CERTIFICATE-----')
 if (!$pem.Success) { throw 'Keytool returned no public certificate (PEM). Existing backup preserved.' }
-$encodedCertificate = $pem.Groups[1].Value -replace '\\s',''
+$encodedCertificate = $pem.Groups[1].Value -replace '\s',''
 $certificateBytes = [Convert]::FromBase64String($encodedCertificate)
 $sha256 = [Security.Cryptography.SHA256]::Create()
 try {
