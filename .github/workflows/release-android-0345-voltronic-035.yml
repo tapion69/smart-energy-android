@@ -161,7 +161,7 @@ jobs:
           for pos in range(0,len(table)-31,32):
               p=table[pos:pos+32]
               if int.from_bytes(p[:2],'little')!=0x50AA: continue
-              label=p[12:28].split(b'\\x00',1)[0].decode('ascii')
+              label=p[12:28].split(bytes([0]),1)[0].decode('ascii')
               entries[label]=(int.from_bytes(p[4:8],'little'),int.from_bytes(p[8:12],'little'))
           assert entries.get('nvs')==(0x9000,0x6000),entries
           assert entries.get('ota_0')==(0x210000,0x200000),entries
