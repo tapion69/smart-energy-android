@@ -376,9 +376,17 @@ function renderInverters(){
  showNumber(battery,'Courant de charge',v.batteryChargeCurrentA,'A',1);
  showNumber(battery,'Courant de décharge',v.batteryDischargeCurrentA,'A',1);
  showNumber(battery,'Tension SCC',v.batterySccVoltageV,'V',2);
- var params=section(details,'⚙ Tous les paramètres · lecture seule',false,'parameters');
+ var params=section(details,'⚙ Tous les paramètres · consulter / modifier',false,'parameters');
  row(params,'QPIRI / QDOP',detailState);
  renderNativeParameters(params,d);
+ var editBtn=document.createElement('button');
+ editBtn.type='button';editBtn.className='parameter-edit-action';
+ editBtn.textContent='✎ Lire / modifier les paramètres de INV'+v.slot;
+ editBtn.onclick=function(){if(Number.isInteger(v.slot)&&v.slot>=1&&v.slot<=3)appNav('voltronic-parameters:'+v.slot)};
+ params.append(editBtn);
+ var localHint=document.createElement('div');localHint.className='muted';
+ localHint.textContent='Modification uniquement en Wi-Fi local, avec confirmation et vérification après écriture. En VPN : consultation seule.';
+ params.append(localHint);
  var diag=section(details,'▤ Diagnostics et communication',false,'diagnostics');
  row(diag,'Dernier diagnostic',v.detail||'—');
  [
