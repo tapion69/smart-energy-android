@@ -294,7 +294,15 @@ class VoltronicFleet(
         val native1=num("pv1_power_native_w")?.takeIf {it in 0.0..30000.0}
         val w1=native1 ?: if(v1!=null && a1!=null)v1*a1 else null
         if(v1!=null || a1!=null || native1!=null) {
+            val nativeVerified=if(v.has("pv1_power_native_verified"))
+                v.optBoolean("pv1_power_native_verified",false) else true
+            val source=when {
+                native1==null -> "estimate_vi"
+                nativeVerified -> "native"
+                else -> "qpigs_candidate"
+            }
             val ch=JSONObject().put("index",1).put("derived",native1==null)
+                .put("powerSource",source)
             if(v1!=null)ch.put("voltageV",v1)
             if(a1!=null)ch.put("currentA",a1)
             if(w1!=null)ch.put("powerW",w1)
@@ -306,6 +314,7 @@ class VoltronicFleet(
         // QPIGS2 may NAK: never manufacture a second MPPT.
         if(v2!=null || a2!=null || w2!=null) {
             val ch=JSONObject().put("index",2).put("derived",false)
+                .put("powerSource","native")
             if(v2!=null)ch.put("voltageV",v2)
             if(a2!=null)ch.put("currentA",a2)
             if(w2!=null)ch.put("powerW",w2)
