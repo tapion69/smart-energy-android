@@ -426,6 +426,32 @@ static void provisioning_loop(void) {
         }
     }
 }
+/*
+ * The physical USB setup must NEVER run on the small ESP-IDF app_main stack.
+ * patch_remote_writes() and patch_voltronic_only() need several KB of local
+ * scratch buffers for the existing NVS JSON, parsed configurations, and
+ * validated merged document. The old inline call can exhaust app_main's
+ * default stack right after a successful nonce PONG, before an NVS ACK.
+ *
+ * A separate task is started only in USB maintenance mode. Normal boot
+ * keeps the original app_main memory footprint, Wi-Fi and TailTiny unchanged.
+ * No write or network service is available from this offline USB task.
+ */
+#define SE_USB_MAINT_TASK_STACK 12288
+static void usb_maintenance_task(void *unused) {
+    (void)unused;
+    provisioning_loop();  // Only exits if an unrecoverable firmware bug occurs.
+    ESP_LOGE(TAG,"Offline USB task exited unexpectedly");
+    vTaskDelete(NULL);
+}
+static bool start_offline_usb_task(void) {
+    if(xTaskCreate(usb_maintenance_task,"se-vpn-usb",SE_USB_MAINT_TASK_STACK,
+                   NULL,5,NULL)!=pdPASS) {
+        ESP_LOGE(TAG,"Cannot allocate offline USB provisioning stack");
+        return false;
+    }
+    return true;
+}
 static bool physical_reconfigure_requested(void) {
     // BOOT must be pressed AFTER reset, never while power is applied, or the
     // ESP32 would enter ROM bootloader mode. Allow a short supervised window.
@@ -459,12 +485,14 @@ const se_vpn_config_t *se_vpn_provision_or_load(void) {
     const bool runtime_physical_request=false;
 #endif
     if(!load_config(&current)) {
-        provisioning_loop(); // May restart after first successful provisioning
+        // No network startup when first provisioning; the dedicated USB task
+        // handles validated configuration before rebooting into normal mode.
+        (void)start_offline_usb_task();
         return NULL;
     }
     if(runtime_physical_request || physical_reconfigure_requested()) {
         ESP_LOGW(TAG,"Physical BOOT authorization: offline USB provisioning mode");
-        provisioning_loop();
+        (void)start_offline_usb_task();
         return NULL;
     }
     return &current;
