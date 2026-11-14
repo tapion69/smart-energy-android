@@ -27,6 +27,7 @@ class EnergyDashboardV3(context:Context) : WebView(context) {
     init {
         setBackgroundColor(Color.rgb(7,20,30))
         isVerticalScrollBarEnabled=false
+        isNestedScrollingEnabled=false
         overScrollMode=OVER_SCROLL_NEVER
         settings.javaScriptEnabled=true
         settings.domStorageEnabled=false
@@ -68,13 +69,21 @@ class EnergyDashboardV3(context:Context) : WebView(context) {
     }
     private fun fitHeight() {
         if(!ready||width<=0)return
-        evaluateJavascript("Math.ceil(document.documentElement.scrollHeight).toString()") {result ->
+        // The dashboard is inside a native ScrollView. The old 3600dp
+        // hard cap clipped long QPIRI/QDOP inverter pages and trapped swipes
+        // inside the WebView; size it to content and let Android scroll once.
+        evaluateJavascript(
+            "Math.ceil(Math.max(document.body.scrollHeight, "+
+                "document.documentElement.scrollHeight)).toString()"
+        ) { result ->
             val h=result.trim('"').toDoubleOrNull()?:return@evaluateJavascript
             val px=(h*resources.displayMetrics.density).toInt().coerceIn(
                 (360*resources.displayMetrics.density).toInt(),
-                (3600*resources.displayMetrics.density).toInt())
+                (12000*resources.displayMetrics.density).toInt())
             val p=layoutParams?:return@evaluateJavascript
-            if(kotlin.math.abs(p.height-px)>8) {
+            // Avoid re-laying out the entire native page on every 2.5s poll
+            // for small font or antialiasing height differences.
+            if(kotlin.math.abs(p.height-px)>24) {
                 p.height=px
                 layoutParams=p
             }
