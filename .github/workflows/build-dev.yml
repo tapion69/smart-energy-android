@@ -11,6 +11,7 @@ on:
 
 permissions:
   contents: read
+  actions: read
 
 jobs:
   android:
@@ -22,6 +23,24 @@ jobs:
         with:
           distribution: temurin
           java-version: '17'
+      # Pinned experimental Voltronic 0.3.4 OTA image from the known CI build.
+      # No general-purpose firmware flasher and no unrelated firmware changes.
+      - name: Fetch exact S3 OTA test binary for the APK
+        uses: actions/download-artifact@v4
+        with:
+          name: SmartEnergy-VOLTRONIC-S3-OTA-0.3.3-PREFLIGHT
+          run-id: 43585410799
+          repository: tapion69/smart-energy-android
+          github-token: ${{ github.token }}
+          path: android/app/src/main/assets
+      - name: Verify and embed the SHA256-pinned Voltronic test image
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd android/app/src/main/assets
+          echo '9cfc8c87280c50bf92eb4f6b8029ea67004aa79cfbe7ff0faa0f24f78e3bf289  smart-energy-voltronic-S3-OTA.bin' | sha256sum --check --status
+          test "$(wc -c < smart-energy-voltronic-S3-OTA.bin)" -eq 901664
+          mv smart-energy-voltronic-S3-OTA.bin voltronic-s3-0.3.4-test.bin
       - name: Load permanent APK signing key (GitHub secrets)
         id: signing
         shell: bash
