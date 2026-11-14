@@ -53,7 +53,7 @@ static inline uint8_t vt_crc_escape(uint8_t b) {
 static inline bool vt_read_command(const char *cmd) {
     if(!cmd)return false;
     const char *fixed[]={"QPIGS","QPIGS2","QMOD","QPIRI","QDOP","QPIWS",
-        "QET","QLT","QMN","QID","QVFW","QVFW3"};
+        "QET","QLT","QMN","QID","QVFW","QVFW3","QBMS","Q1"};
     for(size_t i=0;i<sizeof(fixed)/sizeof(fixed[0]);i++)
         if(strcmp(cmd,fixed[i])==0)return true;
     struct {const char *prefix;size_t date_len;} dated[]={
