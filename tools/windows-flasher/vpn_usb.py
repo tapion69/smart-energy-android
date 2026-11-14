@@ -70,7 +70,7 @@ def format_jk_target_patch(slot: int, ip: str, code: str = "") -> bytes:
     request={"slot":slot,"ip":ip.strip()}
     if code:request["code"]=code
     payload=("SEVPN_SET_JK "+json.dumps(
-        request,ensure_ascii=True,separators=(",",":"))+"\\n").encode("ascii")
+        request,ensure_ascii=True,separators=(",",":"))+"\n").encode("ascii")
     if len(payload)>1599:raise ValueError("Commande USB JK trop longue.")
     return payload
 
