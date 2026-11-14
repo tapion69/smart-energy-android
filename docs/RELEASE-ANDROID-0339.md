@@ -78,5 +78,11 @@ restent séparés.
 - Ne jamais utiliser `erase_flash` ni une image FACTORY fusionnée pour cette
   migration. Voir `docs/VOLTRONIC_OTA_MIGRATION.md`.
 
-**État à cette étape :** code proposé sur `dev`, pas de Release Android ou
-ESP32 publiée, aucun test sur matériel réel attesté.
+**État après signature (14 novembre 2026) :** Android `0.3.39-dev` compilé
+et vérifié avec le certificat permanent, GitHub Actions
+[run 43587552565](https://github.com/tapion69/smart-energy-android/actions/runs/43587552565),
+artefact `smart-energy-android-signed-upgradeable`. Pas encore de GitHub Release
+ni de mise à jour `updates/android.json` ; flux d'actualisation intégré à
+activer après validation de l'installation initiale. Firmware Voltronic non
+flashé, aucun test sur matériel réel attesté. L'ancien APK debug est conservé
+à côté jusqu'à migration complète des paramètres.
