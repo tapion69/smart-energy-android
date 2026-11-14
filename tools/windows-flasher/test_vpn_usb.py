@@ -67,11 +67,12 @@ class UsbProtocolTests(unittest.TestCase):
                 self.is_open=False
                 self.close_count+=1
             def write(self,packet):
-                if packet==b"SEVPN_PING\n":
+                if packet.startswith(b"SEVPN_PING "):
                     if not self.failed_first_ping:
                         self.failed_first_ping=True
                         raise serial.SerialTimeoutException("Port reset mid-ping")
                     self.pending.append(b"SEVPN_READY_V1\n")
+                    self.pending.append(packet.replace(b"SEVPN_PING ",b"SEVPN_PONG ",1))
                 else:
                     if not self.ready_was_received:
                         raise AssertionError("Payload sent before READY")
@@ -107,8 +108,9 @@ class UsbProtocolTests(unittest.TestCase):
             def open(self):self.is_open=True
             def close(self):self.is_open=False
             def write(self,packet):
-                if packet==b"SEVPN_PING\n":
+                if packet.startswith(b"SEVPN_PING "):
                     self.pending.append(b"SEVPN_READY_V1\n")
+                    self.pending.append(packet.replace(b"SEVPN_PING ",b"SEVPN_PONG ",1))
                     return len(packet)
                 self.payload_count+=1
                 raise serial.SerialTimeoutException("Lost connection after READY")
@@ -123,6 +125,31 @@ class UsbProtocolTests(unittest.TestCase):
                     payload_override=format_voltronic_patch(
                         1,"192.168.1.63","EXAMPLE_CODE_123"))
         self.assertEqual(device.payload_count,1)
+
+    def test_unsolicited_ready_cannot_authorize_nvs_write(self):
+        """A broken RX wire may still receive unsolicited READY banners."""
+        class TxOnlySerial:
+            def __init__(self):
+                self.is_open=False
+                self.pending=[]
+                self.payload_count=0
+            def open(self):self.is_open=True
+            def close(self):self.is_open=False
+            def write(self,packet):
+                if packet.startswith(b"SEVPN_PING "):
+                    self.pending.append(b"SEVPN_READY_V1\\n")
+                else:self.payload_count+=1
+                return len(packet)
+            def readline(self):
+                return self.pending.pop(0) if self.pending else b""
+            def flush(self):pass
+        device=TxOnlySerial()
+        with patch("vpn_usb.serial.Serial",return_value=device), \\
+             patch("vpn_usb.time.monotonic",side_effect=[0,0,1,2,3,4,5]):
+            with self.assertRaisesRegex(RuntimeError,"SEVPN_PONG"):
+                provision_over_serial("COM11",None,lambda m:None,
+                    timeout_seconds=3,payload_override=b"SEVPN_REMOTE_WRITES_ON\\n")
+        self.assertEqual(device.payload_count,0)
 
     def test_missing_field_fails(self):
         v = values()
