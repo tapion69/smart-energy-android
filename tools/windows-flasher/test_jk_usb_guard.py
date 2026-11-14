@@ -93,7 +93,7 @@ class JkUsbGuardTests(unittest.TestCase):
             if argv[-3:-1]==["0x8000","0x1000"]:
                 Path(argv[-1]).write_bytes(VALID)
             elif argv[-3:-1]==["0x10000","0x10000"]:
-                Path(argv[-1]).write_bytes(b"\\xff"*0x10000)
+                Path(argv[-1]).write_bytes(b"\xff"*0x10000)
             else:
                 raise AssertionError("No write or NVS read is allowed")
         with tempfile.TemporaryDirectory() as temp:
