@@ -1248,9 +1248,6 @@ class MainActivity : Activity() {
             }else {
                 AlertDialog.Builder(this)
                     .setTitle("Tester l'OTA du Voltronic")
-                    .setMessage("Le firmware expérimental 0.3.4 est intégré à l'APK. "+
-                        "Pas de PowerShell ni de fichier BIN à sélectionner. "+
-                        "OTA locale réservée aux S3 avec firmware 0.3.2 vérifié.")
                     .setItems(slots.map { "INV$it" }.toTypedArray()) { _,which ->
                         prepareBundledVoltronicOta(slots[which])
                     }.setNegativeButton("Annuler",null).show()
