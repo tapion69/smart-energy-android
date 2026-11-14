@@ -44,6 +44,40 @@ class BridgeContract(unittest.TestCase):
         self.assertIn('static const vt_edit_spec_t VT_EDIT_SPECS[]', EDIT)
         self.assertIn('One candidate, never an automatic fallback.', SRC)
 
+    def test_native_reply_cache_is_authenticated_and_read_only(self):
+        self.assertIn('#define VT_BRIDGE_CACHE 20', SRC)
+        self.assertIn('static esp_err_t bridge_snapshot_handler', SRC)
+        self.assertIn('if(!authorized(r))return deny(r);', SRC)
+        self.assertIn('"/api/v1/bridge/snapshot"', SRC)
+        self.assertIn('conf.max_uri_handlers=8;', SRC)
+        self.assertIn('cJSON_AddBoolToObject(doc,"cache_only",true)', SRC)
+        self.assertIn('vt_bridge_record_t record;', SRC)
+        self.assertIn('bridge_store_reply((size_t)(job-jobs),cmd,&rx,end)', SRC)
+        start=SRC.index('static esp_err_t bridge_snapshot_handler')
+        end=SRC.index('static esp_err_t diagnostics_handler',start)
+        bridge=SRC[start:end]
+        self.assertNotIn('uart_write_bytes(',bridge)
+        self.assertNotIn('exchange(',bridge)
+        self.assertNotIn('wifi_password',bridge)
+        self.assertNotIn('read_code',bridge)
+
+    def test_full_flow_extra_diagnostics_and_cache_boundaries(self):
+        self.assertIn('#define VT_JOBS 20',SRC)
+        self.assertIn('{"QBMS",3600000',SRC)
+        self.assertIn('{"Q1",3600000',SRC)
+        self.assertIn('"QBMS","Q1"',PROTO)
+        self.assertIn('strcmp(cmd,"QPIGS")==0',SRC)
+        self.assertIn('bool online=snap.have_qpigs',SRC)
+        self.assertIn('"uart_stats"',SRC)
+        self.assertIn('"max_seq"',SRC)
+        self.assertIn('"age_ms"',SRC)
+
+    def test_approved_semantic_m_prefix_and_verified_replay(self):
+        self.assertIn("command[0]=='M'",SRC)
+        self.assertIn('bridge_store_reply(j,spec->query,&after,verified_sample_ms)',SRC)
+        self.assertIn('vt_edit_find(key->valuestring)',SRC)
+        self.assertNotIn('"/api/v1/raw-command"',SRC)
+
     def test_wifi_codes_not_exported_with_telemetry(self):
         start = SRC.index('static esp_err_t telemetry_handler(')
         end = SRC.index('static esp_err_t details_handler(')
