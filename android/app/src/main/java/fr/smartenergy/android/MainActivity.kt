@@ -1111,7 +1111,10 @@ class MainActivity : Activity() {
         add(voltVpn,label("Depuis Internet : Tailscale Android vers l'ESP32 VPN, "+
             "puis uniquement les lectures de INV1/INV2/INV3 sur le réseau local. "+
             "L'ESP32 VPN doit être configuré dans le flasher avec les IP et "+
-            "codes Voltronic. Aucune écriture n'est relayée.",12f,color=subdued))
+            "codes Voltronic. Écritures distantes interdites par défaut ; "+
+            "possible seulement après installation du firmware VPN compatible "+
+            "et autorisation physique USB. Les confirmations et contrôles "+
+            "de valeurs restent obligatoires.",12f,color=subdued))
         add(voltVpn,label("Automatique : quand l'accès extérieur ESP32 VPN "+
             "est actif pour JK, les mesures Voltronic empruntent la même "+
             "passerelle en lecture seule. Aucune case d'activation séparée.",12f,color=subdued))
