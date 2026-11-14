@@ -29,12 +29,14 @@ button{font:inherit;cursor:pointer}
 .photoVal{position:absolute;z-index:2;min-width:90px;padding:8px;background:#051e30e9;border:1px solid #7ac6d1;border-radius:9px;box-shadow:0 5px 19px #0009}
 .photoVal .cap{display:block;color:#b2d5e5;font-size:10px}.photoVal strong{display:block;font-size:18px;white-space:nowrap}.photoVal .day{font-size:10px;display:block;margin-top:3px;color:#e1f4f5}
 .photoVal.pv{left:28%;top:13%;border-color:#e2b85e}.photoVal.pv strong{color:#ffe080}
-.photoVal.home{left:35%;top:53%}.photoVal.grid{left:3%;bottom:5%;border-color:#659bdc}.photoVal.bat{right:3%;bottom:5%;border-color:#45ca96}.photoVal.bat strong{color:#94ffc3}
-.photoVal.inv{right:3%;top:37%;font-size:10px}.photoVal.inv strong{font-size:14px}
+.photoVal.home{right:3%;top:48%}.photoVal.grid{left:3%;bottom:5%;border-color:#659bdc}.photoVal.bat{right:3%;bottom:5%;border-color:#45ca96}.photoVal.bat strong{color:#94ffc3}
+.photoVal.inv{left:3%;top:37%;font-size:10px}.photoVal.inv strong{font-size:14px}
 .hero-lines{position:absolute;inset:0;width:100%;height:100%;pointer-events:none;filter:drop-shadow(0 0 4px #000);opacity:.9}
-.hero-lines path{fill:none;stroke-width:3;stroke-dasharray:6 9;animation:flow 1.3s linear infinite}
+.hero-lines path{fill:none;stroke-width:3;stroke-dasharray:none;animation:none;opacity:.13;transition:opacity .2s}
+.hero-lines path.running{stroke-dasharray:6 9;animation:flow 1.3s linear infinite;opacity:1}
+.hero-lines path.reverse{animation-direction:reverse}
 .hero-lines .solar{stroke:#f1c14b}.hero-lines .house{stroke:#4ee7f2}.hero-lines .store{stroke:#58ec9f}.hero-lines .utility{stroke:#78b6ff}
-.paused .hero-lines path{animation:none;opacity:.14}
+.paused .hero-lines path{animation:none!important;opacity:.13!important}
 @keyframes flow{to{stroke-dashoffset:-30}}
 .daily{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:7px;margin-top:8px}
 .daily .item{padding:9px;background:#11303b;border:1px solid #2d6470;border-radius:9px;min-width:0}
@@ -51,7 +53,8 @@ button{font:inherit;cursor:pointer}
 .mppt-box .quality{font-size:9px;color:#aa9f87}
 .mppt-empty{padding:11px;color:#b9c2c9;border:1px dashed #6d6961;border-radius:8px;background:#242527;text-align:center}
 .mppt-wire-svg{position:absolute;inset:0;z-index:0;pointer-events:none;overflow:visible;width:100%;height:100%}
-.mppt-wire-svg path{fill:none;stroke:#eeb13e;stroke-width:2.1;stroke-linecap:round;stroke-linejoin:round}
+.mppt-wire-svg path{fill:none;stroke:#eeb13e;stroke-width:2.1;stroke-linecap:round;stroke-linejoin:round;opacity:.45}
+.mppt-wire-svg path.running{stroke-dasharray:5 8;opacity:1;animation:flow 1.2s linear infinite}
 .mppt-wire-svg circle{fill:#ffd05b}
 .flow-main{position:relative;display:grid;grid-template-columns:minmax(0,1fr) 98px minmax(0,1fr);align-items:center;gap:9px;margin:3px 0}
 .flow-main .node{text-align:center;min-width:0}.flow-main .node strong{display:block;font-size:17px;color:#b9d8ff}
@@ -64,7 +67,22 @@ button{font:inherit;cursor:pointer}
 .flow-main .join:after{content:'';position:absolute;right:-3px;top:-3px;width:7px;height:7px;background:#50dfbf;border-radius:100%}
 .flow-main .join.left:after{right:auto;left:-3px;background:#65bbf7}
 .sun-small{font-size:10px;margin-top:6px;line-height:1.3;color:#9eb9c8}
-.battery-branch{width:2px;height:26px;background:#4cee8d;margin:0 auto;position:relative}.battery-branch:after{content:'';position:absolute;bottom:-3px;left:-3px;width:8px;height:8px;background:#4cee8d;border-radius:100%}
+.battery-branch{width:3px;height:30px;background:#247b53;margin:0 auto;position:relative;overflow:hidden}
+.battery-branch:after{content:'';position:absolute;left:-2px;width:7px;height:9px;border-radius:100%;background:#57f498;opacity:0}
+.battery-branch.charging:after{opacity:1;animation:moveBatteryDown .95s linear infinite}
+.battery-branch.discharging:after{opacity:1;animation:moveBatteryUp .95s linear infinite}
+@keyframes moveBatteryDown{from{top:-8px}to{top:30px}}
+@keyframes moveBatteryUp{from{top:30px}to{top:-8px}}
+.flow-main .join:before{content:'';position:absolute;left:0;top:-3px;height:8px;width:8px;border-radius:50%;background:#68eeef;opacity:0}
+.flow-main .join.moving:before{opacity:1;animation:moveToRight .9s linear infinite}
+@keyframes moveToRight{from{left:0}to{left:100%}}
+.energy-details{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:7px;margin-top:9px}
+.energy-details>div{min-width:0;border:1px solid #34596a;border-radius:9px;background:#0c2633;padding:8px;color:#b4d4dc}
+.energy-details b{display:block;color:#e3f8ff;font-size:13px;margin-top:3px;overflow-wrap:anywhere}
+.energy-details small{font-size:10px}
+.sun-details{margin-top:15px}
+.parameter-edit-action{background:#164c56;border:1px solid #54b79e;color:#edfff9;border-radius:9px;padding:11px;margin:10px 0;width:100%;font-weight:bold}
+@media(prefers-reduced-motion:reduce){.hero-lines path.running,.mppt-wire-svg path.running,.battery-branch:after,.flow-main .join:before{animation:none!important}}
 .battery-node{display:flex;align-items:center;justify-content:center;gap:14px;flex-wrap:wrap;color:#64f28e}
 .battery-icon{width:55px;height:78px;border:3px solid #54ed80;border-radius:8px;position:relative;padding:8px 6px}
 .battery-icon:before{content:'';position:absolute;top:-7px;left:17px;width:14px;height:5px;background:#54ed80}
@@ -84,7 +102,7 @@ button{font:inherit;cursor:pointer}
 @media(max-width:320px){.jk-home-grid{grid-template-columns:1fr}}
 .native-section{border:1px solid #326477;border-radius:9px;margin:8px 0;padding:9px;background:#082735}
 .native-section summary{color:#97e7c5;font-weight:bold;cursor:pointer}
-.raw-params{max-height:235px;overflow-y:auto}
+.raw-params{max-height:none;overflow:visible}
 .grid-home-summary{display:grid;grid-template-columns:1fr 1fr;gap:6px;margin:12px 0}
 .grid-home-summary .stat{background:#22282b;border:1px solid #434b4e;border-radius:8px;padding:8px}
 .grid-home-summary small{display:block;font-size:10px;color:#c2cdd3}
@@ -97,7 +115,7 @@ button{font:inherit;cursor:pointer}
 .kpis small{font-size:10px;color:#bbd0dd;display:block}.kpis strong{font-size:17px;display:block;margin:5px 0}
 .row{display:flex;justify-content:space-between;gap:9px;padding:8px 0;border-bottom:1px solid #274c59}
 .row:last-child{border:0}.row span{color:#b2cbd7}.row b{text-align:right}
-@media(max-width:390px){.wrap{padding:8px 5px}.hero{height:420px}.photoVal{padding:6px;min-width:78px}.photoVal strong{font-size:15px}.photoVal.pv{left:22%}.photoVal.home{left:33%;top:50%}.mppt-box .detail{font-size:9px}}
+@media(max-width:390px){.wrap{padding:8px 5px}.hero{height:420px}.photoVal{padding:6px;min-width:78px}.photoVal strong{font-size:15px}.photoVal.pv{left:22%}.photoVal.home{right:2%;top:50%;left:auto}.photoVal.inv{left:2%;top:37%}.mppt-box .detail{font-size:9px}}
 </style></head>
 <body><main class="wrap">
 <header class="header"><div><div class="brand">SMART <b>ENERGY</b></div><div class="sub">Onduleurs Voltronic · Énergie en lecture seule</div></div><span class="status" id="state">En attente</span></header>
@@ -112,7 +130,7 @@ button{font:inherit;cursor:pointer}
 <div id="modern" class="view show">
 <section class="hero" id="hero"><div class="hero-title">⚡ ÉNERGIE DE LA MAISON</div>
 <svg class="hero-lines" viewBox="0 0 360 450" preserveAspectRatio="none" aria-hidden="true">
-<path class="solar" d="M125 105 Q182 134 171 230"/><path class="house" d="M184 248 Q228 219 298 210"/><path class="store" d="M196 276 Q254 310 303 355"/><path class="utility" d="M66 356 Q104 330 144 274"/>
+<path class="solar" d="M122 102 Q126 161 104 212"/><path class="house" d="M138 241 Q199 252 274 252"/><path class="store" d="M133 280 Q222 313 291 356"/><path class="utility" d="M68 353 Q73 315 95 284"/>
 </svg>
 <div class="photoVal pv"><span class="cap">☀ Solaire</span><strong id="mPv">— W</strong><span class="day" id="mPvDay">Jour : —</span></div>
 <div class="photoVal home"><span class="cap">⌂ Maison</span><strong id="mLoad">— W</strong></div>
@@ -120,11 +138,17 @@ button{font:inherit;cursor:pointer}
 <div class="photoVal grid"><span class="cap">♧ Réseau</span><strong id="mGrid">— W</strong></div>
 <div class="photoVal bat"><span class="cap">▣ Batteries</span><strong id="mSoc">— %</strong></div>
 </section>
+<div class="energy-details" id="modernDetails">
+ <div><small>Onduleurs · température / sortie</small><b id="mInverterStats">—</b></div>
+ <div><small>Batteries · puissance / courant</small><b id="mBatteryStats">—</b></div>
+ <div><small>Batteries · tension moyenne</small><b id="mBatteryVoltage">—</b></div>
+ <div><small>Batteries · température / sens</small><b id="mBatteryTemp">—</b></div>
+</div>
 <div class="daily" id="nativeDayBlocks" style="display:none">
 <div class="item" id="nativePvDayBox"><small>☀ PV jour UTC · compteur natif</small><b id="nativePvDayValue">—</b></div>
 <div class="item" id="nativeLoadDayBox"><small>⌂ Charge AC jour UTC · compteur natif</small><b id="nativeLoadDayValue">—</b></div>
 </div>
-<div class="note">Compteurs natifs de l'onduleur uniquement. Aucun total journalier calculé par l'application.</div>
+
 </div>
 <div id="sun" class="view">
 <section class="sun">
@@ -136,7 +160,16 @@ button{font:inherit;cursor:pointer}
 <div class="node home"><span>⌂ Maison</span><strong id="sunHome">— W</strong></div>
 </div>
 <div class="battery-branch"></div>
-<div class="battery-node"><div class="battery-icon"><div class="fill"></div></div><div><strong id="sunSoc">— %</strong><div class="small" id="sunBattery">Tension : — · Courant : —</div></div></div>
+<div class="battery-node"><div class="battery-icon"><div class="fill"></div></div><div><strong id="sunSoc">— %</strong><div class="small" id="sunBattery">Tension : — · Courant : —</div><div class="small" id="sunBatteryDirection">Sens non mesuré</div></div></div>
+<div class="energy-details sun-details">
+ <div><small>Onduleurs · température</small><b id="sunInvTemp">—</b></div>
+ <div><small>Onduleurs · courant sortie AC</small><b id="sunInvCurrent">—</b></div>
+ <div><small>Batteries · puissance</small><b id="sunBatteryPower">—</b></div>
+ <div><small>Batteries · courant</small><b id="sunBatteryCurrent">—</b></div>
+ <div><small>Batteries · tension moyenne</small><b id="sunBatteryVoltage">—</b></div>
+ <div><small>Batteries · température</small><b id="sunBatteryTemp">—</b></div>
+ <div><small>Maison · consommation jour UTC</small><b id="sunLoadDay">—</b></div>
+</div>
 
 </section></div>
 <section class="panel" id="homeJkPanel" style="display:none" aria-label="Batteries JK enregistrées">
@@ -144,12 +177,11 @@ button{font:inherit;cursor:pointer}
   <div class="jk-home-grid" id="homeJkCards"></div>
   <div class="muted" style="font-size:10px;margin-top:9px">Mesures des passerelles JK déjà configurées. Appuie sur Batteries pour les détails et paramètres.</div>
 </section>
-<div class="note" id="vpnVoltronicNote" style="display:none"></div>
-<div class="note" id="qualityNote">Valeurs indisponibles = « — ». Une puissance réseau native n'indique pas à elle seule un import EDF.</div>
+<div class="muted" id="vpnVoltronicNote" style="display:none;padding:6px 8px;font-size:11px"></div>
 </div>
 <div id="pageInverters" style="display:none">
 <section class="panel"><h3>Onduleurs configurés</h3><div class="tabs" id="tabs"></div><div id="inverterDetails"></div></section>
-<div class="note">Seuls les MPPT remontés par les ESP32-S3 sont affichés. Les puissances PV1 déduites de tension × courant sont identifiées comme estimées.</div>
+
 </div>
 <div class="panel"><div class="row"><span>Accès</span><b id="route">—</b></div><div class="row"><span>Équipements</span><b id="count">—</b></div><div class="row"><span>Dernière lecture</span><b id="updated">—</b></div></div>
 </main>
