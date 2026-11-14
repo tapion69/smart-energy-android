@@ -224,6 +224,18 @@ def provision_over_serial(port: str, values: dict[str, str] | None,
             pass
 
 
+def set_remote_writes_over_serial(port: str, enabled: bool,
+                                  log: Callable[[str], None],
+                                  on_ready: Callable[[], None] | None = None) -> None:
+    """Physical BOOT+USB opt-in, changes only NVS remote_writes_enabled.
+
+    The VPN firmware verifies every other saved credential remains unchanged.
+    This command never carries a credential; no network endpoint can toggle it.
+    """
+    command=b"SEVPN_REMOTE_WRITES_ON\n" if enabled else b"SEVPN_REMOTE_WRITES_OFF\n"
+    provision_over_serial(port,None,log,on_ready=on_ready,payload_override=command)
+
+
 def add_voltronic_over_serial(port: str, slot: int, ip: str, code: str,
                               log: Callable[[str], None],
                               on_ready: Callable[[], None] | None = None) -> None:
