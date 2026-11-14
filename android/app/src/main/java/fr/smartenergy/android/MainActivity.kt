@@ -3640,6 +3640,7 @@ class MainActivity : Activity() {
                         i,detailForMac(mac),item,
                         allowEdits=parameterEditingEnabled,
                         showDebug=debugEnabled,
+                        viaVpn=remoteGatewayConnection,
                         onModeToggle={ toggleParameterEditMode() },
                         onRefresh={ requestFreshSettingsForEditing() },
                         onEdit={ param -> editJkParameter(mac,param) }
