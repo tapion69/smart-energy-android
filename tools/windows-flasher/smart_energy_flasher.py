@@ -196,12 +196,50 @@ def monitor_esptool_progress(callback: Callable[[int], None]):
         sys.stdout = previous
 
 
+class ScrollableTab(ttk.Frame):
+    """Notebook page with a real vertical scrollbar and visible action bar.
+
+    The body is a window embedded in a Canvas. Its width always follows the
+    canvas, preventing form fields from overflowing beyond the right edge.
+    """
+    def __init__(self, parent: tk.Widget) -> None:
+        super().__init__(parent)
+        self.actions = ttk.Frame(self, padding=(8, 5))
+        self.actions.pack(side="bottom", fill="x")
+        ttk.Separator(self, orient="horizontal").pack(side="bottom", fill="x")
+        pane = ttk.Frame(self)
+        pane.pack(side="top", fill="both", expand=True)
+        self.canvas = tk.Canvas(pane, highlightthickness=0, borderwidth=0)
+        scrollbar = ttk.Scrollbar(pane, orient="vertical",
+                                  command=self.canvas.yview)
+        self.canvas.configure(yscrollcommand=scrollbar.set)
+        scrollbar.pack(side="right", fill="y")
+        self.canvas.pack(side="left", fill="both", expand=True)
+        self.content = ttk.Frame(self.canvas, padding=12)
+        self.content.columnconfigure(1, weight=1)
+        self._window = self.canvas.create_window(
+            (0, 0), window=self.content, anchor="nw")
+        self.content.bind("<Configure>", self._content_changed)
+        self.canvas.bind("<Configure>", self._canvas_changed)
+
+    def _content_changed(self, event: tk.Event) -> None:
+        self.canvas.configure(scrollregion=self.canvas.bbox("all"))
+
+    def _canvas_changed(self, event: tk.Event) -> None:
+        self.canvas.itemconfigure(self._window, width=event.width)
+        self.canvas.configure(scrollregion=self.canvas.bbox("all"))
+
+    def wheel(self, delta: int) -> None:
+        if delta:
+            self.canvas.yview_scroll(-delta, "units")
+
+
 class Flasher(tk.Tk):
     def __init__(self) -> None:
         super().__init__()
         self.title("Smart Energy — JK / VPN / Voltronic ESP32-S3")
-        self.geometry("840x810")
-        self.minsize(740, 620)
+        self.geometry("960x780")
+        self.minsize(740, 550)
         self.events: queue.Queue[tuple[str, str]] = queue.Queue()
         self.busy = False
         self.secret_values: list[str] = []
@@ -274,24 +312,62 @@ class Flasher(tk.Tk):
                                             mode="determinate", maximum=100, value=0)
         self.progress_bar.pack(fill="x")
         tabs = ttk.Notebook(outer)
-        tabs.pack(fill="both", expand=True, pady=10)
-        jk = ttk.Frame(tabs, padding=12)
-        vpn = ttk.Frame(tabs, padding=12)
-        voltronic = ttk.Frame(tabs, padding=12)
-        jk.columnconfigure(1, weight=1)
-        vpn.columnconfigure(1, weight=1)
-        voltronic.columnconfigure(1, weight=1)
+        tabs.pack(fill="both", expand=True, pady=(4, 6))
+        self._scroll_tabs = [ScrollableTab(tabs) for _ in range(3)]
+        jk, vpn, voltronic = self._scroll_tabs
         tabs.add(jk, text="ESP32 JK")
         tabs.add(vpn, text="ESP32 VPN")
         tabs.add(voltronic, text="Voltronic S3")
-        self._build_jk(jk)
-        self._build_vpn(vpn)
-        self._build_voltronic(voltronic)
+        self._build_jk(jk.content)
+        self._build_vpn(vpn.content)
+        self._build_voltronic(voltronic.content)
+        # Important actions remain visible even when the form is scrolled.
+        ttk.Button(jk.actions, text="Flasher le lecteur JK",
+                   command=self._flash_jk).pack(side="right", padx=5)
+        ttk.Button(vpn.actions, text="Flasher VPN (mode sélectionné)",
+                   command=self._flash_vpn).pack(side="right", padx=5)
+        ttk.Button(vpn.actions, text="Ajouter INV sans effacer le reste",
+                   command=self._add_voltronic_only).pack(side="left", padx=5)
+        ttk.Button(voltronic.actions, text="Flasher Voltronic S3",
+                   command=self._flash_voltronic).pack(side="right", padx=5)
+        ttk.Button(voltronic.actions, text="Configurer S3 sans reflasher",
+                   command=self._configure_voltronic_only).pack(side="left", padx=5)
+        # Mouse wheel scrolls the tab body only when the pointer is over it.
+        # Leave native scrolling elsewhere (logs, combobox popups) unchanged.
+        self.bind_all("<MouseWheel>", self._scroll_active_tab, add="+")
+        self.bind_all("<Button-4>", self._scroll_active_tab, add="+")
+        self.bind_all("<Button-5>", self._scroll_active_tab, add="+")
         ttk.Label(outer, text="Journal (aucun mot de passe ne doit apparaître) :").pack(anchor="w")
-        self.log_widget = tk.Text(outer, height=10, wrap="word", state="disabled")
+        self.log_widget = tk.Text(outer, height=5, wrap="word", state="disabled")
         self.log_widget.pack(fill="x")
         self._log("Le bouton Flash ne lance jamais erase_flash.")
         self._ports()
+
+    def _scroll_active_tab(self, event: tk.Event) -> str | None:
+        """Windows wheel, plus X11 Button-4/5 for local GUI checks."""
+        if not hasattr(self, "_scroll_tabs"):
+            return None
+        # Do not intercept wheels outside the notebook's visible canvas.
+        for tab in self._scroll_tabs:
+            if not tab.winfo_ismapped():
+                continue
+            canvas = tab.canvas
+            x, y = event.x_root, event.y_root
+            left, top = canvas.winfo_rootx(), canvas.winfo_rooty()
+            if left <= x < left + canvas.winfo_width() and (
+                top <= y < top + canvas.winfo_height()
+            ):
+                if getattr(event, "num", 0) == 4:
+                    movement = 2
+                elif getattr(event, "num", 0) == 5:
+                    movement = -2
+                else:
+                    delta = getattr(event, "delta", 0)
+                    movement = (1 if delta > 0 else -1) * max(
+                        1, abs(int(delta / 120))) if delta else 0
+                tab.wheel(movement)
+                return "break"
+        return None
 
     def _ports(self) -> None:
         """Refresh dropdown on launch, button click and just before opening it."""
@@ -374,9 +450,9 @@ class Flasher(tk.Tk):
             command=lambda: expert.grid_remove()
                 if expert.winfo_ismapped() else expert.grid()
         ).grid(row=3, column=0, columnspan=3, sticky="w", padx=8)
-        ttk.Button(root, text="Flasher le lecteur JK",
-                   command=self._flash_jk).grid(
-            row=5, column=0, columnspan=3, pady=20
+        ttk.Label(root, text="Le bouton « Flasher le lecteur JK » reste visible "
+                  "en bas de l'onglet.", wraplength=720).grid(
+            row=5, column=0, columnspan=3, pady=12
         )
 
     def _field(self, frame: ttk.Frame, text: str, key: str, row: int,
@@ -471,8 +547,9 @@ class Flasher(tk.Tk):
                  "Ne pas choisir FACTORY pour une mise à jour.",
             wraplength=720
         ).grid(row=7,column=0,columnspan=3,sticky="w",padx=8,pady=(4,0))
-        ttk.Button(root, text="Flasher et configurer l'ESP32 VPN",
-                   command=self._flash_vpn).grid(
+        ttk.Label(root, text="Actions VPN toujours accessibles en bas de l'onglet. "
+                  "Pour ajouter un onduleur, renseigne seulement son IP et son code.",
+                  wraplength=720).grid(
             row=8, column=0, columnspan=3, pady=(8, 4))
         append=ttk.LabelFrame(root,text="Ajouter un onduleur · conserver VPN et JK",padding=6)
         append.grid(row=9,column=0,columnspan=3,sticky="ew",padx=8,pady=6)
@@ -481,8 +558,9 @@ class Flasher(tk.Tk):
         ttk.Combobox(append,textvariable=self.vpn_patch_slot,
                      values=["1","2","3"],state="readonly",width=5).grid(
                      row=0,column=1,sticky="w",padx=4)
-        ttk.Button(append,text="Ajouter cet onduleur via USB sans effacer le reste",
-                   command=self._add_voltronic_only).grid(
+        ttk.Label(append,text="Sélectionne INV1 / INV2 / INV3 ci-dessus, puis "
+                  "clique « Ajouter INV sans effacer le reste » en bas de l'écran.",
+                  wraplength=680).grid(
                    row=1,column=0,columnspan=3,pady=(6,2))
         ttk.Button(root, text="Reconfigurer TOUT via USB (remplace anciens réglages)",
                    command=self._configure_only).grid(
@@ -530,12 +608,10 @@ class Flasher(tk.Tk):
                  "directement sur un GPIO 3,3 V ! MAX3232 et câblage validé "
                  "indispensables. Ne pas écraser le VPN avec ce firmware.",
             wraplength=690).grid(row=5,column=0,columnspan=3,sticky="w",padx=8,pady=8)
-        ttk.Button(root,text="Flasher et configurer Voltronic S3",
-                   command=self._flash_voltronic).grid(
+        ttk.Label(root,text="Les actions Voltronic principales restent "
+                  "accessibles dans la barre fixe en bas de l'onglet.",
+                  wraplength=690).grid(
             row=6,column=0,columnspan=3,pady=6)
-        ttk.Button(root,text="Configurer Voltronic via USB sans reflasher",
-                   command=self._configure_voltronic_only).grid(
-            row=7,column=0,columnspan=3,pady=6)
         ttk.Button(root,text="EXPERT · Migration USB vers OTA (S3 de test uniquement)",
                    command=self._migrate_voltronic_to_ota).grid(
             row=9,column=0,columnspan=3,pady=8)

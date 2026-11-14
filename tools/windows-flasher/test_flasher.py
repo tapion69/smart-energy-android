@@ -247,13 +247,42 @@ class FlasherTests(unittest.TestCase):
     def test_flasher_source_vpn_buttons_do_not_overlap(self):
         from inspect import getsource
         source=getsource(Flasher._build_vpn)
-        flash=source.index("command=self._flash_vpn).grid(")
-        add=source.index("command=self._add_voltronic_only).grid(")
         configure=source.index("command=self._configure_only).grid(")
-        self.assertIn("row=8,",source[flash:flash+90])
         self.assertIn("row=9,",source[source.index("append.grid("):source.index("append.grid(")+130])
-        self.assertIn("row=1,",source[add:add+90])
         self.assertIn("row=10,",source[configure:configure+100])
+        layout=getsource(Flasher._build)
+        for action in ("_flash_vpn","_add_voltronic_only","_flash_jk",
+                       "_flash_voltronic","_configure_voltronic_only"):
+            self.assertIn("command=self."+action+")",layout)
+        # Main flashing and safe Voltronic-append actions are pinned;
+        # the risky full-reconfiguration remains scrollable and separate.
+        self.assertIn("vpn.actions",layout)
+        self.assertNotIn("command=self._configure_only",layout)
+
+    def test_scrollable_tabs_and_wheel_work_without_display(self):
+        from inspect import getsource
+        from types import SimpleNamespace
+        from smart_energy_flasher import ScrollableTab
+        source=getsource(ScrollableTab)
+        for feature in ("create_window", "yscrollcommand",
+                        "scrollregion", "itemconfigure", "yview_scroll"):
+            self.assertIn(feature,source)
+        movements=[]
+        canvas=SimpleNamespace(
+            winfo_rootx=lambda:50,winfo_rooty=lambda:100,
+            winfo_width=lambda:700,winfo_height=lambda:500)
+        tab=SimpleNamespace(winfo_ismapped=lambda:True,canvas=canvas,
+                            wheel=lambda n:movements.append(n))
+        fake=SimpleNamespace(_scroll_tabs=[tab])
+        event=SimpleNamespace(x_root=100,y_root=300,num=0,delta=-120)
+        self.assertEqual(Flasher._scroll_active_tab(fake,event),"break")
+        self.assertEqual(movements,[-1])
+        event.delta=120
+        self.assertEqual(Flasher._scroll_active_tab(fake,event),"break")
+        self.assertEqual(movements,[-1,1])
+        event.x_root=800
+        self.assertIsNone(Flasher._scroll_active_tab(fake,event))
+        self.assertEqual(len(movements),2)
 
 
 if __name__ == "__main__":
