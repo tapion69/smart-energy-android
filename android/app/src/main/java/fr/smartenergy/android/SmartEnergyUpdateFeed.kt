@@ -14,6 +14,9 @@ internal object SmartEnergyUpdateFeed {
     const val VOLTRONIC_MANIFEST =
         "https://raw.githubusercontent.com/tapion69/smart-energy-android/main/updates/voltronic-esp32.json"
 
+    const val JK_MANIFEST =
+        "https://raw.githubusercontent.com/tapion69/smart-energy-android/main/updates/jk-esp32.json"
+
     data class AndroidRelease(
         val version:String,val versionCode:Long,val downloadUrl:String,
         val sha256:String,val releaseNotesUrl:String
@@ -96,9 +99,26 @@ internal object SmartEnergyUpdateFeed {
             !hash.matches(Regex("[a-fA-F0-9]{64}")))return null
         return FirmwareRelease(name,url,hash.lowercase(),compatible)
     }
+    fun parseJk(text:String,currentVersion:String):FirmwareRelease? {
+        val json=JSONObject(text)
+        if(json.optInt("schemaVersion",0)!=1 ||
+            json.optString("product")!="smart-jk-esp32" ||
+            !json.optBoolean("available",false))return null
+        val version=json.optString("version","")
+        if(!newerFirmware(version,currentVersion))return null
+        val url=json.optString("downloadUrl","")
+        val hash=json.optString("sha256","")
+        val targets=json.optJSONArray("hardwareTargets")
+        val compatible=(0 until (targets?.length()?:0)).any {
+            targets?.optString(it)=="esp32dev"
+        }
+        if(!officialFirmwareUrl(url) ||
+            !hash.matches(Regex("[a-fA-F0-9]{64}")))return null
+        return FirmwareRelease(version,url,hash.lowercase(),compatible)
+    }
     /** Fail closed: bounded HTTPS, no redirects to arbitrary providers. */
     fun fetchPublicManifest(url:String):String {
-        require(url==ANDROID_MANIFEST || url==VOLTRONIC_MANIFEST)
+        require(url==ANDROID_MANIFEST || url==VOLTRONIC_MANIFEST || url==JK_MANIFEST)
         val conn=URL(url).openConnection() as HttpURLConnection
         return try {
             conn.requestMethod="GET"
