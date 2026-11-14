@@ -195,38 +195,47 @@ static bool save_config(const char *raw) {
 /* Physical USB BOOT mode only. Merge ONE Voltronic slot into the existing
  * NVS record, preserving Wi-Fi, Tailscale, gateway token and JK 1..3.
  * No network endpoint exists for this operation. */
-static bool patch_voltronic_only(const char *raw_patch) {
+/* One slot at a time over a physically authorized USB connection.
+ * Editing a JK/Voltronic IP never changes Tailscale, Wi-Fi or other slots.
+ * The code is optional ONLY for an already configured reader; then the
+ * existing stored code is preserved exactly. Neither old nor new code logs.
+ * A verified readback after NVS commit is mandatory for the ACK. */
+static bool patch_reader_only(const char *raw_patch, bool jk) {
     bool success=false;
     cJSON *request=NULL,*original=NULL;
     char *merged=NULL;
     nvs_handle_t handle;
     char stored[LINE_MAX]={0};
     size_t stored_len=sizeof(stored);
-    se_vpn_config_t previous={0},checked={0};
+    se_vpn_config_t previous={0},checked={0},persisted={0};
     if(!raw_patch || strlen(raw_patch)>=LINE_MAX)return false;
     request=cJSON_Parse(raw_patch);
-    if(!cJSON_IsObject(request) || cJSON_GetArraySize(request)!=3)goto finish;
+    if(!cJSON_IsObject(request))goto finish;
+    const int fields=cJSON_GetArraySize(request);
+    if(fields!=2 && fields!=3)goto finish;
     const cJSON *slot_item=cJSON_GetObjectItemCaseSensitive(request,"slot");
     const cJSON *ip_item=cJSON_GetObjectItemCaseSensitive(request,"ip");
     const cJSON *code_item=cJSON_GetObjectItemCaseSensitive(request,"code");
     if(!cJSON_IsNumber(slot_item) || !cJSON_IsString(ip_item) ||
-       !cJSON_IsString(code_item) || !ip_item->valuestring ||
-       !code_item->valuestring)goto finish;
-    int slot=slot_item->valueint;
+       !ip_item->valuestring || (code_item && !cJSON_IsString(code_item)))
+        goto finish;
+    const int slot=slot_item->valueint;
     if(slot<1 || slot>3 || slot_item->valuedouble!=(double)slot)goto finish;
-    const char *ip=ip_item->valuestring,*code=code_item->valuestring;
-    size_t code_len=strnlen(code,34);
-    if(!se_is_private_ipv4(ip) || code_len<8 || code_len>32)goto finish;
+    const char *ip=ip_item->valuestring;
+    if(!se_is_private_ipv4(ip))goto finish;
     if(nvs_open(CFG_NAMESPACE,NVS_READONLY,&handle)!=ESP_OK)goto finish;
-    esp_err_t status=nvs_get_str(handle,CFG_KEY,stored,&stored_len);
+    const esp_err_t status=nvs_get_str(handle,CFG_KEY,stored,&stored_len);
     nvs_close(handle);
     if(status!=ESP_OK || !stored_len || stored_len>=LINE_MAX ||
        !parse_config(stored,&previous))goto finish;
     original=cJSON_Parse(stored);
     if(!cJSON_IsObject(original))goto finish;
     char ip_key[16],code_key[16];
-    snprintf(ip_key,sizeof(ip_key),"volt%d_ip",slot);
-    snprintf(code_key,sizeof(code_key),"volt%d_code",slot);
+    snprintf(ip_key,sizeof(ip_key),jk?"jk%d_ip":"volt%d_ip",slot);
+    snprintf(code_key,sizeof(code_key),jk?"jk%d_code":"volt%d_code",slot);
+    const char *code=code_item?code_item->valuestring:
+        (jk?previous.jk_code[slot-1]:previous.voltronic_code[slot-1]);
+    if(!code || strlen(code)<8 || strlen(code)>32)goto finish;
     cJSON *new_ip=cJSON_CreateString(ip),*new_code=cJSON_CreateString(code);
     if(!new_ip || !new_code) {
         cJSON_Delete(new_ip);cJSON_Delete(new_code);goto finish;
@@ -240,29 +249,44 @@ static bool patch_voltronic_only(const char *raw_patch) {
     merged=cJSON_PrintUnformatted(original);
     if(!merged || strlen(merged)>=LINE_MAX ||
        !parse_config(merged,&checked))goto finish;
-    /* No stored VPN or JK setting may be altered, even accidentally. */
     if(strcmp(previous.wifi_ssid,checked.wifi_ssid) ||
        strcmp(previous.wifi_password,checked.wifi_password) ||
        strcmp(previous.tailscale_key,checked.tailscale_key) ||
-       strcmp(previous.gateway_token,checked.gateway_token))goto finish;
+       strcmp(previous.gateway_token,checked.gateway_token) ||
+       previous.remote_writes_enabled!=checked.remote_writes_enabled)goto finish;
     for(int i=0;i<3;i++) {
-        if(strcmp(previous.jk_ip[i],checked.jk_ip[i]) ||
-           strcmp(previous.jk_code[i],checked.jk_code[i]))goto finish;
-        if(i!=slot-1 &&
+        if((!jk || i!=slot-1) &&
+           (strcmp(previous.jk_ip[i],checked.jk_ip[i]) ||
+            strcmp(previous.jk_code[i],checked.jk_code[i])))goto finish;
+        if((jk || i!=slot-1) &&
            (strcmp(previous.voltronic_ip[i],checked.voltronic_ip[i]) ||
             strcmp(previous.voltronic_code[i],checked.voltronic_code[i])))
             goto finish;
     }
-    if(strcmp(checked.voltronic_ip[slot-1],ip) ||
-       strcmp(checked.voltronic_code[slot-1],code))goto finish;
-    success=save_config(merged);
+    const char *saved_ip=jk?checked.jk_ip[slot-1]:
+                              checked.voltronic_ip[slot-1];
+    const char *saved_code=jk?checked.jk_code[slot-1]:
+                                checked.voltronic_code[slot-1];
+    if(strcmp(saved_ip,ip) || strcmp(saved_code,code))goto finish;
+    if(!save_config(merged))goto finish;
+    // The only positive ACK comes after a fresh NVS read proves every
+    // configuration field equals the proposed validated result.
+    success=load_config(&persisted) &&
+            memcmp(&persisted,&checked,sizeof(checked))==0;
 finish:
     if(merged)free(merged);
     cJSON_Delete(original);cJSON_Delete(request);
     memset(stored,0,sizeof(stored));
     memset(&previous,0,sizeof(previous));
     memset(&checked,0,sizeof(checked));
+    memset(&persisted,0,sizeof(persisted));
     return success;
+}
+static bool patch_voltronic_only(const char *raw_patch) {
+    return patch_reader_only(raw_patch,false);
+}
+static bool patch_jk_only(const char *raw_patch) {
+    return patch_reader_only(raw_patch,true);
 }
 
 /* USB-only opt-in; preserve every existing JK, Voltronic, Wi-Fi and
@@ -396,6 +420,14 @@ static void provisioning_loop(void) {
                     if(patch_remote_writes(enable)) {
                         usb_ack_reboot(port);
                     }
+                    usb_ack(port,"SEVPN_ERR_NVS");
+                    memset(buffer,0,LINE_MAX);*used=0;continue;
+                }
+                const char set_jk[]="SEVPN_SET_JK ";
+                if(*used>sizeof(set_jk)-1 &&
+                   memcmp(buffer,set_jk,sizeof(set_jk)-1)==0) {
+                    if(patch_jk_only(buffer+sizeof(set_jk)-1))
+                        usb_ack_reboot(port);
                     usb_ack(port,"SEVPN_ERR_NVS");
                     memset(buffer,0,LINE_MAX);*used=0;continue;
                 }
