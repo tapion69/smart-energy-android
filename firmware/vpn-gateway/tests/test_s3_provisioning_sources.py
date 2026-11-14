@@ -36,5 +36,13 @@ assert 'runtime_physical_request || physical_reconfigure_requested()' in source
 assert 'se_vpn_start_physical_maintenance_monitor(void)' in source
 assert 'usb_maintenance_watch_task' in source
 main=(Path(__file__).resolve().parents[1] / "main" / "main.c").read_text()
-assert '#define GATEWAY_VERSION "0.3.5-dev-boot-anytime-usb"' in main
+assert '#define GATEWAY_VERSION "0.3.6-dev-usb-verified-ack"' in main
 assert 'se_vpn_start_physical_maintenance_monitor();' in main
+
+# Never trust unsolicited READY as proof of a bidirectional USB link.
+assert 'if(strncmp(buffer,"SEVPN_PING ",11)==0)' in source
+assert 'usb_nonce_hex(nonce)' in source
+assert 'snprintf(reply,sizeof(reply),"SEVPN_PONG %s",nonce)' in source
+assert 'SEVPN_ERR_NVS' in source
+assert 'persisted.remote_writes_enabled==enabled' in source
+assert 'usb_ack_reboot(port)' in source
