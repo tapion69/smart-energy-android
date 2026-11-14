@@ -248,9 +248,12 @@ class FlasherTests(unittest.TestCase):
         from inspect import getsource
         source=getsource(Flasher._build_vpn)
         flash=source.index("command=self._flash_vpn).grid(")
+        add=source.index("command=self._add_voltronic_only).grid(")
         configure=source.index("command=self._configure_only).grid(")
         self.assertIn("row=8,",source[flash:flash+90])
-        self.assertIn("row=9,",source[configure:configure+90])
+        self.assertIn("row=9,",source[source.index("append.grid("):source.index("append.grid(")+130])
+        self.assertIn("row=1,",source[add:add+90])
+        self.assertIn("row=10,",source[configure:configure+100])
 
 
 if __name__ == "__main__":
