@@ -1241,6 +1241,21 @@ class MainActivity : Activity() {
                     checkVoltronicOtaReadiness(slots[which])
                 }.show()
         },7)
+        add(firmwareUpdates,action("TEST · OTA Voltronic 0.3.4 depuis cette APK") {
+            val slots=(1..3).filter {voltronicFleet.configured(it)}
+            if(slots.isEmpty()) {
+                updateFeedback.text="Configure d'abord le lecteur S3 Voltronic."
+            }else {
+                AlertDialog.Builder(this)
+                    .setTitle("Tester l'OTA du Voltronic")
+                    .setMessage("Le firmware expérimental 0.3.4 est intégré à l'APK. "+
+                        "Pas de PowerShell ni de fichier BIN à sélectionner. "+
+                        "OTA locale réservée aux S3 avec firmware 0.3.2 vérifié.")
+                    .setItems(slots.map { "INV$it" }.toTypedArray()) { _,which ->
+                        prepareBundledVoltronicOta(slots[which])
+                    }.setNegativeButton("Annuler",null).show()
+            }
+        },7)
         add(firmwareUpdates,action("Vérifier les versions firmware publiées") {
             checkSmartEnergyUpdates(true)
         })
@@ -3972,6 +3987,85 @@ class MainActivity : Activity() {
                                 (ex.message?:"fichier invalide")
                     }
                 }
+            }
+        }
+    }
+
+    private fun prepareBundledVoltronicOta(slot:Int) {
+        if(slot !in 1..3 || !voltronicFleet.configured(slot))return
+        val host=if(slot==1)prefs.getString("inverter_probe_ip","")?:""
+            else prefs.getString("inverter_${slot}_ip","")?:""
+        val port=if(slot==1)prefs.getInt("inverter_probe_port",18081)
+            else prefs.getInt("inverter_${slot}_port",18081)
+        val code=auxiliaryCode(if(slot==1)"premium_voltronic_code_cipher"
+            else "premium_voltronic_${slot}_code_cipher")
+        val network=voltronicWifiNetwork()
+        if(network==null || !SunSpecReadOnly.isPrivateIPv4(host) ||
+           code.length !in 8..32) {
+            updateFeedback.text="INV$slot : réseau Wi-Fi local, IP privée et code S3 requis."
+            return
+        }
+        updateFeedback.text="INV$slot : contrôle de la version 0.3.2, des partitions et du BIN intégré…"
+        settingsWorker.execute {
+            val preflight=try {
+                VoltronicBundledOta.preflight(this,host,code,port,network)
+            }catch(ex:Exception) {
+                runOnUiThread {
+                    if(!isFinishing)updateFeedback.text="OTA test INV$slot : "+
+                        (ex.message?:ex.javaClass.simpleName).take(190)+
+                        ". Aucune écriture effectuée."
+                }
+                return@execute
+            }
+            runOnUiThread {
+                if(isFinishing || isDestroyed)return@runOnUiThread
+                AlertDialog.Builder(this)
+                    .setTitle("CONFIRMER l'OTA · INV$slot")
+                    .setMessage("ESP32-S3 : ${preflight.installedVersion}\n"+
+                        "Nouvelle version : ${VoltronicBundledOta.TO_VERSION}\n"+
+                        "Partition disponible : ${preflight.maxImageBytes} octets\n\n"+
+                        "Le fichier intégré a été contrôlé par SHA-256. "+
+                        "Le S3 redémarrera et les mesures seront interrompues brièvement. "+
+                        "L'opération modifie le firmware de cette passerelle Voltronic "+
+                        "(pas les réglages de l'onduleur, ni JK/VPN). "+
+                        "Garder l'alimentation et le Wi-Fi stables. "+
+                        "Aucun nouvel essai automatique en cas d'incertitude.\n\n"+
+                        "Lancer la mise à jour sur INV$slot ?")
+                    .setNegativeButton("Annuler",null)
+                    .setPositiveButton("Installer 0.3.4") { _,_->
+                        updateFeedback.text="OTA test INV$slot : pré-vérification…"
+                        settingsWorker.execute {
+                            val message=try {
+                                VoltronicBundledOta.install(this,host,code,port,network) {
+                                    progress -> runOnUiThread {
+                                        if(!isFinishing)updateFeedback.text=
+                                            "INV$slot : $progress"
+                                    }
+                                }
+                                if(VoltronicBundledOta.verifyAfterReboot(host,code,port,network)) {
+                                    "INV$slot : OTA 0.3.4 confirmée après redémarrage. "+
+                                    "Vérifie maintenant la télémétrie et les paramètres en lecture."
+                                }else {
+                                    "INV$slot : envoi accepté, mais nouvelle version non vérifiée. "+
+                                    "Contrôler la version et la connexion avant tout autre essai."
+                                }
+                            }catch(ex:Exception) {
+                                "INV$slot : état OTA non confirmé ("+
+                                    (ex.message?:ex.javaClass.simpleName).take(140)+
+                                    "). Ne pas relancer sans vérifier la version actuelle."
+                            }
+                            runOnUiThread {
+                                if(!isFinishing) {
+                                    updateFeedback.text=message
+                                    AlertDialog.Builder(this)
+                                        .setTitle("Résultat OTA · INV$slot")
+                                        .setMessage(message)
+                                        .setPositiveButton("OK",null).show()
+                                }
+                            }
+                        }
+                    }.show()
+                updateFeedback.text="INV$slot : contrôle préalable réussi. Confirmation demandée."
             }
         }
     }
