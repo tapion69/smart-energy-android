@@ -81,3 +81,31 @@ static inline bool vt_edit_command(const vt_edit_spec_t *s,double target,
         written=snprintf(out,capacity,"%s%03d",s->opcode,(int)target);
     return written>0 && (size_t)written<capacity;
 }
+
+// Safe candidate learning for the full Node-RED flow: only alternate
+// serializations of the SAME allowlisted semantic setting are accepted.
+// Never turn a battery bulk voltage into an ambiguous PBCV recharge command.
+// HTTP clients cannot provide arbitrary UART commands.
+static inline bool vt_edit_candidate_allowed(
+    const vt_edit_spec_t *spec,double target,const char *candidate){
+    if(!spec||!candidate||!isfinite(target))return false;
+    char primary[64]={0};
+    if(!vt_edit_command(spec,target,primary,sizeof(primary)))return false;
+    if(strcmp(primary,candidate)==0)return true;
+    char alt[64]={0};
+    int val=(int)target;
+    if(strcmp(spec->key,"max_charging_current_a")==0){
+        snprintf(alt,sizeof(alt),"MNCHGC%03d",val);
+        if(strcmp(candidate,alt)==0)return true;
+        snprintf(alt,sizeof(alt),"MNCHGC%d",val);
+        if(strcmp(candidate,alt)==0)return true;
+    }else if(strcmp(spec->key,"max_ac_charging_current_a")==0){
+        snprintf(alt,sizeof(alt),"MUCHGC%03d",val);
+        if(strcmp(candidate,alt)==0)return true;
+        snprintf(alt,sizeof(alt),"MUCHGC%02d",val);
+        if(strcmp(candidate,alt)==0)return true;
+        snprintf(alt,sizeof(alt),"MUCHGC%d",val);
+        if(strcmp(candidate,alt)==0)return true;
+    }
+    return false;
+}
