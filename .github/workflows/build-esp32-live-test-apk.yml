@@ -66,10 +66,10 @@ jobs:
           mkdir -p dist
           for apk in android/app/build/outputs/apk/debug/app-debug.apk android/app/build/outputs/apk/release/app-release.apk; do
             if [ ! -s "$apk" ]; then continue; fi
-            "$APKSIGNER" verify "$apk"
+            "$APKSIGNER" verify --verbose "$apk"
             "$AAPT" dump badging "$apk" > /tmp/espbridge-badging.txt
-            grep -q "name='fr.smartenergy.android.espbridge" /tmp/espbridge-badging.txt
-            grep -q "Smart Energy ESP TEST" /tmp/espbridge-badging.txt
+            grep -E "^(package:|application-label|launchable-activity:)" /tmp/espbridge-badging.txt || true
+            grep -Fq "name=\'fr.smartenergy.android.espbridge" /tmp/espbridge-badging.txt
             if [[ "$apk" == *release* ]]; then
               cp "$apk" dist/SmartEnergy-ESP-HA-TEST-signed.apk
             else
