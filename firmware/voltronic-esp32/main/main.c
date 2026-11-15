@@ -34,7 +34,7 @@
 #include "voltronic_protocol.h"
 #include "voltronic_edit.h"
 
-#define VT_VERSION "0.3.6-test-ha-bridge"
+#define VT_VERSION "0.3.7-test-ha-bridge"
 #define VT_UART UART_NUM_1
 #define VT_TX GPIO_NUM_17
 #define VT_RX GPIO_NUM_16
@@ -105,6 +105,7 @@ typedef struct {
     bool pending, running, finished;
     char key[52];
     double old_value, new_value;
+    char candidate[VT_MAX_COMMAND]; /* validated, same semantic setting only */
     bool verified, set_acknowledged;
     char result[64];
 } vt_edit_request_t;
@@ -396,6 +397,7 @@ static esp_err_t info_handler(httpd_req_t *r){
     cJSON_AddBoolToObject(root,"ha_bridge_single_uart_owner",true);
     cJSON_AddBoolToObject(root,"ha_bridge_http_get_is_cache_only",true);
     cJSON_AddBoolToObject(root,"ha_bridge_raw_uart_commands_supported",false);
+    cJSON_AddStringToObject(root,"ha_bridge_learning_mode","verified_candidate_formats_v1");
     return send_json(r,root);
 }
 static esp_err_t telemetry_handler(httpd_req_t *r){
@@ -847,11 +849,15 @@ static esp_err_t edit_parameter_handler(httpd_req_t *r){
     const cJSON *old=cJSON_GetObjectItemCaseSensitive(doc,"old");
     const cJSON *value=cJSON_GetObjectItemCaseSensitive(doc,"value");
     const cJSON *user=cJSON_GetObjectItemCaseSensitive(doc,"confirmed");
+    const cJSON *candidate=cJSON_GetObjectItemCaseSensitive(doc,"candidate");
     const vt_edit_spec_t *spec=
         cJSON_IsString(key)&&key->valuestring?vt_edit_find(key->valuestring):NULL;
     bool valid=spec&&cJSON_IsNumber(old)&&cJSON_IsNumber(value)&&
         cJSON_IsTrue(user)&&isfinite(old->valuedouble)&&
-        isfinite(value->valuedouble);
+        isfinite(value->valuedouble)&&
+        (!candidate || (cJSON_IsString(candidate)&&candidate->valuestring&&
+         strlen(candidate->valuestring)<VT_MAX_COMMAND&&
+         vt_edit_candidate_allowed(spec,value->valuedouble,candidate->valuestring)));
     if(!valid){
         cJSON_Delete(doc);
         return httpd_resp_send_err(r,HTTPD_400_BAD_REQUEST,"unsupported semantic parameter");
@@ -868,6 +874,8 @@ static esp_err_t edit_parameter_handler(httpd_req_t *r){
     snprintf(edit_request.key,sizeof(edit_request.key),"%s",spec->key);
     edit_request.old_value=old->valuedouble;
     edit_request.new_value=value->valuedouble;
+    if(candidate&&candidate->valuestring)
+        snprintf(edit_request.candidate,sizeof(edit_request.candidate),"%s",candidate->valuestring);
     edit_request.pending=true;
     xSemaphoreGive(edit_lock);
     cJSON_Delete(doc);
@@ -1231,7 +1239,15 @@ static void perform_parameter_edit(
     if(!vt_edit_command(spec,request->new_value,command,sizeof(command))){
         edit_result(result,"command_not_supported");return;
     }
-    /* One candidate, never an automatic fallback. */
+    /* One validated candidate per confirmed transaction. Node-RED may
+       subsequently try a known-safe alternate serialization after a clear
+       unsupported-format rejection; never issue raw unknown opcodes. */
+    if(request->candidate[0]) {
+        if(!vt_edit_candidate_allowed(spec,request->new_value,request->candidate)){
+            edit_result(result,"unsupported_candidate");return;
+        }
+        snprintf(command,sizeof(command),"%s",request->candidate);
+    }
     vt_exchange_t reply=exchange_core(command,true);
     char ack[16]={0};
     if(reply.timeout||reply.nak||
