@@ -41,6 +41,8 @@ jobs:
           echo 'fbe9352f6660ffbfb90ac524acd7dfca035a0b4c25eead68e88e12df909d8b80  smart-energy-voltronic-S3-APP-0x10000.bin' | sha256sum --check --status
           test "$(wc -c < smart-energy-voltronic-S3-APP-0x10000.bin)" -eq 904064
           mv smart-energy-voltronic-S3-APP-0x10000.bin voltronic-s3-0.3.7-ha-bridge.bin
+          rm -f smart-energy-voltronic-S3-FACTORY-0x0.bin
+          test ! -e smart-energy-voltronic-S3-FACTORY-0x0.bin
       - name: Load permanent APK signing key (GitHub secrets)
         id: signing
         shell: bash
