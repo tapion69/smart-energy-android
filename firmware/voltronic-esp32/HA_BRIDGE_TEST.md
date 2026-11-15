@@ -1,13 +1,21 @@
-# ESP32-S3 → Smart Voltronic Home Assistant bridge (test branch only)
+# Experimental ESP32-S3 firmware 0.3.7-test-ha-bridge
 
-This branch identifies itself with firmware version `0.3.6-test-ha-bridge`.
+Branch: `test/esp32-ha-bridge`. Android `dev` and production firmware remain unchanged.
 
-The `/api/v1/info` endpoint now advertises `ha_bridge_protocol=esp-cache-v1`, `ha_bridge_single_uart_owner=true`, `ha_bridge_http_get_is_cache_only=true`, and `ha_bridge_raw_uart_commands_supported=false`. This is an **additive** contract on top of the existing Android API: `/api/v1/info`, `/api/v1/telemetry`, `/api/v1/details`, `/api/v1/diagnostics`, OTA status and a guarded semantic parameter-change route.
+## Cache-only bridge
 
-**Two simultaneous clients** can GET cached telemetry without doubling RS232 polling. Only `polling_task` uses the UART for scheduled reads and confirmed parameter edits. The test branch adds the monotonic `qpigs_sample_monotonic_ms` and `http_read_was_cached` markers for diagnostics.
+`GET /api/v1/bridge/snapshot` exposes 20 latest CRC-validated UART replies by named whitelisted command with sequence number and age. This endpoint **does not** issue UART requests; the existing `polling_task` is the sole inverter UART master. This is used by the complete 322-node Smart Voltronic flow (experimental 340-node flow, 15 additional nodes at add-on boot). Original Android read APIs remain unchanged.
 
-The firmware retains its existing `X-Setup-Code` authentication. A parameter change requires `POST /api/v1/parameters/change`, `X-Write-Confirmed: yes`, `confirmed:true`, a supported semantic parameter and exact expected old value. It is rejected if the inverter cannot be identified or the fresh pre-read, value validation, ACK or fresh verification fails. There is **no arbitrary raw UART command endpoint**.
+`GET /api/v1/info` advertises the bridge's `esp-cache-v1` and `verified_candidate_formats_v1` capabilities. `/api/v1/telemetry` includes cache freshness markers. All GET endpoints require the existing setup code and never change inverter settings.
 
-Legacy alternate-command learning is deliberately not enabled on the ESP until device-specific semantics can be proven safely.
+## Safe learning
 
-This branch has not been flashed to a real ESP32, and GitHub CI status should be checked before hardware testing. Never flash the normal VPN, JK BMS or production Voltronic ESP32 from this experiment.
+Existing parameter write endpoint `POST /api/v1/parameters/change` now optionally accepts `candidate`. The firmware validates that the command is a permitted serialization of the **same semantic parameter**. Only alternate serializations of `max_ac_charging_current_a` (`MUCHGC`) or `max_charging_current_a` (`MNCHGC`) are supported. Generic raw UART commands are never accepted. `PBCV` as an alternative bulk voltage command is forbidden.
+
+The write transaction runs on the original UART poller with required authorization, explicit confirmation, fresh pre-read and old-value comparison, strict bounds, one SET, and fresh readback. An explicit UART NAK returns `set_rejected_by_nak` and permits the caller to consider another validated same-setting candidate. Timeouts, uncertain ACK, HTTP failures and unsuccessful readbacks must **never** initiate automatic retries.
+
+## Unverified
+
+The build workflow contains protocol host-C and semantic write tests and a separate ESP-IDF ESP32-S3 build; results were not accessible during this session. There was no real firmware flash, Android concurrency validation or physical RS232 test. The full Node-RED's `MODBUS_MPPT2` fallback and certain LOAD2 settings are not supported by the present firmware and require separate verified work.
+
+Do not deploy these experimental binaries in a production setup before hardware validation.
