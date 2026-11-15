@@ -27,6 +27,23 @@ int main(void) {
     assert(b && !vt_edit_allowed(b,2,4,48));
     assert(!vt_edit_find("raw_command"));
     assert(!vt_edit_find("erase_flash"));
+    /* Full Node-RED learning: only alternate encodings of the same field. */
+    assert(vt_edit_candidate_allowed(v,54.8,"PBFT54.8"));
+    assert(!vt_edit_candidate_allowed(v,54.8,"PBCV54.8"));
+    assert(!vt_edit_candidate_allowed(v,54.8,"PBFT55.2"));
+    assert(!vt_edit_candidate_allowed(v,54.8,"PBFT54.8;REBOOT"));
+    const vt_edit_spec_t *ac=vt_edit_find("max_ac_charging_current_a");
+    assert(ac);
+    assert(vt_edit_candidate_allowed(ac,30,"MUCHGC0030"));
+    assert(vt_edit_candidate_allowed(ac,30,"MUCHGC030"));
+    assert(vt_edit_candidate_allowed(ac,30,"MUCHGC30"));
+    assert(!vt_edit_candidate_allowed(ac,30,"PBCCHGC030"));
+    assert(!vt_edit_candidate_allowed(ac,30,"MUCHGC040"));
+    const vt_edit_spec_t *ch=vt_edit_find("max_charging_current_a");
+    assert(ch);
+    assert(vt_edit_candidate_allowed(ch,30,"MNCHGC0030"));
+    assert(vt_edit_candidate_allowed(ch,30,"MNCHGC030"));
+    assert(!vt_edit_candidate_allowed(ch,30,"PBDCHGC030"));
     const vt_edit_spec_t *q=vt_edit_find("battery_under_capacity_pct");
     assert(q && strcmp(q->query,"QDOP")==0 && q->index==10);
     return 0;
