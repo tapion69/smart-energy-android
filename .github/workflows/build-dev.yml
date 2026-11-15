@@ -23,13 +23,13 @@ jobs:
         with:
           distribution: temurin
           java-version: '17'
-      # Pinned experimental Voltronic 0.3.4 OTA image from the known CI build.
-      # No general-purpose firmware flasher and no unrelated firmware changes.
+      # Live-tested Voltronic 0.3.7 ESP2 bridge OTA app-only image (SHA256 pinned).
+      # Never overwrite bootloader, partition table or WiFi credentials. OTA only if dual-OTA ready.
       - name: Fetch exact S3 OTA test binary for the APK
         uses: actions/download-artifact@v4
         with:
-          name: SmartEnergy-VOLTRONIC-S3-OTA-0.3.3-PREFLIGHT
-          run-id: 43585410799
+          name: SmartEnergy-VOLTRONIC-ESP32S3-N16R8-FULL-LIVE-TEST
+          run-id: 43697741978
           repository: tapion69/smart-energy-android
           github-token: ${{ github.token }}
           path: android/app/src/main/assets
@@ -38,9 +38,9 @@ jobs:
         run: |
           set -euo pipefail
           cd android/app/src/main/assets
-          echo '9cfc8c87280c50bf92eb4f6b8029ea67004aa79cfbe7ff0faa0f24f78e3bf289  smart-energy-voltronic-S3-OTA.bin' | sha256sum --check --status
-          test "$(wc -c < smart-energy-voltronic-S3-OTA.bin)" -eq 901664
-          mv smart-energy-voltronic-S3-OTA.bin voltronic-s3-0.3.4-test.bin
+          echo 'fbe9352f6660ffbfb90ac524acd7dfca035a0b4c25eead68e88e12df909d8b80  smart-energy-voltronic-S3-APP-0x10000.bin' | sha256sum --check --status
+          test "$(wc -c < smart-energy-voltronic-S3-APP-0x10000.bin)" -eq 904064
+          mv smart-energy-voltronic-S3-APP-0x10000.bin voltronic-s3-0.3.7-ha-bridge.bin
       - name: Load permanent APK signing key (GitHub secrets)
         id: signing
         shell: bash
