@@ -69,7 +69,8 @@ jobs:
             "$APKSIGNER" verify --verbose "$apk"
             "$AAPT" dump badging "$apk" > /tmp/espbridge-badging.txt
             grep -E "^(package:|application-label|launchable-activity:)" /tmp/espbridge-badging.txt || true
-            grep -Fq "name=\'fr.smartenergy.android.espbridge" /tmp/espbridge-badging.txt
+            grep -Fq 'fr.smartenergy.android.espbridge' /tmp/espbridge-badging.txt
+            grep -Fq 'Smart Energy ESP TEST' /tmp/espbridge-badging.txt
             if [[ "$apk" == *release* ]]; then
               cp "$apk" dist/SmartEnergy-ESP-HA-TEST-signed.apk
             else
