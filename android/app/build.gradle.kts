@@ -17,11 +17,11 @@ android {
     namespace = "fr.smartenergy.android"
     compileSdk = 35
     defaultConfig {
-        applicationId = "fr.smartenergy.android"
+        applicationId = "fr.smartenergy.android.espbridge"
         minSdk = 29
         targetSdk = 35
-        versionCode = 60
-        versionName = "0.3.46-dev"
+        versionCode = 61
+        versionName = "0.3.46-espbridge-test"
     }
     signingConfigs {
         if (hasStableSigning) {
@@ -41,7 +41,7 @@ android {
             // From 0.3.33 onwards, the test package ID is fixed. If the
             // runner signing key changes, Android still refuses an upgrade.
             // Production updates require the stable signing secrets.
-            applicationIdSuffix = ".vpntrial333"
+            applicationIdSuffix = ".debug"
             if (hasStableSigning) signingConfig = signingConfigs.getByName("stable")
         }
         release {
