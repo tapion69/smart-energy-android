@@ -2,11 +2,11 @@
   "schemaVersion": 1,
   "product": "smart-voltronic-esp32",
   "available": true,
-  "version": "0.3.5",
+  "version": "0.3.7",
   "hardwareTargets": [
     "esp32s3-n16r8"
   ],
-  "downloadUrl": "https://github.com/tapion69/smart-energy-android/releases/download/voltronic-v0.3.5/smart-energy-voltronic-S3-OTA.bin",
-  "sha256": "a079b67fbfbc5996919ffccc7d3910421aead85f84c016d1b8ebff0bd7931a39",
-  "releaseNotesUrl": "https://github.com/tapion69/smart-energy-android/releases/tag/voltronic-v0.3.5"
+  "downloadUrl": "https://github.com/tapion69/smart-energy-android/releases/download/voltronic-v0.3.7/smart-energy-voltronic-S3-OTA.bin",
+  "sha256": "fbe9352f6660ffbfb90ac524acd7dfca035a0b4c25eead68e88e12df909d8b80",
+  "releaseNotesUrl": "https://github.com/tapion69/smart-energy-android/releases/tag/voltronic-v0.3.7"
 }

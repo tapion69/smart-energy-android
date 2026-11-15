@@ -2,10 +2,10 @@
   "schemaVersion": 1,
   "product": "smart-energy-android",
   "available": true,
-  "versionName": "0.3.46-dev",
-  "versionCode": 60,
-  "downloadUrl": "https://github.com/tapion69/smart-energy-android/releases/download/android-v0.3.46-dev/SmartEnergy-Android.apk",
-  "sha256": "724ef36bc982550b182b4c4d64f2949c6733e234953a1a9b15786636d60c151e",
-  "releaseNotesUrl": "https://github.com/tapion69/smart-energy-android/releases/tag/android-v0.3.46-dev",
+  "versionName": "0.3.47-dev",
+  "versionCode": 61,
+  "downloadUrl": "https://github.com/tapion69/smart-energy-android/releases/download/android-v0.3.47-dev/SmartEnergy-Android.apk",
+  "sha256": "3e220d95776ccca208e6350380eeb9774b5dc9b00954c675a71a085a1d6d4d0e",
+  "releaseNotesUrl": "https://github.com/tapion69/smart-energy-android/releases/tag/android-v0.3.47-dev",
   "minimumSupportedVersionCode": 1
 }
