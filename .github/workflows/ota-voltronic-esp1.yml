@@ -1,0 +1,38 @@
+name: Publish safe ESP1 Voltronic S3 OTA image from validated bridge
+on:
+  push:
+    branches: [dev]
+    paths: ['.github/workflows/ota-voltronic-esp1.yml']
+  workflow_dispatch:
+permissions:
+  contents: read
+  actions: read
+jobs:
+  ota-image:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Download validated ESP2 S3 0.3.7 app-only binary
+        uses: actions/download-artifact@v4
+        with:
+          name: SmartEnergy-VOLTRONIC-ESP32S3-N16R8-FULL-LIVE-TEST
+          run-id: 43697741978
+          repository: tapion69/smart-energy-android
+          github-token: ${{ github.token }}
+          path: dist
+      - name: Verify exact OTA bin, forbid factory image
+        run: |
+          set -euo pipefail
+          cd dist
+          echo 'fbe9352f6660ffbfb90ac524acd7dfca035a0b4c25eead68e88e12df909d8b80  smart-energy-voltronic-S3-APP-0x10000.bin' | sha256sum --check
+          test "$(wc -c < smart-energy-voltronic-S3-APP-0x10000.bin)" -eq 904064
+          grep -aFq '0.3.7-test-ha-bridge' smart-energy-voltronic-S3-APP-0x10000.bin
+          mv smart-energy-voltronic-S3-APP-0x10000.bin smart-energy-voltronic-S3-OTA.bin
+          rm -f smart-energy-voltronic-S3-FACTORY-0x0.bin
+          echo "OTA S3 0.3.7 requires dual_ota, local WiFi, explicit confirmation, and a supported current firmware. Never flash to address 0x0."
+      - uses: actions/upload-artifact@v4
+        with:
+          name: SmartEnergy-VOLTRONIC-S3-OTA-0.3.7-INV1
+          path: dist/smart-energy-voltronic-S3-OTA.bin
+          if-no-files-found: error
+          retention-days: 30
