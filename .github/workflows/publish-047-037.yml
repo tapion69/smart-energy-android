@@ -1,0 +1,91 @@
+name: Publish signed Android 0.3.47 and ESP32 S3 0.3.7 updates
+on:
+  push:
+    branches: [main]
+    paths: ['.github/workflows/publish-047-037.yml']
+  workflow_dispatch:
+permissions:
+  contents: write
+  actions: read
+concurrency:
+  group: signed-047-fw037-release
+  cancel-in-progress: false
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          persist-credentials: true
+      - name: Download exact permanently signed dev APK (run 43710497770)
+        uses: actions/download-artifact@v4
+        with:
+          name: smart-energy-android-signed-upgradeable
+          run-id: 43710497770
+          repository: tapion69/smart-energy-android
+          github-token: ${{ github.token }}
+          path: /tmp/smart-publish/android
+      - name: Download exact HA-bridge OTA app image (run 43710661589)
+        uses: actions/download-artifact@v4
+        with:
+          name: SmartEnergy-VOLTRONIC-S3-OTA-0.3.7-INV1
+          run-id: 43710661589
+          repository: tapion69/smart-energy-android
+          github-token: ${{ github.token }}
+          path: /tmp/smart-publish/voltronic
+      - name: Verify OTA SHA256 and Android original certificate, identity and version
+        env:
+          TRUSTED_CERT: ${{ secrets.SMART_ENERGY_ANDROID_CERT_SHA256 }}
+        run: |
+          set -euo pipefail
+          test -f /tmp/smart-publish/android/app-release.apk
+          test -f /tmp/smart-publish/voltronic/smart-energy-voltronic-S3-OTA.bin
+          echo 'fbe9352f6660ffbfb90ac524acd7dfca035a0b4c25eead68e88e12df909d8b80  /tmp/smart-publish/voltronic/smart-energy-voltronic-S3-OTA.bin' | sha256sum --check
+          test "$(wc -c < /tmp/smart-publish/voltronic/smart-energy-voltronic-S3-OTA.bin)" -eq 904064
+          grep -aFq '0.3.7-test-ha-bridge' /tmp/smart-publish/voltronic/smart-energy-voltronic-S3-OTA.bin
+          APK=/tmp/smart-publish/android/app-release.apk
+          APKSIGNER=$(find "$ANDROID_HOME/build-tools" -type f -name apksigner | sort -V | tail -1)
+          AAPT=$(find "$ANDROID_HOME/build-tools" -type f -name aapt | sort -V | tail -1)
+          "$APKSIGNER" verify "$APK"
+          test "$TRUSTED_CERT" != "" && [[ "$TRUSTED_CERT" =~ ^[a-fA-F0-9]{64}$ ]]
+          cert=$("$APKSIGNER" verify --print-certs "$APK" | sed -n 's/.*Signer #1 certificate SHA-256 digest: //p' | head -1 | tr '[:upper:]' '[:lower:]')
+          test "$cert" = "$(echo "$TRUSTED_CERT" | tr '[:upper:]' '[:lower:]')"
+          info=$("$AAPT" dump badging "$APK" | head -1)
+          echo "$info"
+          echo "$info" | grep -Fq "name='fr.smartenergy.android'"
+          echo "$info" | grep -Fq "versionCode='61'"
+          echo "$info" | grep -Fq "versionName='0.3.47-dev'"
+          mv "$APK" /tmp/smart-publish/android/SmartEnergy-Android.apk
+      - name: Verify publisher policy tests and prepare both manifests
+        run: |
+          set -euo pipefail
+          python -m unittest discover -s tools/releases -p 'test_*.py'
+          python tools/releases/publish_update_manifest.py --tag android-v0.3.47-dev --asset /tmp/smart-publish/android/SmartEnergy-Android.apk --version 0.3.47-dev --version-code 61
+          python tools/releases/publish_update_manifest.py --tag voltronic-v0.3.7 --asset /tmp/smart-publish/voltronic/smart-energy-voltronic-S3-OTA.bin --version 0.3.7
+      - name: Publish two immutable-name official GitHub Releases
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          if gh release view android-v0.3.47-dev -R "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release download android-v0.3.47-dev -R "$GITHUB_REPOSITORY" --pattern SmartEnergy-Android.apk --dir /tmp/verify-existing
+            cmp /tmp/verify-existing/SmartEnergy-Android.apk /tmp/smart-publish/android/SmartEnergy-Android.apk
+          else
+            gh release create android-v0.3.47-dev /tmp/smart-publish/android/SmartEnergy-Android.apk -R "$GITHUB_REPOSITORY" --target main --prerelease --title 'Smart Energy Android 0.3.47-dev · ESP32 HA bridge OTA' --notes 'Signed update of the original fr.smartenergy.android application. Local-only explicit-confirmation S3 firmware 0.3.7 OTA option. Requires dual OTA partitions; does not erase Wi-Fi/NVS. Keep prior app configuration.'
+          fi
+          if gh release view voltronic-v0.3.7 -R "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release download voltronic-v0.3.7 -R "$GITHUB_REPOSITORY" --pattern smart-energy-voltronic-S3-OTA.bin --dir /tmp/verify-existing-ota
+            cmp /tmp/verify-existing-ota/smart-energy-voltronic-S3-OTA.bin /tmp/smart-publish/voltronic/smart-energy-voltronic-S3-OTA.bin
+          else
+            gh release create voltronic-v0.3.7 /tmp/smart-publish/voltronic/smart-energy-voltronic-S3-OTA.bin -R "$GITHUB_REPOSITORY" --target main --prerelease --title 'ESP32-S3 Voltronic 0.3.7 · validated HA bridge app-only' --notes 'APP-only OTA (NOT factory image). SHA256 pinned. Only for ESP32-S3 N16R8 dual-OTA installations with explicit local Wi-Fi confirmation. Running firmware reports 0.3.7-test-ha-bridge.'
+          fi
+      - name: Publish main manifests for app automatic update detection
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add updates/android.json updates/voltronic-esp32.json
+          git commit -m 'release: publish signed 0.3.47-dev and ESP S3 0.3.7 update feeds'
+          git pull --rebase origin main
+          git push origin HEAD:main
