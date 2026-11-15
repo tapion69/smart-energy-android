@@ -1,0 +1,87 @@
+name: ESP32 HA bridge - separate Android TEST APK
+
+on:
+  push:
+    branches: ['experiment/esp32-s3-full-live-test']
+    paths:
+      - 'android/**'
+      - '.github/workflows/build-esp32-live-test-apk.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  android-test-apk:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - name: Ensure distinct test application and test label
+        shell: bash
+        run: |
+          set -euo pipefail
+          grep -Fq 'applicationId = "fr.smartenergy.android.espbridge"' android/app/build.gradle.kts
+          grep -Fq 'versionName = "0.3.46-espbridge-test"' android/app/build.gradle.kts
+          grep -Fq 'android:label="Smart Energy ESP TEST"' android/app/src/main/AndroidManifest.xml
+          ! grep -Fq 'applicationId = "fr.smartenergy.android"' android/app/build.gradle.kts
+      - name: Unit tests and separately installable debug APK
+        working-directory: android
+        run: ./gradlew --no-daemon testDebugUnitTest assembleDebug
+      - name: Sign release with existing permanent signing if available
+        id: signing
+        shell: bash
+        env:
+          KS_B64: ${{ secrets.SMART_ENERGY_ANDROID_KEYSTORE_BASE64 }}
+          STORE_PASSWORD: ${{ secrets.SMART_ENERGY_ANDROID_STORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.SMART_ENERGY_ANDROID_KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.SMART_ENERGY_ANDROID_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          if [ -z "$KS_B64" ] || [ -z "$STORE_PASSWORD" ] || [ -z "$KEY_ALIAS" ] || [ -z "$KEY_PASSWORD" ]; then
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::Signing secrets missing: distribute separate debug test APK only."
+            exit 0
+          fi
+          printf '%s' "$KS_B64" | base64 --decode > "$RUNNER_TEMP/espbridge-test.jks"
+          chmod 600 "$RUNNER_TEMP/espbridge-test.jks"
+          echo "SMART_ENERGY_ANDROID_KEYSTORE_FILE=$RUNNER_TEMP/espbridge-test.jks" >> "$GITHUB_ENV"
+          echo "SMART_ENERGY_ANDROID_STORE_PASSWORD=$STORE_PASSWORD" >> "$GITHUB_ENV"
+          echo "SMART_ENERGY_ANDROID_KEY_ALIAS=$KEY_ALIAS" >> "$GITHUB_ENV"
+          echo "SMART_ENERGY_ANDROID_KEY_PASSWORD=$KEY_PASSWORD" >> "$GITHUB_ENV"
+          echo "enabled=true" >> "$GITHUB_OUTPUT"
+      - name: Assemble permanently signed test release
+        if: steps.signing.outputs.enabled == 'true'
+        working-directory: android
+        run: ./gradlew --no-daemon assembleRelease
+      - name: Verify application IDs, label and APK signatures
+        shell: bash
+        run: |
+          set -euo pipefail
+          AAPT=$(find "$ANDROID_HOME/build-tools" -type f -name aapt | sort -V | tail -n 1)
+          APKSIGNER=$(find "$ANDROID_HOME/build-tools" -type f -name apksigner | sort -V | tail -n 1)
+          mkdir -p dist
+          for apk in android/app/build/outputs/apk/debug/app-debug.apk android/app/build/outputs/apk/release/app-release.apk; do
+            if [ ! -s "$apk" ]; then continue; fi
+            "$APKSIGNER" verify "$apk"
+            "$AAPT" dump badging "$apk" > /tmp/espbridge-badging.txt
+            grep -q "name='fr.smartenergy.android.espbridge" /tmp/espbridge-badging.txt
+            grep -q "Smart Energy ESP TEST" /tmp/espbridge-badging.txt
+            if [[ "$apk" == *release* ]]; then
+              cp "$apk" dist/SmartEnergy-ESP-HA-TEST-signed.apk
+            else
+              cp "$apk" dist/SmartEnergy-ESP-HA-TEST-debug.apk
+            fi
+          done
+          test -s dist/SmartEnergy-ESP-HA-TEST-debug.apk
+          sha256sum dist/*.apk
+      - name: Upload installable test APKs
+        uses: actions/upload-artifact@v4
+        with:
+          name: SmartEnergy-Android-ESP-HA-TEST
+          path: dist/*.apk
+          if-no-files-found: error
+          retention-days: 30
