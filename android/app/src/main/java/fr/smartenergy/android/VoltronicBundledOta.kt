@@ -8,18 +8,23 @@ import java.net.URL
 import java.security.MessageDigest
 
 /**
- * First-device experimental OTA, entirely inside the APK. The bundled 0.3.4
- * image is pinned to the exact SHA256 produced by CI run 43585410799.
+ * First-device experimental OTA, entirely inside the APK. The bundled 0.3.7
+ * image is pinned to SHA256 from the successful ESP2 HA bridge firmware run 43697741978.
  * Not a generic file picker, arbitrary URL or unrestricted firmware flasher.
  * No changes to JK, VPN or Android configuration.
  */
 internal object VoltronicBundledOta {
-    private const val TEST_IMAGE = "voltronic-s3-0.3.4-test.bin"
-    private const val EXPECTED_BYTES = 901664L
+    private const val TEST_IMAGE = "voltronic-s3-0.3.7-ha-bridge.bin"
+    private const val EXPECTED_BYTES = 904064L
     private const val EXPECTED_SHA256 =
-        "9cfc8c87280c50bf92eb4f6b8029ea67004aa79cfbe7ff0faa0f24f78e3bf289"
-    private const val FROM_VERSION = "0.3.2-dev-ota-gated-read-only"
-    const val TO_VERSION = "0.3.4-dev-ota-parameter-edit-test"
+        "fbe9352f6660ffbfb90ac524acd7dfca035a0b4c25eead68e88e12df909d8b80"
+    private val SUPPORTED_FROM = setOf(
+        "0.3.2-dev-ota-gated-read-only",
+        "0.3.4-dev-ota-parameter-edit-test",
+        "0.3.5"
+    )
+    fun isSupportedSource(version:String):Boolean = version in SUPPORTED_FROM
+    const val TO_VERSION = "0.3.7-test-ha-bridge"
 
     data class Preflight(val installedVersion:String,val maxImageBytes:Int)
 
@@ -76,7 +81,7 @@ internal object VoltronicBundledOta {
         }
         val sha=digest.digest().joinToString("") { "%02x".format(it.toInt() and 255) }
         require(bytes==EXPECTED_BYTES && sha==EXPECTED_SHA256) {
-            "Image 0.3.4 absente ou différente de la compilation vérifiée"
+            "Image 0.3.7 absente ou différente de la compilation vérifiée"
         }
     }
 
@@ -90,8 +95,8 @@ internal object VoltronicBundledOta {
             "Le lecteur n'est pas notre ESP32-S3 Voltronic"
         }
         val version=device.optString("version","")
-        require(version==FROM_VERSION) {
-            "OTA test réservé à $FROM_VERSION ; version actuelle : $version"
+        require(isSupportedSource(version)) {
+            "OTA 0.3.7 non préparée pour la version installée : $version"
         }
         val status=VoltronicLocalOta.status(host,code,port,network)
         require(status.optBoolean("ota_supported",false) &&
@@ -124,7 +129,7 @@ internal object VoltronicBundledOta {
         progress:(String)->Unit
     ):JSONObject {
         preflight(context,host,code,port,network)
-        progress("Image 0.3.4 vérifiée · envoi OTA local en cours…")
+        progress("Image 0.3.7 vérifiée · envoi OTA local en cours…")
         val c=connection(host,port,code,network,"ota/image")
         try {
             c.requestMethod="POST"
@@ -169,7 +174,7 @@ internal object VoltronicBundledOta {
             try {
                 val version=info(host,port,code,network).optString("version","")
                 if(version==TO_VERSION)return true
-                if(version.isNotEmpty() && version!=FROM_VERSION)return false
+                if(version.isNotEmpty() && isSupportedSource(version).not())return false
             }catch(_:Exception) {
                 // Temporary Wi-Fi outage while the ESP32-S3 reboots.
             }
