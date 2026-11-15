@@ -49,7 +49,7 @@ jobs:
           AAPT=$(find "$ANDROID_HOME/build-tools" -type f -name aapt | sort -V | tail -1)
           "$APKSIGNER" verify "$APK"
           test "$TRUSTED_CERT" != "" && [[ "$TRUSTED_CERT" =~ ^[a-fA-F0-9]{64}$ ]]
-          cert=$("$APKSIGNER" verify --print-certs "$APK" | sed -n 's/.*Signer #1 certificate SHA-256 digest: //p' | head -1 | tr '[:upper:]' '[:lower:]')
+          cert=$("$APKSIGNER" verify --print-certs "$APK" | grep -Eio '([[:xdigit:]]{2}:){31}[[:xdigit:]]{2}|[[:xdigit:]]{64}' | head -1 | tr -d ':' | tr '[:upper:]' '[:lower:]' || true)
           test "$cert" = "$(echo "$TRUSTED_CERT" | tr '[:upper:]' '[:lower:]')"
           info=$("$AAPT" dump badging "$APK" | head -1)
           echo "$info"
