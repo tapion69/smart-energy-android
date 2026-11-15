@@ -1,0 +1,33 @@
+name: Inspect verified live Voltronic S3 OTA application image
+on:
+  push:
+    branches: [dev]
+    paths: ['.github/workflows/inspect-s3-ota-main.yml']
+  workflow_dispatch:
+permissions:
+  contents: read
+  actions: read
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Download exact S3 bridge firmware that passed live tests
+        uses: actions/download-artifact@v4
+        with:
+          name: SmartEnergy-VOLTRONIC-ESP32S3-N16R8-FULL-LIVE-TEST
+          run-id: 43697741978
+          repository: tapion69/smart-energy-android
+          github-token: ${{ github.token }}
+          path: /tmp/voltronic-ota
+      - name: Inspect signed-image candidate size and version
+        run: |
+          set -euo pipefail
+          ls -l /tmp/voltronic-ota
+          FILE=/tmp/voltronic-ota/smart-energy-voltronic-S3-APP-0x10000.bin
+          test -s "$FILE"
+          wc -c "$FILE"
+          sha256sum "$FILE"
+          grep -aFo '0.3.7-test-ha-bridge' "$FILE" | head -n 1
+          python -m pip -q install esptool==4.9.0
+          python -m esptool --chip esp32s3 image_info "$FILE" | head -n 35
