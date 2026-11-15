@@ -4045,7 +4045,7 @@ class MainActivity : Activity() {
             updateFeedback.text="INV$slot : réseau Wi-Fi local, IP privée et code S3 requis."
             return
         }
-        updateFeedback.text="INV$slot : contrôle de la version 0.3.2, des partitions et du BIN intégré…"
+        updateFeedback.text="INV$slot : contrôle de la version S3, des partitions OTA et du BIN intégré…"
         settingsWorker.execute {
             val preflight=try {
                 VoltronicBundledOta.preflight(this,host,code,port,network)
@@ -4072,7 +4072,7 @@ class MainActivity : Activity() {
                         "Aucun nouvel essai automatique en cas d'incertitude.\n\n"+
                         "Lancer la mise à jour sur INV$slot ?")
                     .setNegativeButton("Annuler",null)
-                    .setPositiveButton("Installer 0.3.4") { _,_->
+                    .setPositiveButton("Installer 0.3.7") { _,_->
                         updateFeedback.text="OTA test INV$slot : pré-vérification…"
                         settingsWorker.execute {
                             val message=try {
@@ -4083,7 +4083,7 @@ class MainActivity : Activity() {
                                     }
                                 }
                                 if(VoltronicBundledOta.verifyAfterReboot(host,code,port,network)) {
-                                    "INV$slot : OTA 0.3.4 confirmée après redémarrage. "+
+                                    "INV$slot : OTA 0.3.7 confirmée après redémarrage. "+
                                     "Vérifie maintenant la télémétrie et les paramètres en lecture."
                                 }else {
                                     "INV$slot : envoi accepté, mais nouvelle version non vérifiée. "+
@@ -4313,8 +4313,8 @@ class MainActivity : Activity() {
                 val manifest=SmartEnergyUpdateFeed.fetchPublicManifest(
                     SmartEnergyUpdateFeed.VOLTRONIC_MANIFEST)
                 val feed=SmartEnergyUpdateFeed.parseVoltronic(manifest,version)
-                if(feed==null && version=="0.3.2-dev-ota-gated-read-only") {
-                    // Backward-compatible single test image, pre-validated and embedded.
+                if(feed==null && VoltronicBundledOta.isSupportedSource(version)) {
+                    // Backward-compatible SHA256-pinned 0.3.7 S3 bridge image, pre-validated and embedded.
                     // Do not route through the unpublished GitHub firmware catalog.
                     runOnUiThread {
                         if(!isFinishing && !isDestroyed)
