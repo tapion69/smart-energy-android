@@ -1250,7 +1250,11 @@ static void perform_parameter_edit(
     }
     vt_exchange_t reply=exchange_core(command,true);
     char ack[16]={0};
-    if(reply.timeout||reply.nak||
+    /* A definitive NAK proves that this encoding was rejected and permits
+       the learning engine to try the next SAME-SEMANTIC safe candidate.
+       A timeout/unknown ACK remains terminal: never blindly retry. */
+    if(reply.nak){edit_result(result,"set_rejected_by_nak");return;}
+    if(reply.timeout||
        !vt_payload_copy(reply.frame,reply.len,ack,sizeof(ack))||
        strcmp(ack,"ACK")!=0){
         edit_result(result,"set_not_acknowledged_state_unknown");return;
