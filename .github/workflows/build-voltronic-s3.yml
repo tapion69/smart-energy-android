@@ -1,7 +1,7 @@
 name: Smart Energy Voltronic ESP32-S3 parameter-write experimental
 on:
   push:
-    branches: [dev, 'test/esp32-ha-bridge']
+    branches: [dev, 'test/esp32-ha-bridge', 'experiment/esp32-s3-full-live-test']
     paths:
       - 'firmware/voltronic-esp32/**'
       - '.github/workflows/build-voltronic-s3.yml'
@@ -73,7 +73,7 @@ jobs:
       - name: Publish VOLTRONIC S3 test images
         uses: actions/upload-artifact@v4
         with:
-          name: SmartEnergy-VOLTRONIC-ESP32S3-N16R8-EDIT-TEST
+          name: SmartEnergy-VOLTRONIC-ESP32S3-N16R8-FULL-LIVE-TEST
           path: |
             firmware/voltronic-esp32/dist/smart-energy-voltronic-S3-FACTORY-0x0.bin
             firmware/voltronic-esp32/dist/smart-energy-voltronic-S3-APP-0x10000.bin
