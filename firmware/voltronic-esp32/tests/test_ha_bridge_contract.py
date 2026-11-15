@@ -10,7 +10,7 @@ EDIT = (Path(__file__).resolve().parent.parent / "main" / "voltronic_edit.h").re
 
 class BridgeContract(unittest.TestCase):
     def test_branch_identification(self):
-        self.assertIn('VT_VERSION "0.3.6-test-ha-bridge"', SRC)
+        self.assertIn('VT_VERSION "0.3.7-test-ha-bridge"', SRC)
         self.assertIn('"ha_bridge_protocol","esp-cache-v1"', SRC)
 
     def test_single_owner_contract(self):
@@ -42,7 +42,12 @@ class BridgeContract(unittest.TestCase):
         self.assertIn('if(!vt_edit_allowed(spec,current,request->new_value,nominal))', SRC)
         self.assertIn('if(fabs(check[spec->index]-request->new_value)>spec->tolerance)', SRC)
         self.assertIn('static const vt_edit_spec_t VT_EDIT_SPECS[]', EDIT)
-        self.assertIn('One candidate, never an automatic fallback.', SRC)
+        self.assertIn('vt_edit_candidate_allowed', EDIT)
+        self.assertIn('vt_edit_candidate_allowed(spec,value->valuedouble,candidate->valuestring)', SRC)
+        self.assertIn('request->candidate', SRC)
+        self.assertIn('ha_bridge_learning_mode', SRC)
+
+        self.assertIn('One validated candidate per confirmed transaction.', SRC)
 
     def test_native_reply_cache_is_authenticated_and_read_only(self):
         self.assertIn('#define VT_BRIDGE_CACHE 20', SRC)
