@@ -4032,6 +4032,12 @@ class MainActivity : Activity() {
     }
 
     private fun prepareBundledVoltronicOta(slot:Int) {
+        if(packageName.startsWith("fr.smartenergy.android.espbridge")) {
+            if(::updateFeedback.isInitialized)updateFeedback.text=
+                "APK ESP TEST : OTA integree historique desactivee. Utilise le BIN S3 de ce banc de test."
+            return
+        }
+
         if(slot !in 1..3 || !voltronicFleet.configured(slot))return
         val host=if(slot==1)prefs.getString("inverter_probe_ip","")?:""
             else prefs.getString("inverter_${slot}_ip","")?:""
@@ -4608,6 +4614,12 @@ class MainActivity : Activity() {
     }
 
     private fun checkSmartEnergyUpdates(manual:Boolean) {
+        if(packageName.startsWith("fr.smartenergy.android.espbridge")) {
+            if(manual && ::updateFeedback.isInitialized)updateFeedback.text=
+                "APK ESP TEST independante : mises a jour officielles Android desactivees."
+            return
+        }
+
         if(!::updateFeedback.isInitialized)return
         val now=System.currentTimeMillis()
         if(!manual && now-prefs.getLong("updates_last_check_ms",0L)<86400000L)return
