@@ -54,6 +54,47 @@ object VoltronicVpnReadOnlyClient {
             }
     }
 
+    /** Edit only the relay TCP port for an inverter already allowlisted
+     * in the ESP VPN. No LAN IP, reader code, Tailscale credential or BMS
+     * configuration can be modified by this endpoint. */
+    fun configureInverterPort(slot:Int,port:Int,route:VoltronicVpnRoute):JSONObject {
+        require(slot in 1..3 && port in 1..65535)
+        val body=JSONObject().put("slot",slot).put("port",port).toString()
+        val c=connection(route,"/api/v1/inverters/ports")
+        return try {
+            c.requestMethod="POST"
+            c.doOutput=true
+            c.connectTimeout=5000
+            c.readTimeout=6500
+            c.setRequestProperty("Content-Type","application/json")
+            val bytes=body.toByteArray(Charsets.UTF_8)
+            c.setFixedLengthStreamingMode(bytes.size)
+            c.outputStream.use { it.write(bytes) }
+            if(c.responseCode!=200)throw VoltronicVpnHttpException(c.responseCode)
+            val result=JSONObject(c.inputStream.bufferedReader().use {
+                it.readText().take(2048)
+            })
+            require(result.optString("product")=="smart-energy-inverter-relay-ports" &&
+                result.optInt("slot")==slot && result.optInt("port")==port &&
+                result.optBoolean("saved")){"Port non confirmé par la passerelle"}
+            result
+        }finally{c.disconnect()}
+    }
+
+    fun inverterPorts(route:VoltronicVpnRoute):JSONObject {
+        val c=connection(route,"/api/v1/inverters/ports")
+        return try {
+            c.requestMethod="GET"
+            if(c.responseCode!=200)throw VoltronicVpnHttpException(c.responseCode)
+            val result=JSONObject(c.inputStream.bufferedReader().use {
+                it.readText().take(4096)
+            })
+            require(result.optString("product")=="smart-energy-inverter-relay-ports" &&
+                result.optJSONArray("ports")!=null){"Réponse des ports VPN incompatible"}
+            result
+        }finally{c.disconnect()}
+    }
+
     fun remoteWritesEnabled(route:VoltronicVpnRoute):Boolean {
         val c=connection(route,"/api/v1/health")
         return try {
