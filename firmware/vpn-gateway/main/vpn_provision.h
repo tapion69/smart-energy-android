@@ -10,8 +10,10 @@ typedef struct {
     char tailscale_key[256];
     char gateway_token[129];
     char jk_ip[3][16];
+    char jk_name[3][33]; // Optional name-based discovery for preflashed readers.
     char jk_code[3][33];
     char voltronic_ip[3][16];
+    char voltronic_name[3][33];
     char voltronic_code[3][33];
     bool remote_writes_enabled; // opt-in only through physical USB + BOOT, default false
 } se_vpn_config_t;

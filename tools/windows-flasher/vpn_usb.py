@@ -24,8 +24,12 @@ def format_usb_configuration(values: dict[str, str]) -> bytes:
     }
     if not expected.issubset(values):
         raise ValueError("Champs VPN manquants.")
+    # New name-based targets are optional to preserve old flasher callers.
+    # The VPN resolves their IP at runtime after a verified read-code challenge.
+    optional={f"{family}{idx}_name":values.get(f"{family}{idx}_name","")
+              for family in ("jk","volt") for idx in (1,2,3)}
     payload = json.dumps(
-        {key: values[key] for key in sorted(expected)},
+        {**{key: values[key] for key in sorted(expected)}, **optional},
         ensure_ascii=True, separators=(",", ":")
     )
     data = ("SEVPN_CONFIG " + payload + "\n").encode("ascii")

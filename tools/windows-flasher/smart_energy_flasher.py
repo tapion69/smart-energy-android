@@ -58,27 +58,40 @@ def validate_vpn_config(values: dict[str, str]) -> None:
     if not 20 <= len(values["gateway_token"]) <= 128:
         raise ValueError("Token VPN : utilise 20 à 128 caractères.")
     count=0
+    seen={"jk":set(),"volt":set()}
     for index in range(1, 4):
-        host = values[f"jk{index}_ip"].strip()
+        host = values.get(f"jk{index}_ip","").strip()
+        name = values.get(f"jk{index}_name","").strip()
         code = values[f"jk{index}_code"]
-        if bool(host) != bool(code):
-            raise ValueError(f"ESP JK {index} : renseigne à la fois l'IP et le code.")
+        if bool(code)!=(bool(host) or bool(name)):
+            raise ValueError(f"ESP JK {index} : indique le nom et le code ou l'IP et le code.")
         if host and not valid_lan_ip(host):
-            raise ValueError(f"ESP JK {index} : l'adresse doit être une IPv4 privée du LAN.")
-        if code and not 8 <= len(code) <= 32:
-            raise ValueError(f"ESP JK {index} : code personnel invalide (8–32).")
-        if host:count+=1
-    for index in range(1,4):
-        host=values[f"volt{index}_ip"].strip()
-        code=values[f"volt{index}_code"]
-        if bool(host)!=bool(code):
-            raise ValueError(f"Voltronic INV{index} : IP et code obligatoires ensemble.")
-        if host and not valid_lan_ip(host):
-            raise ValueError(f"Voltronic INV{index} : IPv4 privée du LAN obligatoire.")
+            raise ValueError(f"ESP JK {index} : IP invalide.")
+        if name and (len(name.encode("utf-8"))>32 or any(ord(c)<32 or c=="|" for c in name)):
+            raise ValueError(f"ESP JK {index} : nom invalide.")
+        if name and name in seen["jk"]:
+            raise ValueError("Deux ESP JK ont le même nom.")
+        if name:seen["jk"].add(name)
         if code and not 8<=len(code)<=32:
-            raise ValueError(f"Voltronic INV{index} : code ESP32-S3 invalide (8–32).")
-        if host:count+=1
-    if count<1:raise ValueError("Configure au moins un ESP JK ou Voltronic.")
+            raise ValueError(f"ESP JK {index} : code personnel invalide (8–32).")
+        if code:count+=1
+    for index in range(1,4):
+        host=values.get(f"volt{index}_ip","").strip()
+        name=values.get(f"volt{index}_name","").strip()
+        code=values[f"volt{index}_code"]
+        if bool(code)!=(bool(host) or bool(name)):
+            raise ValueError(f"Onduleur {index} : indique le nom et le code ou l'IP et le code.")
+        if host and not valid_lan_ip(host):
+            raise ValueError(f"Onduleur {index} : IP invalide.")
+        if name and (len(name.encode("utf-8"))>32 or any(ord(c)<32 or c=="|" for c in name)):
+            raise ValueError(f"Onduleur {index} : nom invalide.")
+        if name and name in seen["volt"]:
+            raise ValueError("Deux onduleurs ont le même nom.")
+        if name:seen["volt"].add(name)
+        if code and not 8<=len(code)<=32:
+            raise ValueError(f"Onduleur {index} : code invalide (8–32).")
+        if code:count+=1
+    if count<1:raise ValueError("Configure au moins un ESP JK ou onduleur.")
     # Reject syntax injection into sdkconfig / subprocess commands.
     for name, val in values.items():
         if any(c in val for c in ("\r", "\n", "\x00")):
@@ -237,7 +250,7 @@ class ScrollableTab(ttk.Frame):
 class Flasher(tk.Tk):
     def __init__(self) -> None:
         super().__init__()
-        self.title("Smart Energy — JK USB sécurisé / VPN / Voltronic ESP32-S3")
+        self.title("Smart Energy — Batteries JK / VPN / Onduleurs")
         self.geometry("960x780")
         self.minsize(740, 550)
         self.events: queue.Queue[tuple[str, str]] = queue.Queue()
@@ -247,12 +260,14 @@ class Flasher(tk.Tk):
         self.progress_percent = 0
         self.port = tk.StringVar()
         self.jk_image = tk.StringVar()
+        self.jk_fields: dict[str, tk.StringVar] = {}
         self.jk_mode = tk.StringVar(value="update")
         self.vpn_image = tk.StringVar()
         self.vpn_mode = tk.StringVar(value="update")
         self.vpn_chip = tk.StringVar(value="esp32")  # Explicit chip; never guess from COM port.
         self.volt_mode = tk.StringVar(value="update")
         self.volt_image = tk.StringVar()
+        self.inverter_type = tk.StringVar(value="voltronic")
         self.volt_fields: dict[str, tk.StringVar] = {}
         self.fields: dict[str, tk.StringVar] = {}
         self._build()
@@ -285,7 +300,7 @@ class Flasher(tk.Tk):
         outer = ttk.Frame(self, padding=12)
         outer.pack(fill="both", expand=True)
         ttk.Label(
-            outer, text="JK classique · VPN classique/S3 · Voltronic S3 (lecture seule)",
+            outer, text="Batteries JK · VPN Tailscale · Onduleurs Voltronic et futurs Deye",
             font=("Segoe UI", 12, "bold")
         ).pack(anchor="w", pady=(0, 8))
         connection = ttk.Frame(outer)
@@ -317,7 +332,7 @@ class Flasher(tk.Tk):
         jk, vpn, voltronic = self._scroll_tabs
         tabs.add(jk, text="ESP32 JK")
         tabs.add(vpn, text="ESP32 VPN")
-        tabs.add(voltronic, text="Voltronic S3")
+        tabs.add(voltronic, text="Onduleurs")
         self._build_jk(jk.content)
         self._build_vpn(vpn.content)
         self._build_voltronic(voltronic.content)
@@ -326,16 +341,12 @@ class Flasher(tk.Tk):
                    command=self._flash_jk).pack(side="right", padx=5)
         ttk.Button(vpn.actions, text="Flasher VPN (mode sélectionné)",
                    command=self._flash_vpn).pack(side="right", padx=5)
-        ttk.Button(vpn.actions, text="Ajouter INV sans effacer le reste",
-                   command=self._add_voltronic_only).pack(side="left", padx=5)
-        ttk.Button(vpn.actions, text="Corriger IP ESP JK dans VPN",
-                   command=self._patch_jk_vpn).pack(side="left", padx=5)
 
         ttk.Button(vpn.actions,text="Autoriser écritures VPN (USB)",
                    command=lambda:self._set_vpn_remote_writes(True)).pack(side="left",padx=3)
         ttk.Button(vpn.actions,text="Bloquer écritures VPN (USB)",
                    command=lambda:self._set_vpn_remote_writes(False)).pack(side="left",padx=3)
-        ttk.Button(voltronic.actions, text="Flasher Voltronic S3",
+        ttk.Button(voltronic.actions, text="Flasher onduleur S3",
                    command=self._flash_voltronic).pack(side="right", padx=5)
         ttk.Button(voltronic.actions, text="Configurer S3 sans reflasher",
                    command=self._configure_voltronic_only).pack(side="left", padx=5)
@@ -459,10 +470,22 @@ class Flasher(tk.Tk):
             command=lambda: expert.grid_remove()
                 if expert.winfo_ismapped() else expert.grid()
         ).grid(row=3, column=0, columnspan=3, sticky="w", padx=8)
-        ttk.Label(root, text="Le bouton « Flasher le lecteur JK » reste visible "
-                  "en bas de l'onglet.", wraplength=720).grid(
-            row=5, column=0, columnspan=3, pady=12
-        )
+        ttk.Label(root,text="JK neuf : Wi-Fi, nom et code définis au flash USB. "
+            "APP-ONLY préserve les lecteurs existants.",wraplength=700).grid(
+            row=5,column=0,columnspan=3,pady=8)
+        factory=ttk.LabelFrame(root,text="Première installation USB — ESP JK neuf",padding=8)
+        factory.grid(row=6,column=0,columnspan=3,sticky="ew",padx=8,pady=5)
+        factory.columnconfigure(1,weight=1)
+        for i,(caption,key,secret) in enumerate([
+            ("Nom personnalisé :","display_name",False),
+            ("Wi-Fi 2,4 GHz (SSID) :","wifi_ssid",False),
+            ("Mot de passe Wi-Fi :","wifi_password",True),
+            ("Code de lecture (8–32) :","read_code",True),
+        ]):
+            variable=tk.StringVar(value="Batteries JK" if key=="display_name" else "")
+            self.jk_fields[key]=variable
+            self._label(factory,caption,i)
+            self._entry(factory,variable,i,password=secret)
 
     def _field(self, frame: ttk.Frame, text: str, key: str, row: int,
                password: bool = False) -> None:
@@ -512,35 +535,48 @@ class Flasher(tk.Tk):
         ]):
             self._field(connection, caption, key, i, password)
 
-        readers = ttk.LabelFrame(root, text="Lecteurs JK du réseau local", padding=5)
+        readers = ttk.LabelFrame(root, text="Lecteurs JK — noms et codes", padding=5)
         readers.grid(row=4, column=0, columnspan=3, sticky="ew",
                      padx=8, pady=5)
         readers.columnconfigure(1, weight=1)
         for i, (caption, key, password) in enumerate([
-            ("ESP JK 1 — IP locale :", "jk1_ip", False),
+            ("ESP JK 1 — nom personnalisé :", "jk1_name", False),
             ("ESP JK 1 — code :", "jk1_code", True),
-            ("ESP JK 2 — IP (facultatif) :", "jk2_ip", False),
+            ("ESP JK 2 — nom (facultatif) :", "jk2_name", False),
             ("ESP JK 2 — code (facultatif) :", "jk2_code", True),
-            ("ESP JK 3 — IP (facultatif) :", "jk3_ip", False),
+            ("ESP JK 3 — nom (facultatif) :", "jk3_name", False),
             ("ESP JK 3 — code (facultatif) :", "jk3_code", True),
         ]):
             self._field(readers, caption, key, i, password)
 
-        volts=ttk.LabelFrame(root,text="Voltronic ESP32-S3 — INV1 à INV3 (VPN lecture seule)",padding=5)
+        volts=ttk.LabelFrame(root,text="Onduleurs — noms et codes",padding=5)
         volts.grid(row=5,column=0,columnspan=3,sticky="ew",padx=8,pady=5)
         volts.columnconfigure(1,weight=1)
         for i,(caption,key,password) in enumerate([
-            ("INV1 — IP locale :", "volt1_ip",False),
-            ("INV1 — code ESP :", "volt1_code",True),
-            ("INV2 — IP locale (optionnel) :", "volt2_ip",False),
-            ("INV2 — code (optionnel) :", "volt2_code",True),
-            ("INV3 — IP locale (optionnel) :", "volt3_ip",False),
-            ("INV3 — code (optionnel) :", "volt3_code",True),
+            ("Onduleur 1 — nom personnalisé :", "volt1_name",False),
+            ("Onduleur 1 — code ESP :", "volt1_code",True),
+            ("Onduleur 2 — nom (facultatif) :", "volt2_name",False),
+            ("Onduleur 2 — code (facultatif) :", "volt2_code",True),
+            ("Onduleur 3 — nom (facultatif) :", "volt3_name",False),
+            ("Onduleur 3 — code (facultatif) :", "volt3_code",True),
         ]):
             self._field(volts,caption,key,i,password)
+        legacy = ttk.LabelFrame(root,text="Mode expert : anciennes adresses IP fixes",padding=5)
+        legacy.columnconfigure(1,weight=1)
+        legacy.grid(row=6,column=0,columnspan=3,sticky="ew",padx=8)
+        legacy.grid_remove()
+        for idx,(caption,key) in enumerate([
+            ("ESP JK 1 IP :", "jk1_ip"), ("ESP JK 2 IP :", "jk2_ip"),
+            ("ESP JK 3 IP :", "jk3_ip"), ("Voltronic 1 IP :", "volt1_ip"),
+            ("Voltronic 2 IP :", "volt2_ip"), ("Voltronic 3 IP :", "volt3_ip")
+        ]):
+            self._field(legacy,caption,key,idx)
+        ttk.Button(root,text="Expert : afficher les anciennes IP fixes",
+            command=lambda: legacy.grid_remove() if legacy.winfo_ismapped() else legacy.grid()
+        ).grid(row=12,column=0,columnspan=3,padx=8,sticky="w")
         expert = ttk.Frame(root)
         expert.columnconfigure(1, weight=1)
-        expert.grid(row=6, column=0, columnspan=3, sticky="ew", padx=8)
+        expert.grid(row=13, column=0, columnspan=3, sticky="ew", padx=8)
         expert.grid_remove()
         self._label(expert, "Firmware VPN externe (.bin) :", 0)
         self._entry(expert, self.vpn_image, 0, width=42)
@@ -549,19 +585,19 @@ class Flasher(tk.Tk):
             root, text="Options avancées : sélectionner un .bin externe",
             command=lambda: expert.grid_remove()
                 if expert.winfo_ismapped() else expert.grid()
-        ).grid(row=5, column=0, columnspan=3, sticky="w",
+        ).grid(row=14, column=0, columnspan=3, sticky="w",
                padx=8, pady=(4, 0))
         ttk.Label(root,
             text="VPN déjà fonctionnel : tester d’abord sur une carte de réserve. "
                  "Ne pas choisir FACTORY pour une mise à jour.",
             wraplength=720
         ).grid(row=7,column=0,columnspan=3,sticky="w",padx=8,pady=(4,0))
-        ttk.Label(root, text="Actions VPN toujours accessibles en bas de l'onglet. "
-                  "Pour ajouter un onduleur, renseigne seulement son IP et son code.",
+        ttk.Label(root, text="VPN : renseigne les noms et codes définis au flash. "
+                  "Aucune IP requise en mode découverte. Les anciennes IP restent en mode expert.",
                   wraplength=720).grid(
             row=8, column=0, columnspan=3, pady=(8, 4))
-        append=ttk.LabelFrame(root,text="Ajouter un onduleur · conserver VPN et JK",padding=6)
-        append.grid(row=9,column=0,columnspan=3,sticky="ew",padx=8,pady=6)
+        append=ttk.LabelFrame(legacy,text="Ajouter un onduleur · ancien mode IP",padding=6)
+        append.grid(row=7,column=0,columnspan=3,sticky="ew",padx=8,pady=6)
         ttk.Label(append,text="INV à ajouter :").grid(row=0,column=0,padx=5)
         self.vpn_patch_slot=tk.StringVar(value="1")
         ttk.Combobox(append,textvariable=self.vpn_patch_slot,
@@ -571,8 +607,8 @@ class Flasher(tk.Tk):
                   "clique « Ajouter INV sans effacer le reste » en bas de l'écran.",
                   wraplength=680).grid(
                    row=1,column=0,columnspan=3,pady=(6,2))
-        update_jk=ttk.LabelFrame(root,text="Corriger un ESP JK · conserver tout le VPN",padding=6)
-        update_jk.grid(row=11,column=0,columnspan=3,sticky="ew",padx=8,pady=6)
+        update_jk=ttk.LabelFrame(legacy,text="Corriger un ESP JK · ancien mode IP",padding=6)
+        update_jk.grid(row=8,column=0,columnspan=3,sticky="ew",padx=8,pady=6)
         ttk.Label(update_jk,text="Lecteur JK à corriger :").grid(row=0,column=0,padx=5)
         self.vpn_jk_patch_slot=tk.StringVar(value="2")
         ttk.Combobox(update_jk,textvariable=self.vpn_jk_patch_slot,
@@ -582,16 +618,25 @@ class Flasher(tk.Tk):
                   "Laisse son code vide s'il n'a pas changé : il sera conservé dans le VPN. "+
                   "Puis clique « Corriger IP ESP JK dans VPN » en bas.",
                   wraplength=700).grid(row=1,column=0,columnspan=3,pady=(6,2))
-        ttk.Button(root, text="Reconfigurer TOUT via USB (remplace anciens réglages)",
-                   command=self._configure_only).grid(
-            row=10, column=0, columnspan=3, pady=(0, 6))
+        ttk.Button(legacy, text="Ajouter un ancien onduleur par IP",
+            command=self._add_voltronic_only).grid(row=10,column=0,columnspan=3,pady=3)
+        ttk.Button(legacy,text="Corriger une ancienne IP JK",
+            command=self._patch_jk_vpn).grid(row=11,column=0,columnspan=3,pady=3)
+        ttk.Button(legacy,text="Reconfigurer TOUT via USB (expert)",
+            command=self._configure_only).grid(row=12,column=0,columnspan=3,pady=4)
 
     def _build_voltronic(self, root: ttk.Frame) -> None:
         ttk.Label(root,
-            text="ESP32-S3 N16R8 uniquement · lecteur Voltronic RS232 2400 bauds. "
-                 "Firmware Voltronic avec polling stable et OTA sous réserve de migration.",
+            text="Onglet Onduleurs. Voltronic/Axpert est disponible ; Deye sera ajouté après validation du firmware. "
+                 "Voltronic conserve son câblage RS232 MAX3232.",
             wraplength=690).grid(row=0,column=0,columnspan=3,sticky="w",padx=8,pady=8)
-        modes=ttk.LabelFrame(root,text="Type de flash Voltronic S3",padding=8)
+        selector=ttk.LabelFrame(root,text="Famille d'onduleur",padding=8)
+        selector.grid(row=11,column=0,columnspan=3,sticky="ew",padx=8)
+        ttk.Radiobutton(selector,text="Voltronic / Axpert (disponible)",
+              variable=self.inverter_type,value="voltronic").pack(anchor="w")
+        ttk.Radiobutton(selector,text="Deye (firmware en développement)",
+              variable=self.inverter_type,value="deye").pack(anchor="w")
+        modes=ttk.LabelFrame(root,text="Type de flash onduleur S3",padding=8)
         modes.grid(row=1,column=0,columnspan=3,sticky="ew",padx=8,pady=8)
         ttk.Radiobutton(modes,text="Nouvel ESP32-S3 — FACTORY à 0x0",
                         variable=self.volt_mode,value="factory").pack(anchor="w")
@@ -607,8 +652,9 @@ class Flasher(tk.Tk):
             ("Wi-Fi 2,4 GHz (SSID) :","wifi_ssid",False),
             ("Mot de passe Wi-Fi :","wifi_password",True),
             ("Code privé de lecture (8–32) :","read_code",True),
+            ("Nom personnalisé (1–32 octets) :","display_name",False),
         ]):
-            variable=tk.StringVar()
+            variable=tk.StringVar(value="Onduleur Voltronic" if key=="display_name" else "")
             self.volt_fields[key]=variable
             self._label(params,description,i)
             self._entry(params,variable,i,password=secret)
@@ -665,6 +711,8 @@ class Flasher(tk.Tk):
 
     def _flash_voltronic(self) -> None:
         try:
+            if self.inverter_type.get()!="voltronic":
+                raise ValueError("Deye n'a pas encore de binaire validé. Flash volontairement bloqué.")
             from vpn_usb import check_precompiled_image
             port=self._assert_ready()
             mode=self.volt_mode.get()
@@ -764,9 +812,13 @@ class Flasher(tk.Tk):
     def _flash_jk(self) -> None:
         try:
             port = self._assert_ready()
-            # The signed-off images from our CI are included in the standard
-            # EXE. A manually selected .bin is strictly an expert override.
+            # The signed-off images from CI are bundled; USB provisioning only on FACTORY.
             mode=self.jk_mode.get()
+            factory_cfg={key:var.get() for key,var in self.jk_fields.items()} if mode=="factory" else None
+            if factory_cfg is not None:
+                from jk_usb import jk_config_line
+                jk_config_line(factory_cfg)
+                self.secret_values=[factory_cfg["wifi_password"],factory_cfg["read_code"]]
             path = (Path(self.jk_image.get().strip())
                     if self.jk_image.get().strip()
                     else self._bundled_jk_image(mode))
@@ -816,13 +868,14 @@ class Flasher(tk.Tk):
                     "Si la table est inconnue, le flash est refusé.\\n\\n"
                     "Confirmer cette mise à jour USB JK ?"):
                     return
-            self._run_async(lambda: self._do_jk(port,path,offset,private_backup),
+            self._run_async(lambda: self._do_jk(port,path,offset,private_backup,factory_cfg),
                             mode="jk")
         except Exception as exc:
             messagebox.showerror("Flash JK", str(exc))
 
     def _do_jk(self, port: str, file: Path, offset: str,
-               private_backup: Path | None = None) -> None:
+               private_backup: Path | None = None,
+               factory_cfg: dict[str,str] | None = None) -> None:
         ensure_esptool_console_streams()
         self._log(f"Flash JK {port}, offset {offset}, fichier {file.name}")
         from esptool import main as esptool_main
@@ -850,6 +903,10 @@ class Flasher(tk.Tk):
                           "--after", "hard_reset",
                           "write_flash", "--flash_mode", "dio", "--flash_freq", "40m",
                           "--flash_size", "4MB", offset, str(file)])
+        if offset=="0x0" and factory_cfg:
+            from jk_usb import provision_jk
+            self._progress_step(80,"JK : configuration initiale USB…")
+            provision_jk(port,factory_cfg,self._log)
         self._progress_step(98, "Image JK écrite et vérifiée.")
         self._log("Flash JK terminé. Redémarre le lecteur et vérifie les BMS dans l'APK.")
 

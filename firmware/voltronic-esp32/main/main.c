@@ -11,6 +11,11 @@
 #include <stdlib.h>
 #include <ctype.h>
 #include <time.h>
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include "esp_mac.h"
+#include "mdns.h"
+#include "mbedtls/md.h"
 #include "esp_sntp.h"
 #include "esp_system.h"
 #include "esp_log.h"
@@ -48,6 +53,7 @@ typedef struct {
     char wifi_ssid[33];
     char wifi_password[65];
     char read_code[33];
+    char display_name[33]; /* Optional custom label, not an authentication identity. */
 } vol_cfg_t;
 typedef struct {
     vt_qpigs_t qpigs;
@@ -128,13 +134,18 @@ static bool valid_config_json(const char *text,vol_cfg_t *out) {
     cJSON *ssid=cJSON_GetObjectItemCaseSensitive(root,"wifi_ssid");
     cJSON *pass=cJSON_GetObjectItemCaseSensitive(root,"wifi_password");
     cJSON *code=cJSON_GetObjectItemCaseSensitive(root,"read_code");
+    cJSON *label=cJSON_GetObjectItemCaseSensitive(root,"display_name");
     bool good=cJSON_IsString(ssid) && cJSON_IsString(pass) && cJSON_IsString(code) &&
         ssid->valuestring && pass->valuestring && code->valuestring;
     if(good) {
         size_t a=strnlen(ssid->valuestring,34);
         size_t b=strnlen(pass->valuestring,66);
         size_t c=strnlen(code->valuestring,34);
-        good=(a>=1 && a<=32 && b>=8 && b<=64 && c>=8 && c<=32);
+        good=(a>=1 && a<=32 && b>=8 && b<=64 && c>=8 && c<=32 &&
+            (!label || (cJSON_IsString(label) && label->valuestring &&
+                         strnlen(label->valuestring,34)<=32)));
+        if(good && label) for(const char *p=label->valuestring;*p;++p)
+            if((unsigned char)*p<32 || *p=='|')good=false;
         for(size_t j=0;j<a && good;j++) {
             if((unsigned char)ssid->valuestring[j]<32)good=false;
         }
@@ -148,6 +159,8 @@ static bool valid_config_json(const char *text,vol_cfg_t *out) {
         strcpy(out->wifi_ssid,ssid->valuestring);
         strcpy(out->wifi_password,pass->valuestring);
         strcpy(out->read_code,code->valuestring);
+        snprintf(out->display_name,sizeof(out->display_name),"%s",
+                 label && label->valuestring ? label->valuestring : "Onduleur Voltronic");
     }
     cJSON_Delete(root);
     return good;
@@ -382,6 +395,13 @@ static esp_err_t info_handler(httpd_req_t *r){
     if(!authorized(r))return deny(r);
     cJSON *root=base_json("voltronic-rs232-read-only");
     cJSON_AddStringToObject(root,"product","smart-energy-voltronic-s3");
+    cJSON_AddStringToObject(root,"device_name",cfg.display_name);
+    uint8_t id_mac[6]={0};
+    if(esp_read_mac(id_mac,ESP_MAC_WIFI_STA)==ESP_OK){
+       char device_id[32];snprintf(device_id,sizeof(device_id),
+          "se-voltronic-%02x%02x%02x%02x%02x%02x",id_mac[0],id_mac[1],id_mac[2],id_mac[3],id_mac[4],id_mac[5]);
+       cJSON_AddStringToObject(root,"device_id",device_id);
+    }
     cJSON_AddStringToObject(root,"chip","esp32s3");
     cJSON_AddNumberToObject(root,"serial_baud",VT_BAUD);
     cJSON_AddStringToObject(root,"transport","uart1-rs232-max3232");
@@ -1407,6 +1427,73 @@ static void ota_postboot_validate_task(void *unused){
     }
     vTaskDelete(NULL);
 }
+/* Local discovery broadcasts contain only public identity; never secrets, IP,
+ * MAC or telemetry. Receiver must authenticate with X-Setup-Code before relay.
+ * A stable hardware ID is separate from the customizable display name. */
+static void setup_mdns_discovery(void){
+    uint8_t mac[6]={0};
+    if(esp_read_mac(mac,ESP_MAC_WIFI_STA)!=ESP_OK)return;
+    char host[24]={0},instance[64]={0};
+    snprintf(host,sizeof(host),"sevolt-%02x%02x%02x",mac[3],mac[4],mac[5]);
+    snprintf(instance,sizeof(instance),"%s (%s)",cfg.display_name,host);
+    esp_err_t err=mdns_init();
+    if(err!=ESP_OK && err!=ESP_ERR_INVALID_STATE)return;
+    mdns_hostname_set(host);
+    mdns_instance_name_set(instance);
+    mdns_service_add(instance,"_http","_tcp",VT_HTTP_PORT,NULL,0);
+    mdns_service_txt_item_set("_http","_tcp","family","voltronic");
+}
+static void discovery_broadcast_task(void *arg){
+    (void)arg;
+    int fd=socket(AF_INET,SOCK_DGRAM,IPPROTO_UDP);
+    if(fd<0){vTaskDelete(NULL);return;}
+    int broadcast=1;setsockopt(fd,SOL_SOCKET,SO_BROADCAST,&broadcast,sizeof(broadcast));
+    struct sockaddr_in dst={0};
+    dst.sin_family=AF_INET;dst.sin_port=htons(18769);
+    dst.sin_addr.s_addr=htonl(INADDR_BROADCAST);
+    uint8_t mac[6]={0};esp_read_mac(mac,ESP_MAC_WIFI_STA);
+    char id[36];snprintf(id,sizeof(id),"se-voltronic-%02x%02x%02x%02x%02x%02x",
+        mac[0],mac[1],mac[2],mac[3],mac[4],mac[5]);
+    for(;;){
+        if((xEventGroupGetBits(wifi_events)&WIFI_OK)!=0){
+            cJSON *j=cJSON_CreateObject();
+            cJSON_AddStringToObject(j,"proto","smart-energy-discovery-v1");
+            cJSON_AddStringToObject(j,"family","voltronic");
+            cJSON_AddStringToObject(j,"name",cfg.display_name);
+            cJSON_AddStringToObject(j,"id",id);
+            cJSON_AddNumberToObject(j,"port",VT_HTTP_PORT);
+            esp_netif_t *ni=esp_netif_get_handle_from_ifkey("WIFI_STA_DEF");
+            esp_netif_ip_info_t ip={0};
+            char local_ip[16]={0};
+            if(ni && esp_netif_get_ip_info(ni,&ip)==ESP_OK &&
+               inet_ntop(AF_INET,&ip.ip,local_ip,sizeof(local_ip))){
+                cJSON_AddStringToObject(j,"ip",local_ip);
+                char canonical[256]={0};
+                int length=snprintf(canonical,sizeof(canonical),
+                    "smart-energy-discovery-v1|voltronic|%s|%s|%u|%s",
+                    cfg.display_name,id,VT_HTTP_PORT,local_ip);
+                unsigned char digest[32]={0};
+                const mbedtls_md_info_t *sha=mbedtls_md_info_from_type(MBEDTLS_MD_SHA256);
+                if(sha && length>0 && length<(int)sizeof(canonical) &&
+                   mbedtls_md_hmac(sha,(const unsigned char*)cfg.read_code,
+                       strlen(cfg.read_code),(const unsigned char*)canonical,
+                       (size_t)length,digest)==0){
+                    const char hex[]="0123456789abcdef";char tag[65]={0};
+                    for(int k=0;k<32;k++){
+                        tag[k*2]=hex[digest[k]>>4];
+                        tag[k*2+1]=hex[digest[k]&15];
+                    }
+                    cJSON_AddStringToObject(j,"auth",tag);
+                }
+            }
+            char *payload=cJSON_PrintUnformatted(j);
+            if(payload){sendto(fd,payload,strlen(payload),0,
+                (struct sockaddr*)&dst,sizeof(dst));free(payload);}
+            cJSON_Delete(j);
+        }
+        vTaskDelay(pdMS_TO_TICKS(15000));
+    }
+}
 void app_main(void){
     ESP_ERROR_CHECK(nvs_flash_init());
     state_lock=xSemaphoreCreateMutex();
@@ -1419,6 +1506,8 @@ void app_main(void){
         usb_provision();return;
     }
     wifi_start();
+    setup_mdns_discovery();
+    xTaskCreate(discovery_broadcast_task,"se-discover",4096,NULL,2,NULL);
     /* Network time only for UTC-dated QED/QEM/QEY/QLD/QLM/QLY.
        The serial reader does not depend on Internet or an NTP response. */
     esp_sntp_setoperatingmode(SNTP_OPMODE_POLL);

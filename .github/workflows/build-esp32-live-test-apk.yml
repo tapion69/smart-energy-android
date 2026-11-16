@@ -2,7 +2,7 @@ name: ESP32 HA bridge - separate Android TEST APK
 
 on:
   push:
-    branches: ['experiment/esp32-s3-full-live-test']
+    branches: ['experiment/esp32-s3-full-live-test', 'feature/universal-reader-discovery-20261116']
     paths:
       - 'android/**'
       - '.github/workflows/build-esp32-live-test-apk.yml'

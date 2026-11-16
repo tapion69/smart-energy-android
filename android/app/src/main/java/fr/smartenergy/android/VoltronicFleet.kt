@@ -86,6 +86,8 @@ class VoltronicFleet(
                 nativeToday("load")?.let{result.put("loadDayKwh",it/1000.0)}
             }
         }
+        val custom=prefs.getString("inverter_"+slot+"_name","")?.trim() ?: ""
+        if(custom.isNotEmpty())result.put("name",custom)
         return result
     }
     fun snapshot():JSONArray {

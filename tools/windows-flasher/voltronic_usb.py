@@ -23,7 +23,11 @@ def voltronic_config_line(values: dict[str, str]) -> bytes:
         raise ValueError("SSID 1–32 octets, Wi-Fi 8–64 octets, code 8–32 caractères.")
     if any(ord(x)<33 or ord(x)>126 for x in code):
         raise ValueError("Utilise un code ASCII imprimable sans espace.")
-    payload = json.dumps({key: values[key] for key in sorted(expected)},
+    label=values.get("display_name","Onduleur Voltronic").strip()
+    if not 1<=len(label.encode("utf-8"))<=32 or any(ord(x)<32 or x=="|" for x in label):
+        raise ValueError("Nom d'onduleur invalide (1–32 octets).")
+    payload = json.dumps({**{key: values[key] for key in sorted(expected)},
+                          "display_name":label},
                          ensure_ascii=True, separators=(",",":"))
     message = ("SEVOLT_CONFIG " + payload + "\n").encode("ascii")
     if len(message) >= 299 or b"\x00" in message:

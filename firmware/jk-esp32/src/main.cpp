@@ -6,6 +6,8 @@
 #include <WebServer.h>
 #include <Preferences.h>
 #include <ESPmDNS.h>
+#include <WiFiUdp.h>
+#include <mbedtls/md.h>
 #include <NimBLEDevice.h>
 #include "jk_reader.h"
 #include "jk_write.h"
@@ -34,6 +36,11 @@ WebServer http(80);
 String hostName;
 String setupSsid;
 String setupCode;
+String displayName;
+WiFiUDP discoveryUdp;
+uint32_t lastDiscoveryAt=0;
+String factoryUsbLine;
+uint32_t factoryUsbLastReady=0;
 uint8_t deviceIdScheme = 0;
 bool setupMode = false;
 bool automaticSetupFallback = false;
@@ -226,6 +233,7 @@ void onInfo() {
   doc["version"] = VERSION;
   doc["identity_decoder_revision"] = "jk02-info-json-owned-4";
   doc["device_id"] = hostName;
+  doc["device_name"] = displayName;
   doc["device_id_scheme"] = deviceIdScheme;
   doc["setup_mode"] = setupMode;
   doc["wifi_auto_recovery"] = setupMode && automaticSetupFallback;
@@ -808,6 +816,81 @@ void onDetails() {
   jkreader::fillDetails(doc);
   respond(200, doc);
 }
+// First-time factory onboarding: physical USB only; no BOOT association needed.
+// Legacy Wi-Fi-configured readers are never re-provisioned automatically.
+static void factoryUsbProvision(){
+  if(!setupMode || !prefs.getString("ssid","").isEmpty() ||
+     millis()>180000UL)return;
+  if(millis()-factoryUsbLastReady>=1600){
+    Serial.println("SEJK_READY_V1");
+    factoryUsbLastReady=millis();
+  }
+  while(Serial.available()){
+    char c=(char)Serial.read();
+    if(c=='\r')continue;
+    if(c=='\n'){
+      String line=factoryUsbLine;
+      factoryUsbLine="";
+      if(line=="SEJK_PING"){Serial.println("SEJK_READY_V1");continue;}
+      if(!line.startsWith("SEJK_CONFIG ")){continue;}
+      JsonDocument d;
+      if(deserializeJson(d,line.substring(12))){Serial.println("SEJK_ERR_INVALID");continue;}
+      String ssid=d["wifi_ssid"].as<String>();
+      String pass=d["wifi_password"].as<String>();
+      String code=d["read_code"].as<String>();
+      String name=d["display_name"].as<String>();
+      if(name.isEmpty())name="Batteries JK";
+      bool good=ssid.length()>0 && ssid.length()<=32 &&
+        pass.length()>=8 && pass.length()<=64 &&
+        setupcode::valid(code.c_str(),code.length()) &&
+        name.length()>0 && name.length()<=32;
+      for(unsigned i=0;i<name.length();i++)
+        if((unsigned char)name[i]<32 || name[i]=='|')good=false;
+      for(unsigned i=0;i<code.length();i++)
+        if((unsigned char)code[i]<33 || (unsigned char)code[i]>126)good=false;
+      if(!good){Serial.println("SEJK_ERR_INVALID");continue;}
+      // Persist each value in NVS and restart only when all four succeed.
+      bool stored=prefs.putString("ssid",ssid)==ssid.length();
+      stored=stored && prefs.putString("wifiPass",pass)==pass.length();
+      stored=stored && prefs.putString("setupCode",code)==code.length();
+      stored=stored && prefs.putString("displayName",name)==name.length();
+      if(stored){
+        Serial.println("SEJK_OK_REBOOT");Serial.flush();
+        restartAt=millis()+1200;
+      }else Serial.println("SEJK_ERR_INVALID");
+    }else if(c>=32 && c<=126 && factoryUsbLine.length()<350){
+      factoryUsbLine+=c;
+    }else factoryUsbLine="";
+  }
+}
+// Broadcast public reader identity only. Access still requires its private code.
+static void publishDiscovery(){
+  if(setupMode || WiFi.status()!=WL_CONNECTED ||
+     millis()-lastDiscoveryAt<15000UL)return;
+  lastDiscoveryAt=millis();
+  JsonDocument j;
+  j["proto"]="smart-energy-discovery-v1";
+  j["family"]="jk";
+  j["name"]=displayName;
+  j["id"]=hostName;
+  j["port"]=80;
+  String localIp=WiFi.localIP().toString();
+  j["ip"]=localIp; // Signed; VPN verifies actual UDP source.
+  String canonical="smart-energy-discovery-v1|jk|"+displayName+"|"+hostName+"|80|"+localIp;
+  unsigned char digest[32]={0};
+  const mbedtls_md_info_t *sha=mbedtls_md_info_from_type(MBEDTLS_MD_SHA256);
+  if(!sha || mbedtls_md_hmac(sha,(const unsigned char*)setupCode.c_str(),
+       setupCode.length(),(const unsigned char*)canonical.c_str(),
+       canonical.length(),digest)!=0)return;
+  const char hex[]="0123456789abcdef";
+  char tag[65]={0};
+  for(int i=0;i<32;i++){tag[i*2]=hex[digest[i]>>4];tag[i*2+1]=hex[digest[i]&15];}
+  j["auth"]=tag;
+  String payload;serializeJson(j,payload);
+  discoveryUdp.beginPacket(IPAddress(255,255,255,255),18769);
+  discoveryUdp.print(payload);
+  discoveryUdp.endPacket();
+}
 void setup() {
   Serial.begin(115200);
   pinMode(SETUP_BUTTON, INPUT_PULLUP);
@@ -831,6 +914,8 @@ void setup() {
   snprintf(hexId,sizeof(hexId),"%06X",id);
   hostName=String("smartjk-")+hexId;
   setupSsid=String("SmartJK-Setup-")+hexId;
+  displayName=prefs.getString("displayName","Batteries JK");
+  if(displayName.isEmpty())displayName="Batteries JK";
   Serial.printf("[Identity] device=%s, scheme=%u (1=legacy, 2=unique MAC tail)\n",
                 hostName.c_str(),unsigned(deviceIdScheme));
   setupCode = prefs.getString("setupCode", "");
@@ -850,6 +935,7 @@ void setup() {
   const char *headerKeys[] = {"X-Setup-Code","X-OTA-Confirmed","X-Image-SHA256"};
   http.collectHeaders(headerKeys, 3);
   http.on("/api/v1/info", HTTP_GET, onInfo);
+  http.on("/api/v1/discovery/proof",HTTP_GET,[]{if(requireControl())onInfo();});
   http.on("/api/v1/bms", HTTP_GET, onConfiguredBms);
   http.on("/api/v1/bms/scan", HTTP_GET, onScan);
   http.on("/api/v1/bms", HTTP_PUT, onSaveBms);
@@ -875,6 +961,8 @@ void setup() {
   jkreader::begin();
 }
 void loop() {
+  factoryUsbProvision();
+  publishDiscovery();
   http.handleClient();
   if (!setupMode && WiFi.status() == WL_CONNECTED) {
     if (!everConnected) {

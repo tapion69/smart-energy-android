@@ -2,7 +2,7 @@ name: Smart Energy Flasher source regression tests
 
 on:
   push:
-    branches: [dev]
+    branches: [dev, 'feature/universal-reader-discovery-20261116']
     paths:
       - 'tools/windows-flasher/**'
       - '.github/workflows/build-windows-flasher.yml'
