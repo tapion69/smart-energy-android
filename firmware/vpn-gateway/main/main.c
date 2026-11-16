@@ -17,6 +17,8 @@
 #include <arpa/inet.h>
 #include <sys/time.h>
 #include <unistd.h>
+#include <errno.h>
+#include <fcntl.h>
 #include "mbedtls/md.h"
 
 #include "sdkconfig.h"
@@ -41,7 +43,7 @@
 #include "cJSON.h"
 #include <math.h>
 
-#define GATEWAY_VERSION "0.3.9-dev-inverter-port-config"
+#define GATEWAY_VERSION "0.3.10-dev-modbus-fc03"
 #define GATEWAY_PORT 18767
 #define MAX_JSON_BYTES 32768
 
@@ -70,7 +72,8 @@ static esp_err_t deny(httpd_req_t *req,const char *status,const char *json);
 static int inverter_relay_port(int slot) {
     if(slot<1 || slot>3)return 18081;
     nvs_handle_t handle;
-    uint32_t port=18081;
+    uint32_t port=(personal && slot>=1 && slot<=3 &&
+        strcmp(personal->voltronic_protocol[slot-1],"modbus")==0)?502:18081;
     char key[8];snprintf(key,sizeof key,"port%d",slot);
     if(nvs_open("se_inv_ports",NVS_READONLY,&handle)==ESP_OK){
         uint32_t found=0;
@@ -94,6 +97,8 @@ static bool inverter_port_save(int slot,int port) {
 static bool inverter_slot_authorized(int slot) {
     if(!personal || slot<1 || slot>3)return false;
     int i=slot-1;
+    if(strcmp(personal->voltronic_protocol[i],"modbus")==0)
+        return se_is_private_ipv4(personal->voltronic_ip[i]);
     return (personal->voltronic_name[i][0] ||
         se_is_private_ipv4(personal->voltronic_ip[i])) &&
         strlen(personal->voltronic_code[i])>=8 &&
@@ -464,7 +469,8 @@ static void discovery_listener(void *unused){
         cJSON_Delete(j);
         if(!personal)continue;
         for(int slot=0;slot<3;slot++){
-            const char *expected=family==0?personal->jk_name[slot]:
+            if(family==1 && strcmp(personal->voltronic_protocol[slot],"modbus")==0)continue;
+        const char *expected=family==0?personal->jk_name[slot]:
                                            personal->voltronic_name[slot];
             const char *fixed=family==0?personal->jk_ip[slot]:
                                         personal->voltronic_ip[slot];
@@ -516,6 +522,7 @@ static esp_err_t discovery_inventory(httpd_req_t *req) {
         const char *name=family==0?personal->jk_name[slot]:personal->voltronic_name[slot];
         const char *legacy=family==0?personal->jk_ip[slot]:personal->voltronic_ip[slot];
         const char *secret=family==0?personal->jk_code[slot]:personal->voltronic_code[slot];
+        if(family==1 && strcmp(personal->voltronic_protocol[slot],"modbus")==0)continue;
         if(!name[0] || se_is_private_ipv4(legacy) || strlen(secret)<8)continue;
         char confirmed_ip[16]={0},confirmed_id[48]={0};
         bool ambiguous=false;
@@ -599,6 +606,7 @@ static bool get_target(se_route_t route, lan_target_t *out) {
              route==SE_ROUTE_VOLT2_DETAILS || route==SE_ROUTE_VOLT2_INFO)?1:0;
         const bool details=(route==SE_ROUTE_VOLT1_DETAILS ||
             route==SE_ROUTE_VOLT2_DETAILS || route==SE_ROUTE_VOLT3_DETAILS);
+        if(personal && strcmp(personal->voltronic_protocol[slot],"modbus")==0)return false;
         out->host=personal ? configured_reader_host(1,slot,personal->voltronic_ip[slot],out->discovered_host):"";
         out->access_code=personal ? personal->voltronic_code[slot]:"";
         const bool info=(route==SE_ROUTE_VOLT1_INFO ||
@@ -902,6 +910,123 @@ static esp_err_t relay_parameter_control(httpd_req_t *req) {
     return httpd_resp_send(req,response,count);
 }
 
+
+/* FC03-only bridge to USB-allowlisted direct Modbus IP. Never forwards raw
+ * arbitrary TCP or permits FC05/06/16 write functions. Port may be changed
+ * from the authenticated Android app, but the destination IP is not editable
+ * over VPN. This is Modbus TCP MBAP, NOT Solarman logger RTU encapsulation.
+ */
+static bool recv_exact(int fd,uint8_t *out,size_t count){
+    size_t done=0;
+    while(done<count){
+        ssize_t n=recv(fd,out+done,count-done,0);
+        if(n<=0)return false;
+        done+=(size_t)n;
+    }
+    return true;
+}
+static bool send_exact(int fd,const uint8_t *data,size_t count){
+    size_t done=0;
+    while(done<count){
+        ssize_t n=send(fd,data+done,count-done,0);
+        if(n<=0)return false;
+        done+=(size_t)n;
+    }
+    return true;
+}
+static esp_err_t inverter_modbus_read(httpd_req_t *req){
+    if(!request_is_private_vpn(req))
+        return deny(req,"403 Forbidden","{\"error\":\"vpn_only\"}");
+    if(!authorized(req))
+        return deny(req,"401 Unauthorized","{\"error\":\"invalid_gateway_token\"}");
+    int slot=0;
+    if(strcmp(req->uri,"/api/v1/inverters/1/modbus")==0)slot=1;
+    else if(strcmp(req->uri,"/api/v1/inverters/2/modbus")==0)slot=2;
+    else if(strcmp(req->uri,"/api/v1/inverters/3/modbus")==0)slot=3;
+    if(!slot || !personal ||
+       strcmp(personal->voltronic_protocol[slot-1],"modbus")!=0 ||
+       !se_is_private_ipv4(personal->voltronic_ip[slot-1]))
+        return deny(req,"503 Service Unavailable","{\"error\":\"modbus_not_configured\"}");
+    char query[128]={0},reg_s[12]={0},qty_s[12]={0},unit_s[12]={0};
+    if(httpd_req_get_url_query_str(req,query,sizeof query)!=ESP_OK ||
+       httpd_query_key_value(query,"address",reg_s,sizeof reg_s)!=ESP_OK ||
+       httpd_query_key_value(query,"count",qty_s,sizeof qty_s)!=ESP_OK ||
+       httpd_query_key_value(query,"unit",unit_s,sizeof unit_s)!=ESP_OK)
+        return deny(req,"400 Bad Request","{\"error\":\"missing_modbus_fields\"}");
+    char *end=NULL;
+    unsigned long address=strtoul(reg_s,&end,10);
+    if(!reg_s[0] || *end) return deny(req,"400 Bad Request","{\"error\":\"invalid_address\"}");
+    unsigned long count=strtoul(qty_s,&end,10);
+    if(!qty_s[0] || *end) return deny(req,"400 Bad Request","{\"error\":\"invalid_count\"}");
+    unsigned long unit=strtoul(unit_s,&end,10);
+    if(!unit_s[0] || *end || address>65535 || count<1 || count>125 ||
+       address+count>65536 || unit>247)
+        return deny(req,"400 Bad Request","{\"error\":\"invalid_modbus_range\"}");
+    struct sockaddr_in peer={0};
+    peer.sin_family=AF_INET;
+    peer.sin_port=htons((uint16_t)inverter_relay_port(slot));
+    if(inet_pton(AF_INET,personal->voltronic_ip[slot-1],&peer.sin_addr)!=1)
+        return deny(req,"503 Service Unavailable","{\"error\":\"invalid_target\"}");
+    int fd=socket(AF_INET,SOCK_STREAM,IPPROTO_TCP);
+    if(fd<0)return deny(req,"502 Bad Gateway","{\"error\":\"socket_failed\"}");
+    int flags=fcntl(fd,F_GETFL,0);
+    if(flags<0 || fcntl(fd,F_SETFL,flags|O_NONBLOCK)<0){
+        close(fd);return deny(req,"502 Bad Gateway","{\"error\":\"socket_failed\"}");
+    }
+    int connected=connect(fd,(struct sockaddr*)&peer,sizeof peer);
+    if(connected<0 && errno==EINPROGRESS){
+        fd_set ready;FD_ZERO(&ready);FD_SET(fd,&ready);
+        struct timeval tv={.tv_sec=3,.tv_usec=0};
+        connected=select(fd+1,NULL,&ready,NULL,&tv);
+        int error=0;socklen_t size=sizeof error;
+        if(connected<=0 || getsockopt(fd,SOL_SOCKET,SO_ERROR,&error,&size)!=0 ||
+           error!=0)connected=-1;
+        else connected=0;
+    }
+    if(connected!=0){
+        close(fd);return deny(req,"502 Bad Gateway","{\"error\":\"modbus_unreachable\"}");
+    }
+    fcntl(fd,F_SETFL,flags);
+    struct timeval tv={.tv_sec=3,.tv_usec=0};
+    setsockopt(fd,SOL_SOCKET,SO_RCVTIMEO,&tv,sizeof tv);
+    setsockopt(fd,SOL_SOCKET,SO_SNDTIMEO,&tv,sizeof tv);
+    const uint8_t transaction[12]={
+        0x5e,(uint8_t)slot,0,0,0,6,(uint8_t)unit,3,
+        (uint8_t)(address>>8),(uint8_t)address,
+        (uint8_t)(count>>8),(uint8_t)count};
+    uint8_t header[9]={0},values[250]={0};
+    bool good=send_exact(fd,transaction,sizeof transaction) &&
+        recv_exact(fd,header,sizeof header);
+    if(good){
+        good=header[0]==0x5e && header[1]==slot &&
+            header[2]==0 && header[3]==0 &&
+            header[6]==unit && header[7]==3 &&
+            header[8]==2*count &&
+            ((unsigned)header[4]*256+header[5])==3+2*count;
+        if(good)good=recv_exact(fd,values,2*count);
+    }
+    close(fd);
+    if(!good)return deny(req,"502 Bad Gateway","{\"error\":\"modbus_fc03_failed\"}");
+    /* Response contains only 16-bit registers, never network addresses. */
+    cJSON *root=cJSON_CreateObject();
+    cJSON *words=cJSON_AddArrayToObject(root,"words");
+    if(!root || !words){cJSON_Delete(root);
+        return deny(req,"500 Internal Server Error","{\"error\":\"memory\"}");}
+    cJSON_AddStringToObject(root,"product","smart-energy-modbus-fc03-read-only");
+    cJSON_AddNumberToObject(root,"address",address);
+    cJSON_AddNumberToObject(root,"count",count);
+    cJSON_AddNumberToObject(root,"unit",unit);
+    for(unsigned i=0;i<count;i++)
+        cJSON_AddItemToArray(words,cJSON_CreateNumber(((unsigned)values[2*i]<<8)|values[2*i+1]));
+    char *body=cJSON_PrintUnformatted(root);cJSON_Delete(root);
+    if(!body)return deny(req,"500 Internal Server Error","{\"error\":\"memory\"}");
+    httpd_resp_set_type(req,"application/json");
+    httpd_resp_set_hdr(req,"Cache-Control","no-store");
+    esp_err_t result=httpd_resp_sendstr(req,body);
+    free(body);
+    return result;
+}
+
 static void start_private_http(void) {
     httpd_config_t cfg = HTTPD_DEFAULT_CONFIG();
     cfg.server_port = GATEWAY_PORT;
@@ -919,6 +1044,9 @@ static void start_private_http(void) {
         {.uri="/api/v1/discovery",.method=HTTP_GET,.handler=discovery_inventory},
         {.uri="/api/v1/inverters/ports",.method=HTTP_GET,.handler=inverter_port_management},
         {.uri="/api/v1/inverters/ports",.method=HTTP_POST,.handler=inverter_port_management},
+        {.uri="/api/v1/inverters/1/modbus",.method=HTTP_GET,.handler=inverter_modbus_read},
+        {.uri="/api/v1/inverters/2/modbus",.method=HTTP_GET,.handler=inverter_modbus_read},
+        {.uri="/api/v1/inverters/3/modbus",.method=HTTP_GET,.handler=inverter_modbus_read},
         {.uri="/api/v1/jk/1/info",.method=HTTP_GET,.handler=relay_read},
         {.uri="/api/v1/jk/2/info",.method=HTTP_GET,.handler=relay_read},
         {.uri="/api/v1/jk/3/info",.method=HTTP_GET,.handler=relay_read},
