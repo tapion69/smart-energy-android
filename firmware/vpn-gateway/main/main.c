@@ -689,6 +689,50 @@ static bool safe_write_payload(se_write_kind_t kind,const char *body) {
             isfinite(old->valuedouble) && isfinite(value->valuedouble) &&
             cJSON_IsTrue(confirmed);
     }
+    else if(kind==SE_WRITE_DEYE_CONFIG) {
+        /* Configure ONLY Deye-dongle settings inside the ESP32 reader.
+           No router IP/hostname, Tailscale, VPN token or NVS changes. */
+        const cJSON *ip=cJSON_GetObjectItemCaseSensitive(json,"dongle_ip");
+        const cJSON *port=cJSON_GetObjectItemCaseSensitive(json,"dongle_port");
+        const cJSON *unit=cJSON_GetObjectItemCaseSensitive(json,"modbus_id");
+        const cJSON *sn=cJSON_GetObjectItemCaseSensitive(json,"dongle_serial");
+        const cJSON *inv=cJSON_GetObjectItemCaseSensitive(json,"inverter_serial");
+        const cJSON *ok=cJSON_GetObjectItemCaseSensitive(json,"confirmed");
+        allowed=cJSON_IsString(ip)&&se_is_private_ipv4(ip->valuestring)&&
+            cJSON_IsNumber(port)&&port->valuedouble==port->valueint &&
+            port->valueint>=1&&port->valueint<=65535 &&
+            cJSON_IsNumber(unit)&&unit->valuedouble==unit->valueint &&
+            unit->valueint>=0&&unit->valueint<=247 &&
+            cJSON_IsString(sn)&&cJSON_IsString(inv)&&cJSON_IsTrue(ok);
+        if(allowed){
+            const char *serials[]={sn->valuestring,inv->valuestring};
+            for(int k=0;k<2;k++){
+                size_t n=strnlen(serials[k],33);
+                if(n==0||n>32){allowed=false;break;}
+                for(size_t i=0;i<n;i++)
+                    if(serials[k][i]<'0'||serials[k][i]>'9'){allowed=false;break;}
+            }
+        }
+    }else if(kind==SE_WRITE_DEYE_PARAM) {
+        /* New Modbus semantic names can be added to the ESP32 reader WITHOUT
+           changing the VPN. The ESP32 enforces the actual register allowlist. */
+        const cJSON *key=cJSON_GetObjectItemCaseSensitive(json,"parameter");
+        const cJSON *old=cJSON_GetObjectItemCaseSensitive(json,"old");
+        const cJSON *value=cJSON_GetObjectItemCaseSensitive(json,"value");
+        const cJSON *confirmed=cJSON_GetObjectItemCaseSensitive(json,"confirmed");
+        const cJSON *readback=cJSON_GetObjectItemCaseSensitive(json,"readback_required");
+        allowed=cJSON_IsString(key)&&se_write_deye_key(key->valuestring)&&
+            cJSON_IsNumber(old)&&cJSON_IsNumber(value)&&
+            isfinite(old->valuedouble)&&isfinite(value->valuedouble)&&
+            cJSON_IsTrue(confirmed)&&cJSON_IsTrue(readback);
+    }else if(kind==SE_WRITE_DEYE_OTA_TRIGGER){
+        /* Trigger only. Reader downloads a trusted, SHA-checked firmware via
+           home Wi-Fi. No binary/URL is ever forwarded through this VPN. */
+        const cJSON *action=cJSON_GetObjectItemCaseSensitive(json,"action");
+        const cJSON *confirmed=cJSON_GetObjectItemCaseSensitive(json,"confirmed");
+        allowed=cJSON_IsTrue(confirmed)&&cJSON_IsString(action)&&
+            strcmp(action->valuestring,"check_and_install")==0;
+    }
     cJSON_Delete(json);
     return allowed;
 }
@@ -743,9 +787,13 @@ static esp_err_t relay_parameter_control(httpd_req_t *req) {
         if(!safe_write_payload(route.kind,body))
             return deny(req,"400 Bad Request","{\"error\":\"not_an_approved_parameter_request\"}");
     }
-    const int stamp_idx=(route.kind==SE_WRITE_VOLTRONIC_PARAM?3:0)+route.slot-1;
-    const bool committed=route.kind==SE_WRITE_JK_COMMIT ||
-                         route.kind==SE_WRITE_VOLTRONIC_PARAM;
+    const bool inverter_write=route.kind==SE_WRITE_VOLTRONIC_PARAM ||
+        route.kind==SE_WRITE_DEYE_CONFIG ||
+        route.kind==SE_WRITE_DEYE_PARAM ||
+        route.kind==SE_WRITE_DEYE_OTA_TRIGGER;
+    /* Voltronic and Deye share the physical slot and write cooldown. */
+    const int stamp_idx=(inverter_write?3:0)+route.slot-1;
+    const bool committed=route.kind==SE_WRITE_JK_COMMIT || inverter_write;
     const int64_t now=esp_timer_get_time();
     if(committed && last_remote_commit_us[stamp_idx] &&
        now-last_remote_commit_us[stamp_idx]<15000000LL)
@@ -753,7 +801,12 @@ static esp_err_t relay_parameter_control(httpd_req_t *req) {
 
     lan_target_t target={0};
     se_route_t selection;
-    if(route.kind==SE_WRITE_VOLTRONIC_PARAM)
+    if(route.kind==SE_WRITE_DEYE_CONFIG ||
+       route.kind==SE_WRITE_DEYE_PARAM ||
+       route.kind==SE_WRITE_DEYE_OTA_TRIGGER)
+        selection=route.slot==1?SE_ROUTE_DEYE1_TELEMETRY:
+                  route.slot==2?SE_ROUTE_DEYE2_TELEMETRY:SE_ROUTE_DEYE3_TELEMETRY;
+    else if(route.kind==SE_WRITE_VOLTRONIC_PARAM)
         selection=route.slot==1?SE_ROUTE_VOLT_STATUS:
                   route.slot==2?SE_ROUTE_VOLT2_TELEMETRY:SE_ROUTE_VOLT3_TELEMETRY;
     else
@@ -773,7 +826,8 @@ static esp_err_t relay_parameter_control(httpd_req_t *req) {
     esp_http_client_config_t cfg={
         .host=target.host,.port=target.port,.path=target.path,
         .transport_type=HTTP_TRANSPORT_OVER_TCP,
-        .timeout_ms=route.kind==SE_WRITE_VOLTRONIC_PARAM?23000:10000,
+        .timeout_ms=(route.kind==SE_WRITE_VOLTRONIC_PARAM ||
+             route.kind==SE_WRITE_DEYE_PARAM)?23000:10000,
         .buffer_size=1024,.buffer_size_tx=1024
     };
     esp_http_client_handle_t client=esp_http_client_init(&cfg);
@@ -781,7 +835,7 @@ static esp_err_t relay_parameter_control(httpd_req_t *req) {
         return deny(req,"502 Bad Gateway","{\"error\":\"upstream_init_failed\"}");
     esp_http_client_set_method(client,post?HTTP_METHOD_POST:HTTP_METHOD_GET);
     esp_http_client_set_header(client,"X-Setup-Code",target.access_code);
-    if(route.kind==SE_WRITE_VOLTRONIC_PARAM)
+    if(inverter_write)
         esp_http_client_set_header(client,"X-Write-Confirmed","yes");
     if(post)esp_http_client_set_header(client,"Content-Type","application/json");
     // Count an attempted write BEFORE issuing it: a lost response cannot
@@ -892,6 +946,15 @@ static void start_private_http(void) {
         {.uri="/api/v1/jk/3/write",.method=HTTP_POST,.handler=relay_parameter_control},
         {.uri="/api/v1/jk/3/write-status",.method=HTTP_GET,.handler=relay_parameter_control},
         {.uri="/api/v1/voltronic/3/parameters/change",.method=HTTP_POST,.handler=relay_parameter_control},
+        {.uri="/api/v1/deye/1/device-config",.method=HTTP_POST,.handler=relay_parameter_control},
+        {.uri="/api/v1/deye/1/parameters/change",.method=HTTP_POST,.handler=relay_parameter_control},
+        {.uri="/api/v1/deye/1/ota/request",.method=HTTP_POST,.handler=relay_parameter_control},
+        {.uri="/api/v1/deye/2/device-config",.method=HTTP_POST,.handler=relay_parameter_control},
+        {.uri="/api/v1/deye/2/parameters/change",.method=HTTP_POST,.handler=relay_parameter_control},
+        {.uri="/api/v1/deye/2/ota/request",.method=HTTP_POST,.handler=relay_parameter_control},
+        {.uri="/api/v1/deye/3/device-config",.method=HTTP_POST,.handler=relay_parameter_control},
+        {.uri="/api/v1/deye/3/parameters/change",.method=HTTP_POST,.handler=relay_parameter_control},
+        {.uri="/api/v1/deye/3/ota/request",.method=HTTP_POST,.handler=relay_parameter_control},
     };
     for (size_t i=0; i<sizeof(uris)/sizeof(uris[0]); ++i)
         ESP_ERROR_CHECK(httpd_register_uri_handler(http_server, &uris[i]));
