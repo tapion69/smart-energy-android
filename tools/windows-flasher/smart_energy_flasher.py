@@ -58,27 +58,40 @@ def validate_vpn_config(values: dict[str, str]) -> None:
     if not 20 <= len(values["gateway_token"]) <= 128:
         raise ValueError("Token VPN : utilise 20 à 128 caractères.")
     count=0
+    seen={"jk":set(),"volt":set()}
     for index in range(1, 4):
-        host = values[f"jk{index}_ip"].strip()
+        host = values.get(f"jk{index}_ip","").strip()
+        name = values.get(f"jk{index}_name","").strip()
         code = values[f"jk{index}_code"]
-        if bool(host) != bool(code):
-            raise ValueError(f"ESP JK {index} : renseigne à la fois l'IP et le code.")
+        if bool(code)!=(bool(host) or bool(name)):
+            raise ValueError(f"ESP JK {index} : indique le nom et le code ou l'IP et le code.")
         if host and not valid_lan_ip(host):
-            raise ValueError(f"ESP JK {index} : l'adresse doit être une IPv4 privée du LAN.")
-        if code and not 8 <= len(code) <= 32:
-            raise ValueError(f"ESP JK {index} : code personnel invalide (8–32).")
-        if host:count+=1
-    for index in range(1,4):
-        host=values[f"volt{index}_ip"].strip()
-        code=values[f"volt{index}_code"]
-        if bool(host)!=bool(code):
-            raise ValueError(f"Voltronic INV{index} : IP et code obligatoires ensemble.")
-        if host and not valid_lan_ip(host):
-            raise ValueError(f"Voltronic INV{index} : IPv4 privée du LAN obligatoire.")
+            raise ValueError(f"ESP JK {index} : IP invalide.")
+        if name and (len(name.encode("utf-8"))>32 or any(ord(c)<32 or c=="|" for c in name)):
+            raise ValueError(f"ESP JK {index} : nom invalide.")
+        if name and name in seen["jk"]:
+            raise ValueError("Deux ESP JK ont le même nom.")
+        if name:seen["jk"].add(name)
         if code and not 8<=len(code)<=32:
-            raise ValueError(f"Voltronic INV{index} : code ESP32-S3 invalide (8–32).")
-        if host:count+=1
-    if count<1:raise ValueError("Configure au moins un ESP JK ou Voltronic.")
+            raise ValueError(f"ESP JK {index} : code personnel invalide (8–32).")
+        if code:count+=1
+    for index in range(1,4):
+        host=values.get(f"volt{index}_ip","").strip()
+        name=values.get(f"volt{index}_name","").strip()
+        code=values[f"volt{index}_code"]
+        if bool(code)!=(bool(host) or bool(name)):
+            raise ValueError(f"Onduleur {index} : indique le nom et le code ou l'IP et le code.")
+        if host and not valid_lan_ip(host):
+            raise ValueError(f"Onduleur {index} : IP invalide.")
+        if name and (len(name.encode("utf-8"))>32 or any(ord(c)<32 or c=="|" for c in name)):
+            raise ValueError(f"Onduleur {index} : nom invalide.")
+        if name and name in seen["volt"]:
+            raise ValueError("Deux onduleurs ont le même nom.")
+        if name:seen["volt"].add(name)
+        if code and not 8<=len(code)<=32:
+            raise ValueError(f"Onduleur {index} : code invalide (8–32).")
+        if code:count+=1
+    if count<1:raise ValueError("Configure au moins un ESP JK ou onduleur.")
     # Reject syntax injection into sdkconfig / subprocess commands.
     for name, val in values.items():
         if any(c in val for c in ("\r", "\n", "\x00")):
@@ -237,7 +250,7 @@ class ScrollableTab(ttk.Frame):
 class Flasher(tk.Tk):
     def __init__(self) -> None:
         super().__init__()
-        self.title("Smart Energy — JK USB sécurisé / VPN / Voltronic ESP32-S3")
+        self.title("Smart Energy — Batteries JK / VPN / Onduleurs")
         self.geometry("960x780")
         self.minsize(740, 550)
         self.events: queue.Queue[tuple[str, str]] = queue.Queue()
@@ -247,12 +260,14 @@ class Flasher(tk.Tk):
         self.progress_percent = 0
         self.port = tk.StringVar()
         self.jk_image = tk.StringVar()
+        self.jk_fields: dict[str, tk.StringVar] = {}
         self.jk_mode = tk.StringVar(value="update")
         self.vpn_image = tk.StringVar()
         self.vpn_mode = tk.StringVar(value="update")
         self.vpn_chip = tk.StringVar(value="esp32")  # Explicit chip; never guess from COM port.
         self.volt_mode = tk.StringVar(value="update")
         self.volt_image = tk.StringVar()
+        self.inverter_type = tk.StringVar(value="voltronic")
         self.volt_fields: dict[str, tk.StringVar] = {}
         self.fields: dict[str, tk.StringVar] = {}
         self._build()
@@ -285,7 +300,7 @@ class Flasher(tk.Tk):
         outer = ttk.Frame(self, padding=12)
         outer.pack(fill="both", expand=True)
         ttk.Label(
-            outer, text="JK classique · VPN classique/S3 · Voltronic S3 (lecture seule)",
+            outer, text="Batteries JK · VPN Tailscale · Onduleurs Voltronic et futurs Deye",
             font=("Segoe UI", 12, "bold")
         ).pack(anchor="w", pady=(0, 8))
         connection = ttk.Frame(outer)
@@ -317,7 +332,7 @@ class Flasher(tk.Tk):
         jk, vpn, voltronic = self._scroll_tabs
         tabs.add(jk, text="ESP32 JK")
         tabs.add(vpn, text="ESP32 VPN")
-        tabs.add(voltronic, text="Voltronic S3")
+        tabs.add(voltronic, text="Onduleurs")
         self._build_jk(jk.content)
         self._build_vpn(vpn.content)
         self._build_voltronic(voltronic.content)
