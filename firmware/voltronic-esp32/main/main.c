@@ -15,6 +15,7 @@
 #include <netinet/in.h>
 #include "esp_mac.h"
 #include "mdns.h"
+#include "mbedtls/md.h"
 #include "esp_sntp.h"
 #include "esp_system.h"
 #include "esp_log.h"
@@ -1461,6 +1462,30 @@ static void discovery_broadcast_task(void *arg){
             cJSON_AddStringToObject(j,"name",cfg.display_name);
             cJSON_AddStringToObject(j,"id",id);
             cJSON_AddNumberToObject(j,"port",VT_HTTP_PORT);
+            esp_netif_t *ni=esp_netif_get_handle_from_ifkey("WIFI_STA_DEF");
+            esp_netif_ip_info_t ip={0};
+            char local_ip[16]={0};
+            if(ni && esp_netif_get_ip_info(ni,&ip)==ESP_OK &&
+               inet_ntop(AF_INET,&ip.ip,local_ip,sizeof(local_ip))){
+                cJSON_AddStringToObject(j,"ip",local_ip);
+                char canonical[256]={0};
+                int length=snprintf(canonical,sizeof(canonical),
+                    "smart-energy-discovery-v1|voltronic|%s|%s|%u|%s",
+                    cfg.display_name,id,VT_HTTP_PORT,local_ip);
+                unsigned char digest[32]={0};
+                const mbedtls_md_info_t *sha=mbedtls_md_info_from_type(MBEDTLS_MD_SHA256);
+                if(sha && length>0 && length<(int)sizeof(canonical) &&
+                   mbedtls_md_hmac(sha,(const unsigned char*)cfg.read_code,
+                       strlen(cfg.read_code),(const unsigned char*)canonical,
+                       (size_t)length,digest)==0){
+                    const char hex[]="0123456789abcdef";char tag[65]={0};
+                    for(int k=0;k<32;k++){
+                        tag[k*2]=hex[digest[k]>>4];
+                        tag[k*2+1]=hex[digest[k]&15];
+                    }
+                    cJSON_AddStringToObject(j,"auth",tag);
+                }
+            }
             char *payload=cJSON_PrintUnformatted(j);
             if(payload){sendto(fd,payload,strlen(payload),0,
                 (struct sockaddr*)&dst,sizeof(dst));free(payload);}
