@@ -848,6 +848,8 @@ void app_main(void) {
     char gateway_name[40] = {0};
     snprintf(gateway_name, sizeof(gateway_name), "smartenergy-vpn-%02x%02x%02x",
              mac[3], mac[4], mac[5]);
+    if(personal && personal->gateway_name[0])
+        snprintf(gateway_name,sizeof(gateway_name),"%s",personal->gateway_name);
 
     tailtiny_config_t cfg = {
         .auth_key = personal->tailscale_key,
