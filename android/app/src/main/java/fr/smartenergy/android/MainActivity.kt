@@ -2276,7 +2276,7 @@ class MainActivity : Activity() {
                     connectHomeLan() // Existing identity + authenticated BMS check.
                 }else{
                     val slot=(1..3).firstOrNull {
-                        !prefs.getBoolean("inverter_"+it+"_validated",false)
+                        !voltronicFleet.configured(it)
                     }
                     if(slot==null){
                         state("Trois onduleurs sont configurés. Retire un ancien appareil avant d'en ajouter.")
@@ -2290,13 +2290,26 @@ class MainActivity : Activity() {
                                     reader.ip,secret,reader.port,wifi)
                                 if(info.optString("product")!="smart-energy-voltronic-s3")
                                     throw IllegalStateException("Lecteur non reconnu")
-                                saveAuxiliaryCode("premium_voltronic_"+slot+"_code_cipher",secret)
-                                prefs.edit()
-                                    .putString("inverter_"+slot+"_ip",reader.ip)
-                                    .putString("inverter_"+slot+"_name",reader.name)
-                                    .putInt("inverter_"+slot+"_port",reader.port)
-                                    .putBoolean("inverter_"+slot+"_validated",true)
-                                    .apply()
+                                if(slot==1) {
+                                    // INV1 keeps the historical profile keys;
+                                    // all existing charts, entities and settings rely on them.
+                                    saveAuxiliaryCode("premium_voltronic_code_cipher",secret)
+                                    prefs.edit()
+                                        .putString("inverter_probe_ip",reader.ip)
+                                        .putString("inverter_probe_type","voltronic")
+                                        .putInt("inverter_probe_port",reader.port)
+                                        .putBoolean("inverter_probe_validated",true)
+                                        .putString("inverter_1_name",reader.name)
+                                        .apply()
+                                }else{
+                                    saveAuxiliaryCode("premium_voltronic_"+slot+"_code_cipher",secret)
+                                    prefs.edit()
+                                        .putString("inverter_"+slot+"_ip",reader.ip)
+                                        .putString("inverter_"+slot+"_name",reader.name)
+                                        .putInt("inverter_"+slot+"_port",reader.port)
+                                        .putBoolean("inverter_"+slot+"_validated",true)
+                                        .apply()
+                                }
                                 "Onduleur "+reader.name+" associé avec succès (slot "+slot+")."
                             }catch(ex:Exception){
                                 "Association refusée : "+(ex.message ?: "authentification ou réseau")
