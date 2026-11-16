@@ -15,6 +15,7 @@
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
+#include <sys/time.h>
 
 #include "sdkconfig.h"
 #include "esp_log.h"
@@ -51,6 +52,11 @@ static const int WIFI_READY = BIT0;
 static volatile bool wifi_ready = false;
 static volatile uint16_t wifi_last_disconnect_reason = 0;
 static volatile unsigned wifi_retry_count = 0;
+/* Verified local reader bindings. Only a known label + code may create one. */
+static char discovered_ip[2][3][16];
+static char discovered_id[2][3][48];
+static bool discovery_ambiguous[2][3];
+static portMUX_TYPE discovery_lock=portMUX_INITIALIZER_UNLOCKED;
 
 /* Reasons are intentionally generic: log no passwords, SSIDs, tokens, MACs,
  * or captured 802.11 frames. Only standard ESP-IDF Wi-Fi reason codes. */
@@ -231,11 +237,145 @@ static esp_err_t health_handler(httpd_req_t *req) {
     return httpd_resp_sendstr(req,body);
 }
 
+/* Private LAN auto-discovery. Beacons NEVER contain credentials.
+ * IPs from an unauthenticated broadcast cannot be used until an authenticated
+ * reader endpoint confirms BOTH the product family and stable hardware ID. */
+typedef struct {char body[1024];size_t length;} se_discovery_proof_t;
+static esp_err_t discovery_proof_data(esp_http_client_event_t *ev){
+    if(ev->event_id==HTTP_EVENT_ON_DATA && ev->user_data && ev->data_len>0){
+        se_discovery_proof_t *r=ev->user_data;
+        if(r->length+(size_t)ev->data_len>=sizeof(r->body))return ESP_FAIL;
+        memcpy(r->body+r->length,ev->data,(size_t)ev->data_len);
+        r->length+=(size_t)ev->data_len;r->body[r->length]=0;
+    }
+    return ESP_OK;
+}
+static bool discovery_prove(const char *host,int port,int family,
+                            const char *code,const char *claimed_id){
+    se_discovery_proof_t answer={0};
+    esp_http_client_config_t opts={
+      .host=host,.port=port,
+      .path=family==0?"/api/v1/discovery/proof":"/api/v1/info",
+      .transport_type=HTTP_TRANSPORT_OVER_TCP,
+      .event_handler=discovery_proof_data,.user_data=&answer,
+      .timeout_ms=2500,.disable_auto_redirect=true,.buffer_size=1024
+    };
+    esp_http_client_handle_t cl=esp_http_client_init(&opts);
+    if(!cl)return false;
+    esp_http_client_set_method(cl,HTTP_METHOD_GET);
+    esp_http_client_set_header(cl,"X-Setup-Code",code);
+    esp_err_t err=esp_http_client_perform(cl);
+    int status=esp_http_client_get_status_code(cl);
+    esp_http_client_cleanup(cl);
+    if(err!=ESP_OK || status!=200 || !answer.length)return false;
+    cJSON *j=cJSON_Parse(answer.body);
+    const cJSON *id=j?cJSON_GetObjectItemCaseSensitive(j,"device_id"):NULL;
+    const cJSON *p=j?cJSON_GetObjectItemCaseSensitive(j,"product"):NULL;
+    bool good=cJSON_IsString(id)&&id->valuestring &&
+              cJSON_IsString(p)&&p->valuestring &&
+              strcmp(id->valuestring,claimed_id)==0 &&
+              strcmp(p->valuestring,family==0?"smart-jk-esp32":
+                                          "smart-energy-voltronic-s3")==0;
+    cJSON_Delete(j);
+    return good;
+}
+static void discovery_listener(void *unused){
+    (void)unused;
+    int fd=socket(AF_INET,SOCK_DGRAM,IPPROTO_UDP);
+    if(fd<0){vTaskDelete(NULL);return;}
+    struct sockaddr_in bind_addr={0};
+    bind_addr.sin_family=AF_INET;bind_addr.sin_port=htons(18769);
+    bind_addr.sin_addr.s_addr=htonl(INADDR_ANY);
+    struct timeval tv={.tv_sec=3,.tv_usec=0};
+    setsockopt(fd,SOL_SOCKET,SO_RCVTIMEO,&tv,sizeof(tv));
+    if(bind(fd,(struct sockaddr*)&bind_addr,sizeof(bind_addr))!=0){
+        close(fd);vTaskDelete(NULL);return;
+    }
+    for(;;){
+        char buffer[320]={0};
+        struct sockaddr_in peer={0};socklen_t peerlen=sizeof(peer);
+        int n=recvfrom(fd,buffer,sizeof(buffer)-1,0,
+                       (struct sockaddr*)&peer,&peerlen);
+        if(n<=0)continue;
+        buffer[n]=0;
+        char sender[16]={0};
+        if(!inet_ntop(AF_INET,&peer.sin_addr,sender,sizeof(sender)) ||
+           !se_is_private_ipv4(sender))continue;
+        esp_netif_t *ni=esp_netif_get_handle_from_ifkey("WIFI_STA_DEF");
+        esp_netif_ip_info_t ip={0};
+        if(!ni || esp_netif_get_ip_info(ni,&ip)!=ESP_OK ||
+           ((peer.sin_addr.s_addr&ip.netmask.addr)!=(ip.ip.addr&ip.netmask.addr)))
+          continue; /* never trust announcements outside the local subnet */
+        cJSON *j=cJSON_Parse(buffer);
+        const cJSON *proto=j?cJSON_GetObjectItemCaseSensitive(j,"proto"):NULL;
+        const cJSON *familyj=j?cJSON_GetObjectItemCaseSensitive(j,"family"):NULL;
+        const cJSON *namej=j?cJSON_GetObjectItemCaseSensitive(j,"name"):NULL;
+        const cJSON *idj=j?cJSON_GetObjectItemCaseSensitive(j,"id"):NULL;
+        const cJSON *portj=j?cJSON_GetObjectItemCaseSensitive(j,"port"):NULL;
+        if(!cJSON_IsString(proto)||strcmp(proto->valuestring,"smart-energy-discovery-v1") ||
+           !cJSON_IsString(familyj)||!cJSON_IsString(namej)||!cJSON_IsString(idj)||
+           !cJSON_IsNumber(portj)){
+            cJSON_Delete(j);continue;
+        }
+        int family=strcmp(familyj->valuestring,"jk")==0?0:
+                   strcmp(familyj->valuestring,"voltronic")==0?1:-1;
+        int port=portj->valueint;
+        const char *name=namej->valuestring,*id=idj->valuestring;
+        bool valid=family>=0 && port==(family==0?80:18081) &&
+          strlen(name)>0 && strlen(name)<=32 &&
+          strlen(id)>5 && strlen(id)<48;
+        if(!valid){cJSON_Delete(j);continue;}
+        // Copy identity before freeing the untrusted JSON.
+        char label[33],identity[48];
+        snprintf(label,sizeof(label),"%s",name);
+        snprintf(identity,sizeof(identity),"%s",id);
+        cJSON_Delete(j);
+        if(!personal)continue;
+        for(int slot=0;slot<3;slot++){
+            const char *expected=family==0?personal->jk_name[slot]:
+                                           personal->voltronic_name[slot];
+            const char *fixed=family==0?personal->jk_ip[slot]:
+                                        personal->voltronic_ip[slot];
+            const char *secret=family==0?personal->jk_code[slot]:
+                                         personal->voltronic_code[slot];
+            if(!expected[0] || strcmp(expected,label)!=0 ||
+               strlen(secret)<8 || se_is_private_ipv4(fixed))continue;
+            bool skip=false;
+            portENTER_CRITICAL(&discovery_lock);
+            skip=discovery_ambiguous[family][slot] ||
+                (strcmp(discovered_ip[family][slot],sender)==0 &&
+                 strcmp(discovered_id[family][slot],identity)==0);
+            portEXIT_CRITICAL(&discovery_lock);
+            if(skip)continue;
+            if(!discovery_prove(sender,port,family,secret,identity))continue;
+            portENTER_CRITICAL(&discovery_lock);
+            if(discovered_id[family][slot][0] &&
+               strcmp(discovered_id[family][slot],identity)!=0){
+                discovery_ambiguous[family][slot]=true;
+                discovered_ip[family][slot][0]=0;
+            }else{
+                snprintf(discovered_ip[family][slot],16,"%s",sender);
+                snprintf(discovered_id[family][slot],48,"%s",identity);
+            }
+            portEXIT_CRITICAL(&discovery_lock);
+        }
+    }
+}
+static const char *configured_reader_host(int family,int slot,
+                                           const char *fixed,char copy[16]){
+    if(se_is_private_ipv4(fixed))return fixed; // preserve all legacy targets
+    portENTER_CRITICAL(&discovery_lock);
+    if(!discovery_ambiguous[family][slot])
+        snprintf(copy,16,"%s",discovered_ip[family][slot]);
+    portEXIT_CRITICAL(&discovery_lock);
+    return copy;
+}
 typedef struct {
     const char *host;
     const char *path;
     const char *access_code;
     int port;
+    char discovered_host[16];
 } lan_target_t;
 
 static bool get_target(se_route_t route, lan_target_t *out) {
@@ -250,7 +390,7 @@ static bool get_target(se_route_t route, lan_target_t *out) {
         const bool third = route == SE_ROUTE_JK3_TELEMETRY ||
                            route == SE_ROUTE_JK3_DETAILS || route==SE_ROUTE_JK3_INFO;
         const int slot = third ? 2 : second ? 1 : 0;
-        out->host = personal ? personal->jk_ip[slot] : "";
+        out->host = personal ? configured_reader_host(0,slot,personal->jk_ip[slot],out->discovered_host) : "";
         out->access_code = personal ? personal->jk_code[slot] : "";
         const bool details = route == SE_ROUTE_JK_DETAILS ||
                              route == SE_ROUTE_JK2_DETAILS ||
@@ -275,7 +415,7 @@ static bool get_target(se_route_t route, lan_target_t *out) {
              route==SE_ROUTE_VOLT2_DETAILS || route==SE_ROUTE_VOLT2_INFO)?1:0;
         const bool details=(route==SE_ROUTE_VOLT1_DETAILS ||
             route==SE_ROUTE_VOLT2_DETAILS || route==SE_ROUTE_VOLT3_DETAILS);
-        out->host=personal ? personal->voltronic_ip[slot]:"";
+        out->host=personal ? configured_reader_host(1,slot,personal->voltronic_ip[slot],out->discovered_host):"";
         out->access_code=personal ? personal->voltronic_code[slot]:"";
         const bool info=(route==SE_ROUTE_VOLT1_INFO ||
             route==SE_ROUTE_VOLT2_INFO || route==SE_ROUTE_VOLT3_INFO);
@@ -667,6 +807,7 @@ void app_main(void) {
                  wifi_failure_hint(wifi_last_disconnect_reason), wifi_retry_count);
         return;
     }
+    xTaskCreate(discovery_listener,"se-lan-discovery",8192,NULL,3,NULL);
     uint8_t mac[6] = {0};
     ESP_ERROR_CHECK(esp_read_mac(mac, ESP_MAC_WIFI_STA));
     char gateway_name[40] = {0};
