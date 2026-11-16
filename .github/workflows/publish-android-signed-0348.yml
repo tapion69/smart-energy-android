@@ -107,9 +107,12 @@ jobs:
           grep -q "versionCode='61'" /tmp/smart-energy-old-badging
           echo "Previous release identity verified."
           cert() {
+            # Android build-tools use different prefix casing / spacing.
+            # Extract only a full 256-bit certificate digest, as prior
+            # successful official signed release pipelines do.
             "$APKSIGNER" verify --print-certs "$1" |
-              sed -n 's/.*Signer #1 certificate SHA-256 digest: //p' | head -n 1 |
-              tr '[:upper:]' '[:lower:]'
+              grep -Eio '([[:xdigit:]]{2}:){31}[[:xdigit:]]{2}|[[:xdigit:]]{64}' |
+              head -n 1 | tr -d ':' | tr '[:upper:]' '[:lower:]'
           }
           NEW_CERT=$(cert "$APK")
           OLD_CERT=$(cert "$OLD")
