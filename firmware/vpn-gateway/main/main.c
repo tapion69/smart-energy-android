@@ -41,7 +41,7 @@
 #include "cJSON.h"
 #include <math.h>
 
-#define GATEWAY_VERSION "0.3.8-dev-vpn-discovery"
+#define GATEWAY_VERSION "0.3.11-dev-deye-relay-ready"
 #define GATEWAY_PORT 18767
 #define MAX_JSON_BYTES 32768
 
@@ -57,6 +57,8 @@ static volatile unsigned wifi_retry_count = 0;
 /* Verified local reader bindings. Only a known label + code may create one. */
 static char discovered_ip[2][3][16];
 static char discovered_id[2][3][48];
+/* Slot kind 1=Voltronic, 2=Deye, bound by authenticated name discovery. */
+static uint8_t discovered_inverter_kind[3];
 static bool discovery_ambiguous[2][3];
 static portMUX_TYPE discovery_lock=portMUX_INITIALIZER_UNLOCKED;
 
@@ -278,7 +280,7 @@ static bool se_discovery_auth(const char *family,const char *name,
     }
     return mismatch==0;
 }
-static bool discovery_prove(const char *host,int port,int family,
+static bool discovery_prove(const char *host,int port,int family,bool deye,
                             const char *code,const char *claimed_id){
     se_discovery_proof_t answer={0};
     esp_http_client_config_t opts={
@@ -303,7 +305,7 @@ static bool discovery_prove(const char *host,int port,int family,
               cJSON_IsString(p)&&p->valuestring &&
               strcmp(id->valuestring,claimed_id)==0 &&
               strcmp(p->valuestring,family==0?"smart-jk-esp32":
-                                          "smart-energy-voltronic-s3")==0;
+                    deye?"smart-energy-deye-s3":"smart-energy-voltronic-s3")==0;
     cJSON_Delete(j);
     return good;
 }
@@ -348,8 +350,9 @@ static void discovery_listener(void *unused){
            !ipj->valuestring || strcmp(ipj->valuestring,sender)!=0){
             cJSON_Delete(j);continue;
         }
+        const bool deye=strcmp(familyj->valuestring,"inverter")==0;
         int family=strcmp(familyj->valuestring,"jk")==0?0:
-                   strcmp(familyj->valuestring,"voltronic")==0?1:-1;
+                   (deye || strcmp(familyj->valuestring,"voltronic")==0)?1:-1;
         int port=portj->valueint;
         const char *name=namej->valuestring,*id=idj->valuestring;
         bool valid=family>=0 && port==(family==0?80:18081) &&
@@ -373,7 +376,7 @@ static void discovery_listener(void *unused){
             if(!expected[0] || strcmp(expected,label)!=0 ||
                strlen(secret)<8 || se_is_private_ipv4(fixed))continue;
             // HMAC must be verified BEFORE HTTP carries the private reader code.
-            if(!se_discovery_auth(family==0?"jk":"voltronic",label,
+            if(!se_discovery_auth(family==0?"jk":deye?"inverter":"voltronic",label,
                  identity,port,sender,secret,signed_tag))continue;
             bool skip=false;
             portENTER_CRITICAL(&discovery_lock);
@@ -382,15 +385,17 @@ static void discovery_listener(void *unused){
                  strcmp(discovered_id[family][slot],identity)==0);
             portEXIT_CRITICAL(&discovery_lock);
             if(skip)continue;
-            if(!discovery_prove(sender,port,family,secret,identity))continue;
+            if(!discovery_prove(sender,port,family,deye,secret,identity))continue;
             portENTER_CRITICAL(&discovery_lock);
             if(discovered_id[family][slot][0] &&
                strcmp(discovered_id[family][slot],identity)!=0){
                 discovery_ambiguous[family][slot]=true;
                 discovered_ip[family][slot][0]=0;
+                if(family==1)discovered_inverter_kind[slot]=0;
             }else{
                 snprintf(discovered_ip[family][slot],16,"%s",sender);
                 snprintf(discovered_id[family][slot],48,"%s",identity);
+                if(family==1)discovered_inverter_kind[slot]=deye?2:1;
             }
             portEXIT_CRITICAL(&discovery_lock);
         }
@@ -419,8 +424,10 @@ static esp_err_t discovery_inventory(httpd_req_t *req) {
         if(!name[0] || se_is_private_ipv4(legacy) || strlen(secret)<8)continue;
         char confirmed_ip[16]={0},confirmed_id[48]={0};
         bool ambiguous=false;
+        uint8_t inverter_kind=0;
         portENTER_CRITICAL(&discovery_lock);
         ambiguous=discovery_ambiguous[family][slot];
+        if(family==1)inverter_kind=discovered_inverter_kind[slot];
         snprintf(confirmed_ip,sizeof confirmed_ip,"%s",discovered_ip[family][slot]);
         snprintf(confirmed_id,sizeof confirmed_id,"%s",discovered_id[family][slot]);
         portEXIT_CRITICAL(&discovery_lock);
@@ -429,6 +436,9 @@ static esp_err_t discovery_inventory(httpd_req_t *req) {
         if(!entry){cJSON_Delete(root);
             return deny(req,"500 Internal Server Error","{\"error\":\"memory\"}");}
         cJSON_AddStringToObject(entry,"family",family==0?"jk":"voltronic");
+        /* Preserve legacy family key for existing Android, add device type. */
+        if(family==1)cJSON_AddStringToObject(entry,"device_type",
+            inverter_kind==2?"deye":"voltronic");
         cJSON_AddStringToObject(entry,"name",name);
         cJSON_AddStringToObject(entry,"device_id",confirmed_id);
         cJSON_AddNumberToObject(entry,"slot",slot+1);
@@ -506,6 +516,20 @@ static bool get_target(se_route_t route, lan_target_t *out) {
         out->path=info?"/api/v1/info":
             details?"/api/v1/details":"/api/v1/telemetry";
         out->port=18081;
+        return se_is_private_ipv4(out->host) &&
+            strlen(out->access_code)>=8 && strlen(out->access_code)<=32;
+    }
+    if(route>=SE_ROUTE_DEYE1_INFO && route<=SE_ROUTE_DEYE3_OTA_STATUS){
+        const int slot=(route-SE_ROUTE_DEYE1_INFO)/5;
+        const int endpoint=(route-SE_ROUTE_DEYE1_INFO)%5;
+        out->host=personal?configured_reader_host(1,slot,
+            personal->voltronic_ip[slot],out->discovered_host):"";
+        out->access_code=personal?personal->voltronic_code[slot]:"";
+        const char *paths[]={
+            "/api/v1/info","/api/v1/telemetry","/api/v1/details",
+            "/api/v1/device-config","/api/v1/ota/status"
+        };
+        out->path=paths[endpoint];out->port=18081;
         return se_is_private_ipv4(out->host) &&
             strlen(out->access_code)>=8 && strlen(out->access_code)<=32;
     }
@@ -805,7 +829,7 @@ static esp_err_t relay_parameter_control(httpd_req_t *req) {
 static void start_private_http(void) {
     httpd_config_t cfg = HTTPD_DEFAULT_CONFIG();
     cfg.server_port = GATEWAY_PORT;
-    cfg.max_uri_handlers = 48;
+    cfg.max_uri_handlers = 80;
     cfg.stack_size = 8192;
     cfg.max_open_sockets = 4;
     cfg.lru_purge_enable = true;
@@ -838,6 +862,21 @@ static void start_private_http(void) {
         {.uri="/api/v1/voltronic/2/details",.method=HTTP_GET,.handler=relay_read},
         {.uri="/api/v1/voltronic/3/telemetry",.method=HTTP_GET,.handler=relay_read},
         {.uri="/api/v1/voltronic/3/details",.method=HTTP_GET,.handler=relay_read},
+        {.uri="/api/v1/deye/1/info",.method=HTTP_GET,.handler=relay_read},
+        {.uri="/api/v1/deye/1/telemetry",.method=HTTP_GET,.handler=relay_read},
+        {.uri="/api/v1/deye/1/details",.method=HTTP_GET,.handler=relay_read},
+        {.uri="/api/v1/deye/1/device-config",.method=HTTP_GET,.handler=relay_read},
+        {.uri="/api/v1/deye/1/ota/status",.method=HTTP_GET,.handler=relay_read},
+        {.uri="/api/v1/deye/2/info",.method=HTTP_GET,.handler=relay_read},
+        {.uri="/api/v1/deye/2/telemetry",.method=HTTP_GET,.handler=relay_read},
+        {.uri="/api/v1/deye/2/details",.method=HTTP_GET,.handler=relay_read},
+        {.uri="/api/v1/deye/2/device-config",.method=HTTP_GET,.handler=relay_read},
+        {.uri="/api/v1/deye/2/ota/status",.method=HTTP_GET,.handler=relay_read},
+        {.uri="/api/v1/deye/3/info",.method=HTTP_GET,.handler=relay_read},
+        {.uri="/api/v1/deye/3/telemetry",.method=HTTP_GET,.handler=relay_read},
+        {.uri="/api/v1/deye/3/details",.method=HTTP_GET,.handler=relay_read},
+        {.uri="/api/v1/deye/3/device-config",.method=HTTP_GET,.handler=relay_read},
+        {.uri="/api/v1/deye/3/ota/status",.method=HTTP_GET,.handler=relay_read},
         {.uri="/api/v1/jk/1/settings-refresh",.method=HTTP_POST,.handler=relay_parameter_control},
         {.uri="/api/v1/jk/1/write-arm",.method=HTTP_POST,.handler=relay_parameter_control},
         {.uri="/api/v1/jk/1/write",.method=HTTP_POST,.handler=relay_parameter_control},
