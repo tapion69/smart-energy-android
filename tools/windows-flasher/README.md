@@ -1,4 +1,4 @@
-# Smart Energy Flasher — un EXE Windows : JK, VPN classique/S3, Voltronic S3
+# Smart Energy Flasher — un EXE Windows : JK, VPN et Onduleurs
 
 **Version expérimentale :** `SmartEnergyFlasher.exe`, sans Python, Git ni ESP-IDF sur Windows. Il contient les firmwares **JK classique**, **VPN classique et VPN ESP32-S3 N16R8**, ainsi que **Voltronic RS232 ESP32-S3 N16R8 lecture seule**.
 
@@ -8,16 +8,16 @@ Télécharger l'artefact **`SmartEnergyFlasher-Windows-AllInOne-JK-VPN`** du der
 
 1. Brancher **un seul ESP32 à la fois** (classique pour JK, classique ou S3 N16R8 pour VPN), avec un câble USB de données.
 2. En haut, sélectionner son port dans le **menu déroulant COM** (l'EXE détecte automatiquement les appareils USB et permet d'actualiser la liste). Un port débranché n'est jamais remplacé silencieusement par un autre.
-3. Choisir l'onglet **ESP32 JK**, **ESP32 VPN** ou **Voltronic S3**. Dans VPN, sélectionner obligatoirement **ESP32 classique** ou **ESP32-S3 N16R8** avant le flash. L'onglet Voltronic accepte uniquement le S3 N16R8 avec une image distincte. Aucun `.bin` externe n'est requis.
+3. Choisir l'onglet **ESP32 JK**, **ESP32 VPN** ou **Onduleurs**. Dans VPN, sélectionner obligatoirement **ESP32 classique** ou **ESP32-S3 N16R8** avant le flash. L'onglet Onduleurs propose Voltronic/Axpert S3 (opérationnel en développement) et Deye (en attente d'un firmware validé ; flash désactivé). Aucun `.bin` externe n'est requis.
 4. Sélectionner **FACTORY** pour un **nouvel ESP32 vierge** ou **APP-ONLY** pour mettre à jour un appareil existant, sans effacer volontairement la NVS.
-5. Sur l'onglet **JK**, cliquer `Flasher le lecteur JK`. Sur l'onglet **VPN**, renseigner les champs **Wi-Fi, clé d'association Tailscale, token de passerelle, IP et codes personnels des ESP JK 1 à 3**, puis `Flasher et configurer`. Le firmware VPN enregistre les paramètres reçus via le port série dans la NVS.
+5. Sur l'onglet **JK**, cliquer `Flasher le lecteur JK`. Sur l'onglet **VPN**, renseigner les champs **Wi-Fi, clé d'association Tailscale, token de passerelle, noms et codes personnels des ESP JK 1 à 3 et onduleurs compatibles (sans IP fixe)**, puis `Flasher et configurer`. Le firmware VPN enregistre les paramètres reçus via le port série dans la NVS.
 6. Lire la confirmation dans le journal ; contrôler ensuite sur le vrai appareil que les connexions Wi-Fi, BLE et/ou Tailscale sont effectives.
 
 ### Deuxième lecteur JK pour les batteries 3 et 4
 
 - Nouveau lecteur ESP32 classique : onglet **JK**, mode **FACTORY 0x0000**, fichier intégré `smart-jk-esp32-factory.bin`.
 - Ancien lecteur déjà configuré : mode **APP-ONLY 0x10000** ; **ne jamais** choisir FACTORY.
-- Après flash du nouvel ESP : procéder à l'association BOOT et à la configuration des deux BMS dans l'APK. Les mesures des deux lecteurs seront agrégées dans la vue globale.
+- Nouveau JK vierge : renseigner Wi-Fi, nom personnalisé et code de lecture lors du flash USB. Dans l'APK, cliquer **Rechercher mes équipements**, choisir le lecteur et saisir ce code. La configuration des BMS reste à effectuer dans l'APK, mais aucune association BOOT n'est nécessaire pour cet ESP préconfiguré.
 
 ### Passerelle VPN
 
@@ -57,7 +57,7 @@ Ces versions **ne sont pas encore validées sur les ESP32 physiques**. Les tests
 
 ## Nouveau lecteur Voltronic ESP32-S3 (prototype — sans modification des onduleurs)
 
-- Choisir **Voltronic S3** dans le flasheur, sélectionner une **carte S3 N16R8 distincte** de la passerelle VPN.
+- Choisir **Onduleurs → Voltronic/Axpert** dans le flasheur, sélectionner une **carte S3 N16R8 distincte** de la passerelle VPN.
 - Pour une carte neuve, mode **FACTORY** (bootloader S3 à 0x0). Pour une mise à jour sur partitionnement compatible seulement, **APP-ONLY à 0x10000**, jamais `erase_flash`.
 - Configurer le Wi-Fi 2,4 GHz et un code de lecture personnel de 8–32 caractères. Le programme attend la réponse USB native `SEVOLT_READY_V1`, puis la confirmation `SEVOLT_OK_REBOOT`. Aucun mot de passe n'est affiché dans le journal.
 - Une fois le flash et le Wi-Fi validés, l'APK Android 0.3.20-dev peut tester `GET http://<adresse privée>:18081/api/v1/info` en lecture seule.
@@ -66,3 +66,15 @@ Ces versions **ne sont pas encore validées sur les ESP32 physiques**. Les tests
 - Pour reconfigurer le S3 sans reflasher : redémarrer, puis maintenir BOOT 3 s pendant la fenêtre initiale de 9 s, avant d'utiliser le bouton **Configurer via USB**.
 
 Toutes les fonctions S3 sont expérimentales et **ne sont pas validées sur les cartes réelles** ; ne jamais écraser le VPN classique qui fonctionne. Voir aussi `docs/READONLY-INVERTERS-SUNSPEC-VOLTRONIC-S3.md`.
+
+
+## Découverte automatique par nom et code (branche de test)
+
+- Chaque lecteur neuf a son nom librement choisi au flash USB. Le VPN retrouve son adresse locale à partir d'une annonce réseau **signée HMAC-SHA256** avec le code du lecteur, puis vérifie son identité avant tout relais. L'IP est inutile à la préparation des ESP à expédier.
+- Les noms sont limités à **32 octets UTF-8** et doivent être distincts pour les lecteurs du même type. Choisir un code de lecture aléatoire et suffisamment long, idéalement 16–32 caractères, car il sert aussi à signer les annonces de découverte.
+- Le téléphone doit être sur le même Wi-Fi local que les lecteurs au moment de leur première association. Cliquer **Rechercher mes équipements**, sélectionner le nom, saisir le code **une fois**. L'ancien formulaire IP reste accessible dans le menu Expert.
+- Le VPN conserve son adresse Tailscale habituelle ; aucune recherche VPN n'est nécessaire. Le fonctionnement distant est indépendant de l'APK associée localement.
+- **Compatibilité** : les anciens ESP restent fonctionnels avec leurs IP fixes et un firmware APP-ONLY, sans reconfiguration forcée. Ne pas remplacer les cartes de production avant une validation matérielle du nouveau protocole.
+- **Deye** : firmware en développement, aucun binaire Deye précompilé ici. Ne pas sélectionner une image Voltronic pour un Deye.
+- Le flash/USB des **JK et Voltronic préconfigurés n'a pas encore été validé sur le matériel distant**. Les tests logiciels, la compilation et le dépannage réseau restent distincts d'un essai physique.
+- Référence technique : [Découverte universelle](../../docs/UNIVERSAL-READER-DISCOVERY-DEV.md).
