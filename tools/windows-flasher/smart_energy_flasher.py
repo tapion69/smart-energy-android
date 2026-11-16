@@ -57,6 +57,9 @@ def validate_vpn_config(values: dict[str, str]) -> None:
         raise ValueError("Indique une clé d'association Tailscale tskey-auth- personnelle.")
     if not 20 <= len(values["gateway_token"]) <= 128:
         raise ValueError("Token VPN : utilise 20 à 128 caractères.")
+    vpn_name=values.get("gateway_name","")
+    if vpn_name and not re.fullmatch(r"[a-z0-9](?:[a-z0-9-]{1,29}[a-z0-9])",vpn_name):
+        raise ValueError("Nom VPN : 3 à 31 caractères minuscules, chiffres ou tirets (sans espace).")
     count=0
     seen={"jk":set(),"volt":set()}
     for index in range(1, 4):
@@ -520,6 +523,7 @@ class Flasher(tk.Tk):
             ("Mot de passe Wi-Fi :", "wifi_password", True),
             ("Clé Tailscale tskey-auth- :", "tailscale_key", True),
             ("Token de passerelle (20-128) :", "gateway_token", True),
+            ("Nom du VPN dans Tailscale (3–31, sans espaces) :", "gateway_name", False),
         ]):
             self._field(connection, caption, key, i, password)
 
@@ -862,6 +866,8 @@ class Flasher(tk.Tk):
             ) else field.get()
             for key, field in self.fields.items()
         }
+        # The secure NVS name is only a display identity in Tailscale.
+        values["gateway_name"]=values.get("gateway_name","").strip().lower()
         # New discovery-only flash: no legacy IP address entry anywhere in UI.
         for family in ("jk","volt"):
             for slot in (1,2,3):
