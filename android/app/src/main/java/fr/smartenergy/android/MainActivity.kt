@@ -1046,9 +1046,9 @@ class MainActivity : Activity() {
             val prefix=if(slot==1)"inverter_probe_" else "inverter_${slot}_"
             val codeKey=if(slot==1)"premium_voltronic_code_cipher"
                 else "premium_voltronic_${slot}_code_cipher"
-            val selected=if(voltronicFleet.configured(slot))
-                prefs.getString(prefix+"type","voltronic") ?: "voltronic"
-            else prefs.getString("deye_${slot}_type","voltronic") ?: "voltronic"
+            val selected=if(voltronicFleet.configured(slot)) "voltronic"
+            else prefs.getString("deye_${slot}_type",
+                prefs.getString(prefix+"type","voltronic")) ?: "voltronic"
             val types=RadioGroup(this).apply { orientation=RadioGroup.VERTICAL }
             val vol=RadioButton(this).apply {
                 text="Voltronic / Axpert — ESP32-S3 RS232"
@@ -1073,19 +1073,21 @@ class MainActivity : Activity() {
             add(panel,types,5)
             val ip=input("IP de l'ESP32 lecteur (Voltronic), ou de la clé Deye")
             ip.setText(if(selected=="voltronic") prefs.getString(prefix+"ip","") ?: ""
-                else prefs.getString("deye_${slot}_dongle_ip","") ?: "")
+                else prefs.getString("deye_${slot}_dongle_ip",
+                    prefs.getString(prefix+"ip","")) ?: "")
             add(panel,ip,6)
             val port=input("Port TCP : 18081 (Voltronic) ou 502 (Modbus)")
             port.inputType=android.text.InputType.TYPE_CLASS_NUMBER
             port.setText(if(selected=="voltronic")
                 prefs.getInt(prefix+"port",18081).toString()
-                else prefs.getInt("deye_${slot}_port",502).toString())
+                else prefs.getInt("deye_${slot}_port",prefs.getInt(prefix+"port",502)).toString())
             add(panel,port,6)
             val code=input("Code de lecture ESP32 Voltronic (inutile pour la clé Deye)",true)
             add(panel,code,6)
             val unit=input("Adresse esclave Modbus (1 par défaut)")
             unit.inputType=android.text.InputType.TYPE_CLASS_NUMBER
-            unit.setText(prefs.getInt("deye_${slot}_unit",1).toString())
+            unit.setText(prefs.getInt("deye_${slot}_unit",
+                prefs.getInt(prefix+"unit",1)).toString())
             add(panel,unit,6)
             vol.setOnClickListener {
                 ip.setText(prefs.getString(prefix+"ip","") ?: "")
