@@ -813,9 +813,13 @@ class Flasher(tk.Tk):
     def _flash_jk(self) -> None:
         try:
             port = self._assert_ready()
-            # The signed-off images from our CI are included in the standard
-            # EXE. A manually selected .bin is strictly an expert override.
+            # The signed-off images from CI are bundled; USB provisioning only on FACTORY.
             mode=self.jk_mode.get()
+            factory_cfg={key:var.get() for key,var in self.jk_fields.items()} if mode=="factory" else None
+            if factory_cfg is not None:
+                from jk_usb import jk_config_line
+                jk_config_line(factory_cfg)
+                self.secret_values=[factory_cfg["wifi_password"],factory_cfg["read_code"]]
             path = (Path(self.jk_image.get().strip())
                     if self.jk_image.get().strip()
                     else self._bundled_jk_image(mode))
@@ -865,13 +869,14 @@ class Flasher(tk.Tk):
                     "Si la table est inconnue, le flash est refusé.\\n\\n"
                     "Confirmer cette mise à jour USB JK ?"):
                     return
-            self._run_async(lambda: self._do_jk(port,path,offset,private_backup),
+            self._run_async(lambda: self._do_jk(port,path,offset,private_backup,factory_cfg),
                             mode="jk")
         except Exception as exc:
             messagebox.showerror("Flash JK", str(exc))
 
     def _do_jk(self, port: str, file: Path, offset: str,
-               private_backup: Path | None = None) -> None:
+               private_backup: Path | None = None,
+               factory_cfg: dict[str,str] | None = None) -> None:
         ensure_esptool_console_streams()
         self._log(f"Flash JK {port}, offset {offset}, fichier {file.name}")
         from esptool import main as esptool_main
@@ -899,6 +904,10 @@ class Flasher(tk.Tk):
                           "--after", "hard_reset",
                           "write_flash", "--flash_mode", "dio", "--flash_freq", "40m",
                           "--flash_size", "4MB", offset, str(file)])
+        if offset=="0x0" and factory_cfg:
+            from jk_usb import provision_jk
+            self._progress_step(80,"JK : configuration initiale USB…")
+            provision_jk(port,factory_cfg,self._log)
         self._progress_step(98, "Image JK écrite et vérifiée.")
         self._log("Flash JK terminé. Redémarre le lecteur et vérifie les BMS dans l'APK.")
 
