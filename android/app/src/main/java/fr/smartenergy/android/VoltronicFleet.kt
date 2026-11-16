@@ -39,8 +39,11 @@ class VoltronicFleet(
 
     fun configured(slot:Int):Boolean {
         require(slot in 1..3)
-        return if(slot==1) prefs.getBoolean("inverter_probe_validated",false)
-               else prefs.getBoolean("inverter_${slot}_validated",false)
+        val prefix=if(slot==1)"inverter_probe_" else "inverter_${slot}_"
+        // Legacy 0.3.54 direct-SunSpec records were discovery-only and
+        // must not masquerade as a live ESP32 inverter in the dashboard.
+        if(prefs.getString(prefix+"type","voltronic")!="voltronic")return false
+        return prefs.getBoolean(prefix+"validated",false)
     }
     fun hasInverters():Boolean=(1..3).any { configured(it) }
     fun snapshotFor(slot:Int):JSONObject {
