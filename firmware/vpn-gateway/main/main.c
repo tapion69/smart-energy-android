@@ -509,6 +509,11 @@ static bool get_target(se_route_t route, lan_target_t *out) {
              route==SE_ROUTE_VOLT2_DETAILS || route==SE_ROUTE_VOLT2_INFO)?1:0;
         const bool details=(route==SE_ROUTE_VOLT1_DETAILS ||
             route==SE_ROUTE_VOLT2_DETAILS || route==SE_ROUTE_VOLT3_DETAILS);
+        uint8_t proven_kind=0;
+        portENTER_CRITICAL(&discovery_lock);
+        proven_kind=discovered_inverter_kind[slot];
+        portEXIT_CRITICAL(&discovery_lock);
+        if(proven_kind==2)return false; /* Deye never impersonates Voltronic */
         out->host=personal ? configured_reader_host(1,slot,personal->voltronic_ip[slot],out->discovered_host):"";
         out->access_code=personal ? personal->voltronic_code[slot]:"";
         const bool info=(route==SE_ROUTE_VOLT1_INFO ||
@@ -522,6 +527,18 @@ static bool get_target(se_route_t route, lan_target_t *out) {
     if(route>=SE_ROUTE_DEYE1_INFO && route<=SE_ROUTE_DEYE3_OTA_STATUS){
         const int slot=(route-SE_ROUTE_DEYE1_INFO)/5;
         const int endpoint=(route-SE_ROUTE_DEYE1_INFO)%5;
+        /* Proof-of-product gate: a Voltronic on the same slot must never
+           receive a Deye write (both protocols use /parameters/change).
+           Deye demands verified, name-based discovery, not legacy fixed IP. */
+        uint8_t proven_kind=0;
+        bool ambiguous=false;
+        portENTER_CRITICAL(&discovery_lock);
+        proven_kind=discovered_inverter_kind[slot];
+        ambiguous=discovery_ambiguous[1][slot];
+        portEXIT_CRITICAL(&discovery_lock);
+        if(proven_kind!=2 || ambiguous ||
+           (personal && se_is_private_ipv4(personal->voltronic_ip[slot])))
+            return false;
         out->host=personal?configured_reader_host(1,slot,
             personal->voltronic_ip[slot],out->discovered_host):"";
         out->access_code=personal?personal->voltronic_code[slot]:"";
