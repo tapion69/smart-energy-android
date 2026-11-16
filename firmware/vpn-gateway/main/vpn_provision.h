@@ -16,6 +16,7 @@ typedef struct {
     char voltronic_ip[3][16];
     char voltronic_name[3][33];
     char voltronic_code[3][33];
+    char voltronic_protocol[3][12]; // "voltronic" (legacy default), "modbus" (read-only FC03).
     bool remote_writes_enabled; // opt-in only through physical USB + BOOT, default false
 } se_vpn_config_t;
 
