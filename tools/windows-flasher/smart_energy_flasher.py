@@ -341,16 +341,12 @@ class Flasher(tk.Tk):
                    command=self._flash_jk).pack(side="right", padx=5)
         ttk.Button(vpn.actions, text="Flasher VPN (mode sélectionné)",
                    command=self._flash_vpn).pack(side="right", padx=5)
-        ttk.Button(vpn.actions, text="Ajouter INV sans effacer le reste",
-                   command=self._add_voltronic_only).pack(side="left", padx=5)
-        ttk.Button(vpn.actions, text="Corriger IP ESP JK dans VPN",
-                   command=self._patch_jk_vpn).pack(side="left", padx=5)
 
         ttk.Button(vpn.actions,text="Autoriser écritures VPN (USB)",
                    command=lambda:self._set_vpn_remote_writes(True)).pack(side="left",padx=3)
         ttk.Button(vpn.actions,text="Bloquer écritures VPN (USB)",
                    command=lambda:self._set_vpn_remote_writes(False)).pack(side="left",padx=3)
-        ttk.Button(voltronic.actions, text="Flasher Voltronic S3",
+        ttk.Button(voltronic.actions, text="Flasher onduleur S3",
                    command=self._flash_voltronic).pack(side="right", padx=5)
         ttk.Button(voltronic.actions, text="Configurer S3 sans reflasher",
                    command=self._configure_voltronic_only).pack(side="left", padx=5)
@@ -600,8 +596,8 @@ class Flasher(tk.Tk):
                   "Aucune IP requise en mode découverte. Les anciennes IP restent en mode expert.",
                   wraplength=720).grid(
             row=8, column=0, columnspan=3, pady=(8, 4))
-        append=ttk.LabelFrame(root,text="Ajouter un onduleur · conserver VPN et JK",padding=6)
-        append.grid(row=9,column=0,columnspan=3,sticky="ew",padx=8,pady=6)
+        append=ttk.LabelFrame(legacy,text="Ajouter un onduleur · ancien mode IP",padding=6)
+        append.grid(row=7,column=0,columnspan=3,sticky="ew",padx=8,pady=6)
         ttk.Label(append,text="INV à ajouter :").grid(row=0,column=0,padx=5)
         self.vpn_patch_slot=tk.StringVar(value="1")
         ttk.Combobox(append,textvariable=self.vpn_patch_slot,
@@ -611,8 +607,8 @@ class Flasher(tk.Tk):
                   "clique « Ajouter INV sans effacer le reste » en bas de l'écran.",
                   wraplength=680).grid(
                    row=1,column=0,columnspan=3,pady=(6,2))
-        update_jk=ttk.LabelFrame(root,text="Corriger un ESP JK · conserver tout le VPN",padding=6)
-        update_jk.grid(row=11,column=0,columnspan=3,sticky="ew",padx=8,pady=6)
+        update_jk=ttk.LabelFrame(legacy,text="Corriger un ESP JK · ancien mode IP",padding=6)
+        update_jk.grid(row=8,column=0,columnspan=3,sticky="ew",padx=8,pady=6)
         ttk.Label(update_jk,text="Lecteur JK à corriger :").grid(row=0,column=0,padx=5)
         self.vpn_jk_patch_slot=tk.StringVar(value="2")
         ttk.Combobox(update_jk,textvariable=self.vpn_jk_patch_slot,
@@ -622,9 +618,12 @@ class Flasher(tk.Tk):
                   "Laisse son code vide s'il n'a pas changé : il sera conservé dans le VPN. "+
                   "Puis clique « Corriger IP ESP JK dans VPN » en bas.",
                   wraplength=700).grid(row=1,column=0,columnspan=3,pady=(6,2))
-        ttk.Button(root, text="Reconfigurer TOUT via USB (remplace anciens réglages)",
-                   command=self._configure_only).grid(
-            row=10, column=0, columnspan=3, pady=(0, 6))
+        ttk.Button(legacy, text="Ajouter un ancien onduleur par IP",
+            command=self._add_voltronic_only).grid(row=10,column=0,columnspan=3,pady=3)
+        ttk.Button(legacy,text="Corriger une ancienne IP JK",
+            command=self._patch_jk_vpn).grid(row=11,column=0,columnspan=3,pady=3)
+        ttk.Button(legacy,text="Reconfigurer TOUT via USB (expert)",
+            command=self._configure_only).grid(row=12,column=0,columnspan=3,pady=4)
 
     def _build_voltronic(self, root: ttk.Frame) -> None:
         ttk.Label(root,
