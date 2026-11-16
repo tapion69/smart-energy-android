@@ -1,7 +1,7 @@
 name: Smart Energy ESP32 VPN Gateway (experimental)
 on:
   push:
-    branches: [dev, 'feature/universal-reader-discovery-20261116', 'feature/names-only-signed-android-20261116']
+    branches: [dev, 'feature/universal-reader-discovery-20261116', 'feature/names-only-signed-android-20261116', 'fix/jk-discovery-pairing-20261116']
     paths:
       - 'firmware/vpn-gateway/**'
       - 'firmware/voltronic-esp32/**'
