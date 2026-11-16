@@ -11,7 +11,10 @@ typedef enum {
     SE_WRITE_JK_ARM,
     SE_WRITE_JK_COMMIT,
     SE_WRITE_JK_STATUS,
-    SE_WRITE_VOLTRONIC_PARAM
+    SE_WRITE_VOLTRONIC_PARAM,
+    SE_WRITE_DEYE_CONFIG,
+    SE_WRITE_DEYE_PARAM,
+    SE_WRITE_DEYE_OTA_TRIGGER
 } se_write_kind_t;
 
 typedef struct {
@@ -48,6 +51,23 @@ static inline se_write_route_t se_write_route(const char *uri,bool is_post) {
         if(is_post && !strcmp(uri,prefix))
             return (se_write_route_t){slot,SE_WRITE_VOLTRONIC_PARAM,
                 "/api/v1/parameters/change"};
+        /* Deye is another ESP32 inverter reader on the SAME provisioned slot.
+           Never forward arbitrary Modbus registers, LAN hosts or OTA binaries. */
+        snprintf(prefix,sizeof prefix,"/api/v1/deye/%d/",slot);
+        const size_t deye_prefix_len=strlen(prefix);
+        if(!strncmp(uri,prefix,deye_prefix_len)){
+            const char *name=uri+deye_prefix_len;
+            if(is_post && !strcmp(name,"device-config"))
+                return (se_write_route_t){slot,SE_WRITE_DEYE_CONFIG,
+                    "/api/v1/device-config"};
+            if(is_post && !strcmp(name,"parameters/change"))
+                return (se_write_route_t){slot,SE_WRITE_DEYE_PARAM,
+                    "/api/v1/parameters/change"};
+            if(is_post && !strcmp(name,"ota/request"))
+                return (se_write_route_t){slot,SE_WRITE_DEYE_OTA_TRIGGER,
+                    "/api/v1/ota/request"};
+            return denied;
+        }
     }
     return denied;
 }
@@ -78,4 +98,19 @@ static inline bool se_write_voltronic_key(const char *key) {
     for(size_t i=0;i<sizeof keys/sizeof keys[0];i++)
         if(!strcmp(key,keys[i]))return true;
     return false;
+}
+
+/* The ESP32 Deye owns the Modbus register allowlist. The VPN accepts only
+   semantic parameter identifiers, never raw register addresses or opcodes. */
+static inline bool se_write_deye_key(const char *key){
+    if(!key)return false;
+    size_t length=strnlen(key,65);
+    if(length==0 || length>=65)return false;
+    if(!(key[0]>='a' && key[0]<='z'))return false;
+    for(size_t i=1;i<length;i++){
+        char c=key[i];
+        if(!((c>='a'&&c<='z')||(c>='0'&&c<='9')||c=='_'))
+            return false;
+    }
+    return true;
 }
