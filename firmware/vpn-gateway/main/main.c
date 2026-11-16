@@ -233,6 +233,8 @@ static esp_err_t health_handler(httpd_req_t *req) {
         "\"version\":\"%s\",\"vpn_connected\":true,"
         "\"vpn_only\":true,\"read_only\":true,"
         "\"jk_reader_slots\":3,\"voltronic_reader_slots\":3,"
+        "\"deye_esp_relay_ready\":true,\"deye_reader_slots\":3,"
+        "\"deye_ota_command_only\":true,"
         "\"remote_parameter_writes_opt_in\":%s}",
         GATEWAY_VERSION,
         personal && personal->remote_writes_enabled?"true":"false");
