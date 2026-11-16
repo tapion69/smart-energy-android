@@ -247,8 +247,8 @@ class FlasherTests(unittest.TestCase):
     def test_flasher_uses_names_only_without_legacy_ip_ui(self):
         from inspect import getsource
         vpn = getsource(Flasher._build_vpn)
-        self.assertIn("Lecteurs BMS JK",vpn)
-        self.assertIn("Lecteurs d'onduleur",vpn)
+        self.assertIn("Lecteurs JK",vpn)
+        self.assertIn("Onduleurs",vpn)
         self.assertIn("command=self._configure_only",vpn)
         self.assertNotIn("legacy",vpn)
         self.assertNotIn("_patch_jk_vpn",vpn)
