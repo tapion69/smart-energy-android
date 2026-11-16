@@ -95,6 +95,34 @@ object VoltronicVpnReadOnlyClient {
         }finally{c.disconnect()}
     }
 
+    /** Fixed-destination Modbus TCP FC03 only, never a raw TCP tunnel.
+     * The VPN firmware enforces an USB-provisioned private IP per slot. */
+    fun modbusWords(slot:Int,address:Int,count:Int,unit:Int,
+                    route:VoltronicVpnRoute):IntArray {
+        require(slot in 1..3 && address in 0..65535 && count in 1..125 &&
+            address+count<=65536 && unit in 0..247)
+        val path="/api/v1/inverters/$slot/modbus?address=$address&count=$count&unit=$unit"
+        val c=connection(route,path)
+        return try {
+            c.requestMethod="GET"
+            if(c.responseCode!=200)throw VoltronicVpnHttpException(c.responseCode)
+            val obj=JSONObject(c.inputStream.bufferedReader().use {
+                it.readText().take(4096)
+            })
+            require(obj.optString("product")=="smart-energy-modbus-fc03-read-only" &&
+                obj.optInt("address")==address && obj.optInt("count")==count &&
+                obj.optInt("unit")==unit){"Modbus : réponse VPN incorrecte"}
+            val words=obj.optJSONArray("words")
+                ?: throw IllegalStateException("Modbus : registres absents")
+            require(words.length()==count){"Modbus : nombre de registres incorrect"}
+            IntArray(count){i->
+                val word=words.optInt(i,-1)
+                require(word in 0..65535){"Modbus : registre invalide"}
+                word
+            }
+        }finally{c.disconnect()}
+    }
+
     fun remoteWritesEnabled(route:VoltronicVpnRoute):Boolean {
         val c=connection(route,"/api/v1/health")
         return try {
