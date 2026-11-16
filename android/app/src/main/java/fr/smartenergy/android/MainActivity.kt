@@ -858,7 +858,7 @@ class MainActivity : Activity() {
             "Conserve le menu expert pour les anciens lecteurs.",12f,color=subdued))
         // All JK settings live in one group with one ESP 1/2/3 selector.
         // Existing pairings, per-reader preferences and BMS registry are preserved.
-        val jkConfiguration=section(advanced,"Batteries JK · ESP 1 / ESP 2 / ESP 3",true)
+        val jkConfiguration=section(advanced,"Expert · Batteries JK · ESP 1 / ESP 2 / ESP 3",false)
         val readers=jkConfiguration
         add(readers,label("Sélectionne ESP 1, ESP 2 ou ESP 3. L'adresse, le code et les BMS enregistrés restent propres à chaque lecteur.",12f,color=subdued))
         readerSelector=LinearLayout(this).apply { orientation=LinearLayout.HORIZONTAL }
@@ -868,7 +868,7 @@ class MainActivity : Activity() {
         refreshReaderSelector()
 
         val lan = section(jkConfiguration, "Expert · IP et code ESP32 JK (anciens lecteurs)",false)
-        add(lan, label("Pour un lecteur déjà préparé dans le flasher, saisis son IP et son code, puis connecte-le. L'association BOOT n'est pas nécessaire dans ce cas.",12f,color=subdued))
+        add(lan,label("Utilise ce formulaire uniquement si un ancien firmware ne prend pas en charge la découverte.",12f,color=subdued))
         lanIp = input("Adresse IP locale de l'ESP32 (ex. 192.168.1.50)")
         lanIp.setText(prefs.getString("local_ip", "") ?: "")
         add(lan, lanIp)
@@ -883,7 +883,7 @@ class MainActivity : Activity() {
         }
         add(lan, lanConnectBtn)
         lanDiscoverBtn = action("Rechercher mes équipements") { discoverHomeLan() }
-        add(lan, lanDiscoverBtn)
+        // Search is now exposed in the universal section above; no duplicate button here.
         add(lan, label("Le code est chiffré dans l'application après une connexion réussie. Pour le remplacer sur l'ESP32, utilise l'option ci-dessous.",12f,color=subdued))
 
         val access = section(lan, "Changer le code ESP32 JK · optionnel")
@@ -1116,7 +1116,7 @@ class MainActivity : Activity() {
                 }
             }
         },8)
-        val voltVpn=section(advanced,"Accès VPN Voltronic · ESP32 Tailscale")
+        val voltVpn=section(advanced,"Expert · VPN des onduleurs (Tailscale)")
         add(voltVpn,label("Depuis Internet : Tailscale Android vers l'ESP32 VPN, "+
             "puis uniquement les lectures de INV1/INV2/INV3 sur le réseau local. "+
             "La passerelle VPN peut retrouver les nouveaux ESP grâce aux noms et "+
