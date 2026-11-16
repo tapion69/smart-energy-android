@@ -2219,23 +2219,60 @@ class MainActivity : Activity() {
         state("Recherche des lecteurs vérifiés via Tailscale…")
         io.execute {
             try {
-                val inventory=gatewayDiscoveryGet("/api/v1/discovery",host,token)
-                require(inventory.optString("product")=="smart-energy-vpn-discovery" &&
-                    inventory.optInt("schemaVersion")==1) {
-                    "Passerelle VPN sans découverte compatible"
+                // New gateways expose only signed/HMAC-verified name-based
+                // announcements. Older gateways can still validate their
+                // fixed targets via authenticated, read-only /info routes.
+                val discovered=mutableListOf<RemoteReader>()
+                try {
+                    val inventory=gatewayDiscoveryGet("/api/v1/discovery",host,token)
+                    require(inventory.optString("product")=="smart-energy-vpn-discovery" &&
+                        inventory.optInt("schemaVersion")==1) {
+                        "Réponse de découverte VPN incorrecte"
+                    }
+                    val devices=inventory.optJSONArray("devices") ?: JSONArray()
+                    for(index in 0 until devices.length()){
+                        val item=devices.optJSONObject(index) ?: continue
+                        val family=item.optString("family")
+                        val name=item.optString("name")
+                        val identity=item.optString("device_id")
+                        val slot=item.optInt("slot")
+                        if(family !in setOf("jk","voltronic") || slot !in 1..3 ||
+                            !item.optBoolean("verified") || name.length !in 1..32 ||
+                            identity.length !in 6..47)continue
+                        discovered.add(RemoteReader(family,name,identity,slot))
+                    }
+                }catch(ex:Exception){
+                    // Any authentication/network error must fail closed. Only
+                    // a missing discovery route on legacy firmware triggers
+                    // the fixed-path read fallback.
+                    if(!ex.message.orEmpty().contains("route découverte absente"))
+                        throw ex
                 }
-                val devices=inventory.optJSONArray("devices") ?: JSONArray()
-                val entries=(0 until devices.length()).mapNotNull { index ->
-                    val item=devices.optJSONObject(index) ?: return@mapNotNull null
-                    val family=item.optString("family")
-                    val name=item.optString("name")
-                    val identity=item.optString("device_id")
-                    val slot=item.optInt("slot")
-                    if(family !in setOf("jk","voltronic") || slot !in 1..3 ||
-                        !item.optBoolean("verified") || name.length !in 1..32 ||
-                        identity.length !in 6..47)return@mapNotNull null
-                    RemoteReader(family,name,identity,slot)
-                }.distinctBy { it.family+":"+it.vpnSlot }
+                for(family in listOf("jk","voltronic"))for(slot in 1..3){
+                    if(discovered.any{it.family==family && it.vpnSlot==slot})continue
+                    try {
+                        val info=gatewayDiscoveryGet(
+                            "/api/v1/$family/$slot/info",host,token)
+                        val product=if(family=="jk")"smart-jk-esp32"
+                            else "smart-energy-voltronic-s3"
+                        val id=info.optString("device_id")
+                        if(info.optString("product")!=product ||
+                            id.length !in 6..47)continue
+                        val verifiedName=info.optString("device_name").trim()
+                        val label=verifiedName.takeIf{it.length in 1..32}
+                            ?: (if(family=="jk")"Batteries JK $slot"
+                                else "Onduleur $slot")
+                        discovered.add(RemoteReader(family,label,id,slot))
+                    }catch(ex:Exception){
+                        // An unset or offline *individual* reader is not a
+                        // fatal error; invalid gateway auth always is.
+                        val reason=ex.message.orEmpty()
+                        if(reason.contains("Token VPN refusé") ||
+                            reason.contains("hors du tunnel Tailscale"))
+                            throw ex
+                    }
+                }
+                val entries=discovered.distinctBy{it.family+":"+it.vpnSlot}
                 runOnUiThread {
                     if(entries.isEmpty()){
                         state("Aucun lecteur vérifié par la passerelle VPN. "+
@@ -2274,18 +2311,21 @@ class MainActivity : Activity() {
                     return@setPositiveButton
                 }
                 if(reader.family=="jk"){
-                    val matching=(1..3).firstOrNull{slot ->
+                    // The VPN relay routes are pinned to slot numbers.
+                    // Pair JK2 into Android slot 2, never silently into 1.
+                    val chosenSlot=reader.vpnSlot
+                    val currentId=prefs.getString(
+                        if(chosenSlot==activeReaderSlot)"device_id"
+                        else slotKey(chosenSlot,"device_id"),"") ?: ""
+                    val duplicateSlot=(1..3).firstOrNull { slot ->
+                        slot!=chosenSlot &&
                         prefs.getString(if(slot==activeReaderSlot)"device_id"
                             else slotKey(slot,"device_id"),"")==reader.deviceId
                     }
-                    val free=(1..3).firstOrNull{slot ->
-                        prefs.getString(if(slot==activeReaderSlot)"device_id"
-                            else slotKey(slot,"device_id"),"").isNullOrBlank()
-                    }
-                    val chosenSlot=matching ?: free
-                    if(chosenSlot==null || lanConnectionPending || setupTransport){
-                        state("Aucun emplacement JK libre ou association en cours. "+
-                            "Libère d'abord un emplacement dans Expert.")
+                    if((currentId.isNotBlank() && currentId!=reader.deviceId) ||
+                        duplicateSlot!=null || lanConnectionPending || setupTransport){
+                        state("ESP $chosenSlot est déjà occupé, ou ce lecteur est associé "+
+                            "ailleurs. Libère son ancienne association dans Expert.")
                         return@setPositiveButton
                     }
                     state("Vérification JK via VPN, sans écriture…")
