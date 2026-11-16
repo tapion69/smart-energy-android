@@ -15,7 +15,7 @@
 - JK classique : mDNS `smartjk-xxxxxx` sur `_http._tcp` 80, plus annonce UDP 18769.
 - Voltronic S3 : mDNS `sevolt-xxxxxx` sur `_http._tcp` 18081, plus annonce UDP 18769.
 - Annonce UDP sans secret : `{"proto":"smart-energy-discovery-v1","family":"jk|voltronic","name":"...","id":"...","port":80|18081}`.
-- La passerelle VPN n'accepte que les lecteurs de la même plage IPv4 locale et correspondant aux **noms configurés physiquement**, puis vérifie le code de lecture et l'identité matérielle sur l'endpoint authentifié du lecteur avant de retenir l'IP. Une identité différente sous le même nom provoque un blocage conservateur.
+- Chaque annonce contient l'IP locale de l'émetteur et une signature HMAC-SHA256 calculée avec le code de lecture sur les champs `protocole|famille|nom|id|port|ip`. La passerelle vérifie d'abord la signature **sans transmettre le code** à l'IP découverte. Elle exige que le datagramme provienne du même sous-réseau et que l'IP signée corresponde à la source. Ensuite seulement elle confirme le produit et l'identité de l'ESP par une requête authentifiée. Une identité différente sous le même nom provoque un blocage conservateur. La sécurité de ce protocole suppose un code de lecture suffisamment long et aléatoire (16–32 caractères recommandés) ; le transport HTTP local reste non chiffré.
 - L'APK ne doit pas enregistrer le code avant une réponse authentifiée. Les codes Android existants restent chiffrés sous Android Keystore.
 - Les routes de commande JK/Voltronic existantes et leurs conditions d'écriture restent inchangées.
 - Un **nom est seulement une étiquette**, et non une preuve d'identité ni une clé d'authentification.
