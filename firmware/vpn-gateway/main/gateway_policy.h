@@ -22,7 +22,14 @@ typedef enum {
     SE_ROUTE_VOLT1_INFO, SE_ROUTE_VOLT2_INFO, SE_ROUTE_VOLT3_INFO,
     SE_ROUTE_VOLT1_DETAILS,
     SE_ROUTE_VOLT2_TELEMETRY, SE_ROUTE_VOLT2_DETAILS,
-    SE_ROUTE_VOLT3_TELEMETRY, SE_ROUTE_VOLT3_DETAILS
+    SE_ROUTE_VOLT3_TELEMETRY, SE_ROUTE_VOLT3_DETAILS,
+    /* Three reader slots, five fixed Deye/SunSpec-capable ESP endpoints each. */
+    SE_ROUTE_DEYE1_INFO, SE_ROUTE_DEYE1_TELEMETRY, SE_ROUTE_DEYE1_DETAILS,
+    SE_ROUTE_DEYE1_CONFIG, SE_ROUTE_DEYE1_OTA_STATUS,
+    SE_ROUTE_DEYE2_INFO, SE_ROUTE_DEYE2_TELEMETRY, SE_ROUTE_DEYE2_DETAILS,
+    SE_ROUTE_DEYE2_CONFIG, SE_ROUTE_DEYE2_OTA_STATUS,
+    SE_ROUTE_DEYE3_INFO, SE_ROUTE_DEYE3_TELEMETRY, SE_ROUTE_DEYE3_DETAILS,
+    SE_ROUTE_DEYE3_CONFIG, SE_ROUTE_DEYE3_OTA_STATUS
 } se_route_t;
 
 static inline se_route_t se_route_get(const char *path, bool is_get) {
@@ -49,6 +56,23 @@ static inline se_route_t se_route_get(const char *path, bool is_get) {
     if (!strcmp(path, "/api/v1/voltronic/2/details")) return SE_ROUTE_VOLT2_DETAILS;
     if (!strcmp(path, "/api/v1/voltronic/3/telemetry")) return SE_ROUTE_VOLT3_TELEMETRY;
     if (!strcmp(path, "/api/v1/voltronic/3/details")) return SE_ROUTE_VOLT3_DETAILS;
+    /* Deye always addresses an authenticated ESP32 inverter reader, never the
+       Deye/Solarman dongle directly. Only these exact GET paths are allowed. */
+    for(int slot=1;slot<=3;slot++) {
+        char prefix[40];
+        snprintf(prefix,sizeof prefix,"/api/v1/deye/%d/",slot);
+        size_t prefix_len=strlen(prefix);
+        if(!strncmp(path,prefix,prefix_len)){
+            const char *name=path+prefix_len;
+            int offset=!strcmp(name,"info")?0:
+                       !strcmp(name,"telemetry")?1:
+                       !strcmp(name,"details")?2:
+                       !strcmp(name,"device-config")?3:
+                       !strcmp(name,"ota/status")?4:-1;
+            if(offset>=0)return (se_route_t)(SE_ROUTE_DEYE1_INFO+5*(slot-1)+offset);
+            return SE_ROUTE_DENIED;
+        }
+    }
     return SE_ROUTE_DENIED;
 }
 
