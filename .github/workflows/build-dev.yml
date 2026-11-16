@@ -2,7 +2,7 @@ name: Build development prototypes
 
 on:
   push:
-    branches: [main, dev]
+    branches: [main, dev, 'fix/jk-discovery-pairing-20261116']
     paths:
       - 'android/**'
       - 'firmware/jk-esp32/**'
