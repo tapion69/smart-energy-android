@@ -23,6 +23,25 @@ int main(void) {
     assert(se_route_get("/api/v1/voltronic/2/details", true)==SE_ROUTE_VOLT2_DETAILS);
     assert(se_route_get("/api/v1/voltronic/3/telemetry", true)==SE_ROUTE_VOLT3_TELEMETRY);
     assert(se_route_get("/api/v1/voltronic/3/details", true)==SE_ROUTE_VOLT3_DETAILS);
+    /* Deye READ routes are bound to authenticated inverter ESP32 slots. */
+    for(int slot=1;slot<=3;slot++){
+        char path[96];
+        snprintf(path,sizeof path,"/api/v1/deye/%d/info",slot);
+        assert(se_route_get(path,true)==SE_ROUTE_DEYE1_INFO+(slot-1)*5);
+        snprintf(path,sizeof path,"/api/v1/deye/%d/telemetry",slot);
+        assert(se_route_get(path,true)==SE_ROUTE_DEYE1_TELEMETRY+(slot-1)*5);
+        snprintf(path,sizeof path,"/api/v1/deye/%d/details",slot);
+        assert(se_route_get(path,true)==SE_ROUTE_DEYE1_DETAILS+(slot-1)*5);
+        snprintf(path,sizeof path,"/api/v1/deye/%d/device-config",slot);
+        assert(se_route_get(path,true)==SE_ROUTE_DEYE1_CONFIG+(slot-1)*5);
+        snprintf(path,sizeof path,"/api/v1/deye/%d/ota/status",slot);
+        assert(se_route_get(path,true)==SE_ROUTE_DEYE1_OTA_STATUS+(slot-1)*5);
+        assert(se_route_get(path,false)==SE_ROUTE_DENIED);
+    }
+    assert(se_route_get("/api/v1/deye/4/info",true)==SE_ROUTE_DENIED);
+    assert(se_route_get("/api/v1/deye/1/../../wifi",true)==SE_ROUTE_DENIED);
+    assert(se_route_get("/api/v1/deye/1/device-config?host=8.8.8.8",true)==SE_ROUTE_DENIED);
+    assert(se_route_get("/api/v1/deye/1/ota/image",true)==SE_ROUTE_DENIED);
     assert(se_route_get("/api/v1/voltronic/4/details", true)==SE_ROUTE_DENIED);
     assert(se_route_get("/api/v1/voltronic/1/details", false)==SE_ROUTE_DENIED);
     assert(se_route_get("/api/v1/jk/telemetry", false) == SE_ROUTE_DENIED);
@@ -97,7 +116,29 @@ int main(void) {
         snprintf(path,sizeof path,"/api/v1/voltronic/%d/parameters/change",slot);
         assert(se_write_route(path,true).kind==SE_WRITE_VOLTRONIC_PARAM);
         assert(se_write_route(path,false).kind==SE_WRITE_DENIED);
+        snprintf(path,sizeof path,"/api/v1/deye/%d/device-config",slot);
+        assert(se_write_route(path,true).kind==SE_WRITE_DEYE_CONFIG);
+        assert(!strcmp(se_write_route(path,true).upstream_path,"/api/v1/device-config"));
+        assert(se_write_route(path,false).kind==SE_WRITE_DENIED);
+        snprintf(path,sizeof path,"/api/v1/deye/%d/parameters/change",slot);
+        assert(se_write_route(path,true).kind==SE_WRITE_DEYE_PARAM);
+        assert(!strcmp(se_write_route(path,true).upstream_path,"/api/v1/parameters/change"));
+        snprintf(path,sizeof path,"/api/v1/deye/%d/ota/request",slot);
+        assert(se_write_route(path,true).kind==SE_WRITE_DEYE_OTA_TRIGGER);
+        assert(!strcmp(se_write_route(path,true).upstream_path,"/api/v1/ota/request"));
     }
+    assert(se_write_route("/api/v1/deye/4/device-config",true).kind==SE_WRITE_DENIED);
+    assert(se_write_route("/api/v1/deye/1/modbus/write-register",true).kind==SE_WRITE_DENIED);
+    assert(se_write_route("/api/v1/deye/1/ota/image",true).kind==SE_WRITE_DENIED);
+    assert(se_write_route("/api/v1/deye/1/ota/request?url=evil",true).kind==SE_WRITE_DENIED);
+    assert(se_write_route("/api/v1/deye/1/parameters/change/../write",true).kind==SE_WRITE_DENIED);
+    assert(se_write_deye_key("grid_charge_start_soc"));
+    assert(!se_write_deye_key("raw-register:103"));
+    assert(!se_write_deye_key("HOLDING_WRITE_1"));
+    assert(!se_write_deye_key(""));
+    assert(!se_write_deye_key("fetch_url"));
+    /* Syntax-only: reader must still reject any semantic key not on its own
+       strict per-firmware allowlist. */
     assert(se_write_route("/api/v1/jk/4/write",true).kind==SE_WRITE_DENIED);
     assert(se_write_route("/api/v1/jk/1/../wifi",true).kind==SE_WRITE_DENIED);
     assert(se_write_route("/api/v1/jk/1/ota/image",true).kind==SE_WRITE_DENIED);
