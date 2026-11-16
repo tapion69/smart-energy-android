@@ -1046,7 +1046,9 @@ class MainActivity : Activity() {
             val prefix=if(slot==1)"inverter_probe_" else "inverter_${slot}_"
             val codeKey=if(slot==1)"premium_voltronic_code_cipher"
                 else "premium_voltronic_${slot}_code_cipher"
-            val selected=prefs.getString(prefix+"type","voltronic") ?: "voltronic"
+            val selected=if(voltronicFleet.configured(slot))
+                prefs.getString(prefix+"type","voltronic") ?: "voltronic"
+            else prefs.getString("deye_${slot}_type","voltronic") ?: "voltronic"
             val types=RadioGroup(this).apply { orientation=RadioGroup.VERTICAL }
             val vol=RadioButton(this).apply {
                 text="Voltronic / Axpert — ESP32-S3 RS232"
@@ -1079,7 +1081,7 @@ class MainActivity : Activity() {
                 prefs.getInt(prefix+"port",18081).toString()
                 else prefs.getInt("deye_${slot}_port",502).toString())
             add(panel,port,6)
-            val code=input("Code ESP32 Voltronic (8–32 caractères ; vide si enregistré)",true)
+            val code=input("Code de lecture ESP32 Voltronic (inutile pour la clé Deye)",true)
             add(panel,code,6)
             val unit=input("Adresse esclave Modbus (1 par défaut)")
             unit.inputType=android.text.InputType.TYPE_CLASS_NUMBER
@@ -1099,6 +1101,8 @@ class MainActivity : Activity() {
             val feedback=label(
                 if(voltronicFleet.configured(slot))
                     "Onduleur $slot : enregistré (${selected.uppercase()})"
+                else if(prefs.getString("deye_${slot}_dongle_ip","")?.isNotEmpty()==true)
+                    "Onduleur $slot : paramètres Deye/SunSpec préparés, firmware ESP en attente"
                 else "Onduleur $slot : aucun équipement associé",
                 12f,false,subdued)
             add(panel,feedback,6)
@@ -1159,8 +1163,8 @@ class MainActivity : Activity() {
             add(panel,action("Supprimer l'association · Onduleur $slot") {
                 AlertDialog.Builder(this)
                     .setTitle("Libérer Onduleur $slot ?")
-                    .setMessage("Supprime seulement l'association Android de cet emplacement "+
-                        "(IP, famille, port, code chiffré et adresse Modbus). "+
+                    .setMessage("Supprime seulement les paramètres de cet emplacement "+
+                        "(lecteur ESP32 ou brouillon Deye, port, code local). "+
                         "Les deux autres onduleurs, le VPN, les ESP JK et les données physiques "+
                         "restent inchangés.")
                     .setNegativeButton("Annuler",null)
@@ -1198,14 +1202,12 @@ class MainActivity : Activity() {
         add(voltVpn,label("Automatique : quand l'accès extérieur ESP32 VPN "+
             "est actif pour JK, les mesures Voltronic empruntent la même "+
             "passerelle en lecture seule. Aucune case d'activation séparée.",12f,color=subdued))
-        add(voltVpn,label("Lorsque le VPN JK est sélectionné, l'application utilise "+
-            "automatiquement la même adresse Tailscale et le même token pour "+
-            "les lectures des onduleurs. Attention : le firmware de l'ESP VPN "+
-            "doit aussi posséder les routes Voltronic et les IP/codes INV "+
-            "provisionnés par USB. Une erreur 503 signifie configuration "+
-            "Voltronic absente sur la passerelle, 404 firmware VPN trop ancien, "+
-            "502 lecteur Voltronic inaccessible. Aucune modification ni OTA "+
-            "n'est relayée par le VPN.",12f,color=subdued))
+        add(voltVpn,label("Le VPN associe les ESP32 Onduleur par nom et code "+
+            "provisionnés par USB. Les ports et adresses de clés Deye "+
+            "appartiennent au firmware de l'ESP32 Onduleur, pas au VPN. "+
+            "La prise en charge Deye sera activée seulement après validation "+
+            "du firmware dédié. Les JK et Voltronic existants restent inchangés.",
+            12f,color=subdued))
         add(voltVpn,action("Tester le relais VPN Voltronic INV1") {
             val gateway=voltronicVpnRoute()
             if(gateway==null)state("Active Tailscale, configure le token et coche VPN Voltronic.")
