@@ -83,10 +83,12 @@ def validate_vpn_config(values: dict[str, str]) -> None:
         host=values.get(f"volt{index}_ip","").strip()
         name=values.get(f"volt{index}_name","").strip()
         code=values[f"volt{index}_code"]
-        if host:
-            raise ValueError(f"Onduleur {index} : le VPN découvre l'ESP par nom, pas par IP.")
-        if bool(code)!=bool(name):
-            raise ValueError(f"ESP Onduleur {index} : nom et code obligatoires ensemble.")
+        # Legacy fixed-IP configurations stay valid for existing clients,
+        # but the new VPN UI always submits blank IPs for name-based discovery.
+        if host and not valid_lan_ip(host):
+            raise ValueError(f"ESP Onduleur {index} : IP historique invalide.")
+        if bool(code)!=(bool(name) or bool(host)):
+            raise ValueError(f"ESP Onduleur {index} : nom/code ou ancienne IP/code obligatoires ensemble.")
         if name and (len(name.encode("utf-8"))>32 or any(ord(c)<32 or c=="|" for c in name)):
             raise ValueError(f"ESP Onduleur {index} : nom invalide.")
         if name and name in seen["volt"]:
@@ -594,9 +596,9 @@ class Flasher(tk.Tk):
             ("ESP Onduleur 1 — nom personnalisé :", "volt1_name",False),
             ("ESP Onduleur 1 — code ESP :", "volt1_code",True),
             ("ESP Onduleur 2 — nom (facultatif) :", "volt2_name",False),
-            ("Onduleur 2 — code (facultatif) :", "volt2_code",True),
+            ("ESP Onduleur 2 — code (facultatif) :", "volt2_code",True),
             ("ESP Onduleur 3 — nom (facultatif) :", "volt3_name",False),
-            ("Onduleur 3 — code (facultatif) :", "volt3_code",True),
+            ("ESP Onduleur 3 — code (facultatif) :", "volt3_code",True),
         ]):
             self._field(volts,caption,key,i,password)
         ttk.Label(volts,text="La passerelle VPN associe les ESP32 Onduleur par nom "+
