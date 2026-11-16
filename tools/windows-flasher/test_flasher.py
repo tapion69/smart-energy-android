@@ -248,14 +248,18 @@ class FlasherTests(unittest.TestCase):
         from inspect import getsource
         source=getsource(Flasher._build_vpn)
         configure=source.index("command=self._configure_only).grid(")
-        self.assertIn("row=9,",source[source.index("append.grid("):source.index("append.grid(")+130])
-        self.assertIn("row=10,",source[configure:configure+100])
+        self.assertIn("row=7,",source[source.index("append.grid("):source.index("append.grid(")+130])
+        self.assertIn("row=12,",source[configure:configure+100])
+        self.assertIn("append=ttk.LabelFrame(legacy,",source)
+        self.assertIn("update_jk=ttk.LabelFrame(legacy,",source)
+        self.assertIn("command=self._add_voltronic_only",source)
+        self.assertIn("command=self._patch_jk_vpn",source)
         layout=getsource(Flasher._build)
-        for action in ("_flash_vpn","_add_voltronic_only","_flash_jk",
+        for action in ("_flash_vpn","_flash_jk",
                        "_flash_voltronic","_configure_voltronic_only"):
             self.assertIn("command=self."+action+")",layout)
-        # Main flashing and safe Voltronic-append actions are pinned;
-        # the risky full-reconfiguration remains scrollable and separate.
+        # Main flashing stays pinned; legacy fixes and full reconfiguration
+        # are still available from the collapsed expert section.
         self.assertIn("vpn.actions",layout)
         self.assertNotIn("command=self._configure_only",layout)
 
