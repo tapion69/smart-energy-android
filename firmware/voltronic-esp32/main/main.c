@@ -14,6 +14,7 @@
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include "esp_mac.h"
+#include "mdns.h"
 #include "esp_sntp.h"
 #include "esp_system.h"
 #include "esp_log.h"
@@ -1428,6 +1429,19 @@ static void ota_postboot_validate_task(void *unused){
 /* Local discovery broadcasts contain only public identity; never secrets, IP,
  * MAC or telemetry. Receiver must authenticate with X-Setup-Code before relay.
  * A stable hardware ID is separate from the customizable display name. */
+static void setup_mdns_discovery(void){
+    uint8_t mac[6]={0};
+    if(esp_read_mac(mac,ESP_MAC_WIFI_STA)!=ESP_OK)return;
+    char host[24]={0},instance[64]={0};
+    snprintf(host,sizeof(host),"sevolt-%02x%02x%02x",mac[3],mac[4],mac[5]);
+    snprintf(instance,sizeof(instance),"%s (%s)",cfg.display_name,host);
+    esp_err_t err=mdns_init();
+    if(err!=ESP_OK && err!=ESP_ERR_INVALID_STATE)return;
+    mdns_hostname_set(host);
+    mdns_instance_name_set(instance);
+    mdns_service_add(instance,"_http","_tcp",VT_HTTP_PORT,NULL,0);
+    mdns_service_txt_item_set("_http","_tcp","family","voltronic");
+}
 static void discovery_broadcast_task(void *arg){
     (void)arg;
     int fd=socket(AF_INET,SOCK_DGRAM,IPPROTO_UDP);
@@ -1467,6 +1481,7 @@ void app_main(void){
         usb_provision();return;
     }
     wifi_start();
+    setup_mdns_discovery();
     xTaskCreate(discovery_broadcast_task,"se-discover",4096,NULL,2,NULL);
     /* Network time only for UTC-dated QED/QEM/QEY/QLD/QLM/QLY.
        The serial reader does not depend on Internet or an NTP response. */
