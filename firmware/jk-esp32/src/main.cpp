@@ -922,6 +922,7 @@ void setup() {
   const char *headerKeys[] = {"X-Setup-Code","X-OTA-Confirmed","X-Image-SHA256"};
   http.collectHeaders(headerKeys, 3);
   http.on("/api/v1/info", HTTP_GET, onInfo);
+  http.on("/api/v1/discovery/proof",HTTP_GET,[]{if(requireControl())onInfo();});
   http.on("/api/v1/bms", HTTP_GET, onConfiguredBms);
   http.on("/api/v1/bms/scan", HTTP_GET, onScan);
   http.on("/api/v1/bms", HTTP_PUT, onSaveBms);
