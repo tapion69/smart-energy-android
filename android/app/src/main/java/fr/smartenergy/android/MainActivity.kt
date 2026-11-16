@@ -1036,11 +1036,11 @@ class MainActivity : Activity() {
 
         // Three equal inverter slots; preserve the original INV1 storage keys.
         val inverter=section(advanced,"Expert · Onduleurs 1 / 2 / 3 (configuration manuelle)",false)
-        add(inverter,label("Chaque emplacement accepte Voltronic / Axpert, SunSpec Modbus TCP ou "+
-            "Deye. En VPN, le port est enregistré sur la passerelle avant le test FC03. "+
-            "L'adresse Modbus doit avoir été autorisée initialement par USB dans le flasher. "+
-            "Les équipements Deye sans Modbus TCP/SunSpec compatible ne sont pas pris en charge. "+
-            "Aucune commande d'écriture n'est envoyée.",12f,color=subdued))
+        add(inverter,label("Le VPN découvre uniquement les ESP32 Onduleur par nom et code. "+
+            "Pour un Deye, IP de la clé Wi-Fi, port et esclave seront configurés "+
+            "dans l'ESP32 Onduleur depuis l'APK. En attendant le firmware ESP "+
+            "compatible, ces valeurs restent des brouillons sauvegardés localement, "+
+            "sans connexion Deye validée.",12f,color=subdued))
         for(slot in 1..3) {
             val panel=section(inverter,"Onduleur $slot · configuration et association",false)
             val prefix=if(slot==1)"inverter_probe_" else "inverter_${slot}_"
@@ -1053,11 +1053,11 @@ class MainActivity : Activity() {
                 setTextColor(normal)
             }
             val sun=RadioButton(this).apply {
-                text="SunSpec — Modbus TCP (FC03)"
+                text="SunSpec — firmware ESP32 en développement"
                 setTextColor(normal)
             }
             val deye=RadioButton(this).apply {
-                text="Deye — détection SunSpec si compatible (expérimental)"
+                text="Deye — clé Wi-Fi (firmware ESP32 en développement)"
                 setTextColor(normal)
             }
             types.addView(vol)
@@ -1069,30 +1069,40 @@ class MainActivity : Activity() {
                 else -> vol.isChecked=true
             }
             add(panel,types,5)
-            val ip=input("Adresse IP locale · Onduleur $slot")
-            ip.setText(prefs.getString(prefix+"ip","") ?: "")
+            val ip=input("IP de l'ESP32 lecteur (Voltronic), ou de la clé Deye")
+            ip.setText(if(selected=="voltronic") prefs.getString(prefix+"ip","") ?: ""
+                else prefs.getString("deye_${slot}_dongle_ip","") ?: "")
             add(panel,ip,6)
             val port=input("Port TCP : 18081 (Voltronic) ou 502 (Modbus)")
             port.inputType=android.text.InputType.TYPE_CLASS_NUMBER
-            port.setText(prefs.getInt(prefix+"port",
-                if(selected=="voltronic")18081 else 502).toString())
+            port.setText(if(selected=="voltronic")
+                prefs.getInt(prefix+"port",18081).toString()
+                else prefs.getInt("deye_${slot}_port",502).toString())
             add(panel,port,6)
             val code=input("Code ESP32 Voltronic (8–32 caractères ; vide si enregistré)",true)
             add(panel,code,6)
             val unit=input("Adresse esclave Modbus (1 par défaut)")
             unit.inputType=android.text.InputType.TYPE_CLASS_NUMBER
-            unit.setText(prefs.getInt(prefix+"unit",1).toString())
+            unit.setText(prefs.getInt("deye_${slot}_unit",1).toString())
             add(panel,unit,6)
-            vol.setOnClickListener { port.setText("18081") }
-            sun.setOnClickListener { port.setText("502") }
-            deye.setOnClickListener { port.setText("502") }
+            vol.setOnClickListener {
+                ip.setText(prefs.getString(prefix+"ip","") ?: "")
+                port.setText(prefs.getInt(prefix+"port",18081).toString())
+            }
+            fun selectDeyeSettings() {
+                ip.setText(prefs.getString("deye_${slot}_dongle_ip","") ?: "")
+                port.setText(prefs.getInt("deye_${slot}_port",502).toString())
+                unit.setText(prefs.getInt("deye_${slot}_unit",1).toString())
+            }
+            sun.setOnClickListener {selectDeyeSettings()}
+            deye.setOnClickListener {selectDeyeSettings()}
             val feedback=label(
                 if(voltronicFleet.configured(slot))
                     "Onduleur $slot : enregistré (${selected.uppercase()})"
                 else "Onduleur $slot : aucun équipement associé",
                 12f,false,subdued)
             add(panel,feedback,6)
-            add(panel,action("Tester et enregistrer Onduleur $slot") {
+            add(panel,action("Tester Voltronic / mémoriser Deye · Onduleur $slot") {
                 val host=ip.text.toString().trim()
                 val kind=when {
                     deye.isChecked -> "deye"
@@ -1103,15 +1113,20 @@ class MainActivity : Activity() {
                 val slave=unit.text.toString().trim().toIntOrNull()
                 val typedCode=code.text.toString()
                 val secret=if(typedCode.isNotBlank())typedCode else auxiliaryCode(codeKey)
-                val useRemoteModbus=kind!="voltronic" && vpnConnected() &&
-                    allowedTailnetIp(prefs.getString("remote_gateway_ip","") ?: "") &&
-                    validGatewayToken(storedGatewayToken())
-                if((!useRemoteModbus && !SunSpecReadOnly.isPrivateIPv4(host)) ||
+                if(!SunSpecReadOnly.isPrivateIPv4(host) ||
                     tcpPort==null || tcpPort !in 1..65535 ||
                     (kind=="voltronic" && secret.length !in 8..32) ||
                     (kind!="voltronic" && (slave==null || slave !in 0..247))) {
-                    feedback.text="Vérifie l'IP privée, le port, le code Voltronic ou l'adresse Modbus."
-                }else{
+                    feedback.text="Vérifie IP privée, port, code lecteur ou adresse esclave."
+                } else if(kind!="voltronic") {
+                    prefs.edit().putString("deye_${slot}_dongle_ip",host)
+                        .putInt("deye_${slot}_port",tcpPort)
+                        .putInt("deye_${slot}_unit",slave!!)
+                        .putString("deye_${slot}_type",kind)
+                        .apply()
+                    feedback.text="Paramètres ${kind.uppercase()} sauvegardés. "+
+                        "L'envoi à l'ESP32 Onduleur attend son firmware compatible."
+                } else {
                     feedback.text="Onduleur $slot : test réseau en lecture seule…"
                     inverterWorker.execute {
                         val result=try {
@@ -1121,24 +1136,7 @@ class MainActivity : Activity() {
                                 val found=VoltronicReadOnlyClient.probe(host,secret,tcpPort,wifi)
                                 if(typedCode.isNotBlank())saveAuxiliaryCode(codeKey,secret)
                                 "Voltronic détecté : "+found.optString("version","version inconnue")
-                            } else {
-                                val found=if(useRemoteModbus) {
-                                    val gateway=prefs.getString("remote_gateway_ip","") ?: ""
-                                    val token=storedGatewayToken()
-                                    val vpn=connectivity.allNetworks.firstOrNull { net ->
-                                        connectivity.getNetworkCapabilities(net)?.hasTransport(
-                                            NetworkCapabilities.TRANSPORT_VPN)==true
-                                    } ?: throw IllegalStateException("Tailscale indisponible")
-                                    val route=VoltronicVpnRoute(gateway,token,vpn)
-                                    // Server confirms the new port before a Modbus read.
-                                    VoltronicVpnReadOnlyClient.configureInverterPort(
-                                        slot,tcpPort,route)
-                                    SunSpecReadOnly.discoverViaVpn(slot,slave!!,route)
-                                }else SunSpecReadOnly.discover(host,tcpPort,slave!!)
-                                (if(kind=="deye")"Deye compatible SunSpec" else "SunSpec détecté")+
-                                    " : ${found.models.size} modèle(s) reconnus"+
-                                    (if(useRemoteModbus)" via VPN" else " en local")
-                            }
+                            } else throw IllegalStateException("ESP Onduleur non compatible")
                             prefs.edit().putString(prefix+"ip",host)
                                 .putString(prefix+"type",kind)
                                 .putInt(prefix+"port",tcpPort)
@@ -1158,47 +1156,6 @@ class MainActivity : Activity() {
                     }
                 }
             },8)
-            add(panel,action("Appliquer le port au VPN · Onduleur $slot") {
-                val tcpPort=port.text.toString().trim().toIntOrNull()
-                if(tcpPort==null || tcpPort !in 1..65535) {
-                    feedback.text="Port TCP invalide : choisir entre 1 et 65535."
-                } else if(!vpnConnected()) {
-                    feedback.text="Active Tailscale pour configurer le port VPN."
-                } else {
-                    val gateway=prefs.getString("remote_gateway_ip","") ?: ""
-                    val token=storedGatewayToken()
-                    val vpn=connectivity.allNetworks.firstOrNull { net ->
-                        connectivity.getNetworkCapabilities(net)?.hasTransport(
-                            NetworkCapabilities.TRANSPORT_VPN)==true
-                    }
-                    if(!allowedTailnetIp(gateway) || !validGatewayToken(token) || vpn==null) {
-                        feedback.text="Configure d'abord la passerelle VPN et son token."
-                    } else {
-                        AlertDialog.Builder(this)
-                            .setTitle("Port VPN · Onduleur $slot")
-                            .setMessage("Enregistrer le port TCP $tcpPort dans la passerelle VPN "+
-                                "pour l'Onduleur $slot ? Les autres onduleurs, le Wi-Fi et "+
-                                "l'identité Tailscale seront conservés. "+
-                                "Attention : un port Modbus ne fonctionne pas avec un relais HTTP.")
-                            .setNegativeButton("Annuler",null)
-                            .setPositiveButton("Appliquer") { _,_ ->
-                                feedback.text="Configuration du port VPN…"
-                                val route=VoltronicVpnRoute(gateway,token,vpn)
-                                inverterWorker.execute {
-                                    val result=try {
-                                        VoltronicVpnReadOnlyClient.configureInverterPort(
-                                            slot,tcpPort,route)
-                                        "Port VPN $tcpPort confirmé pour Onduleur $slot."
-                                    }catch(ex:Exception) {
-                                        "Configuration VPN refusée : "+
-                                            (ex.message?.take(130) ?: ex.javaClass.simpleName)
-                                    }
-                                    runOnUiThread {feedback.text=result}
-                                }
-                            }.show()
-                    }
-                }
-            },8)
             add(panel,action("Supprimer l'association · Onduleur $slot") {
                 AlertDialog.Builder(this)
                     .setTitle("Libérer Onduleur $slot ?")
@@ -1215,6 +1172,10 @@ class MainActivity : Activity() {
                             .remove(prefix+"unit")
                             .remove(prefix+"validated")
                             .remove("inverter_${slot}_name")
+                            .remove("deye_${slot}_dongle_ip")
+                            .remove("deye_${slot}_port")
+                            .remove("deye_${slot}_unit")
+                            .remove("deye_${slot}_type")
                             .remove(codeKey).apply()
                         ip.setText("")
                         port.setText("18081")
