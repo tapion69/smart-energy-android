@@ -274,6 +274,9 @@ class Flasher(tk.Tk):
         self.inverter_type = tk.StringVar(value="voltronic")
         self.volt_fields: dict[str, tk.StringVar] = {}
         self.fields: dict[str, tk.StringVar] = {}
+        self.gateway_token_entry: ttk.Entry | None = None
+        self.gateway_token_visible = False
+        self.gateway_token_toggle: ttk.Button | None = None
         self._build()
         self.after(100, self._drain)
 
@@ -484,7 +487,19 @@ class Flasher(tk.Tk):
         variable = tk.StringVar()
         self.fields[key] = variable
         self._label(frame, text, row)
-        self._entry(frame, variable, row, password=password)
+        field=self._entry(frame, variable, row, password=password)
+        if key=="gateway_token":
+            self.gateway_token_entry=field
+
+    def _toggle_gateway_token_visibility(self) -> None:
+        """Explicit opt-in visibility; token remains concealed by default."""
+        if self.gateway_token_entry is None:
+            return
+        self.gateway_token_visible=not self.gateway_token_visible
+        self.gateway_token_entry.configure(show="" if self.gateway_token_visible else "•")
+        if self.gateway_token_toggle is not None:
+            self.gateway_token_toggle.configure(
+                text="Masquer le token" if self.gateway_token_visible else "Afficher le token")
 
     def _generate_gateway_token(self) -> None:
         """Create a fresh cryptographically secure credential locally, never log it."""
@@ -551,7 +566,10 @@ class Flasher(tk.Tk):
         ttk.Button(token_actions,text="Générer un nouveau token",
                    command=self._generate_gateway_token).pack(side="left",padx=(0,8))
         ttk.Button(token_actions,text="Copier le token",
-                   command=self._copy_gateway_token).pack(side="left")
+                   command=self._copy_gateway_token).pack(side="left",padx=(0,8))
+        self.gateway_token_toggle=ttk.Button(token_actions,text="Afficher le token",
+                   command=self._toggle_gateway_token_visibility)
+        self.gateway_token_toggle.pack(side="left")
         ttk.Label(connection,text="Tu peux aussi saisir ton propre token. Pour une passerelle déjà associée, conserve l'ancien : générer un autre token ne modifie PAS l'ESP.",
                   wraplength=670).grid(row=6,column=0,columnspan=3,sticky="w",padx=8,pady=(0,6))
 
