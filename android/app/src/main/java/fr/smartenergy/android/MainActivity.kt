@@ -103,6 +103,7 @@ class MainActivity : Activity() {
     private lateinit var physicalRecoverBtn: Button
     private lateinit var lanDiscoverBtn: Button
     private var discoverListener: NsdManager.DiscoveryListener? = null
+    private data class LocalReader(val family:String,val name:String,val ip:String,val port:Int)
     private val chosen = linkedSetOf<String>() // Uncommitted selection, UI thread only.
     private val registeredBms = linkedSetOf<String>() // Confirmed by ESP32 /api/v1/bms.
     private var lastScannedBms = emptyList<JkBmsRegistry.ScanItem>()
@@ -847,6 +848,14 @@ class MainActivity : Activity() {
         add(dashboardPage, label("Mesures expérimentales. Les réglages du BMS ne peuvent être modifiés qu'après un déverrouillage explicite.", 12f, color = subdued), 8)
         val advanced=configurationPage
         add(advanced,label("Configuration et associations",25f,true),18)
+        val quick=section(advanced,"Ajouter un équipement — recherche automatique",true)
+        add(quick,label("1. Branche un ESP Smart Energy déjà préparé avec son Wi-Fi. "+
+            "2. Lance la recherche locale. 3. Sélectionne son nom puis entre le code "+
+            "de lecture défini au flash. Aucun IP ni appui BOOT requis.",12f,color=subdued))
+        add(quick,action("Rechercher mes équipements") { discoverHomeLan() },8)
+        add(quick,label("Compatible avec ESP JK et ESP Voltronic récents. "+
+            "Deye sera disponible lorsque son firmware sera validé. "+
+            "Conserve le menu expert pour les anciens lecteurs.",12f,color=subdued))
         // All JK settings live in one group with one ESP 1/2/3 selector.
         // Existing pairings, per-reader preferences and BMS registry are preserved.
         val jkConfiguration=section(advanced,"Batteries JK · ESP 1 / ESP 2 / ESP 3",true)
@@ -858,7 +867,7 @@ class MainActivity : Activity() {
         add(readers,readerHeader,8)
         refreshReaderSelector()
 
-        val lan = section(jkConfiguration, "Connexion quotidienne · IP et code ESP32 JK",true)
+        val lan = section(jkConfiguration, "Expert · IP et code ESP32 JK (anciens lecteurs)",false)
         add(lan, label("Pour un lecteur déjà préparé dans le flasher, saisis son IP et son code, puis connecte-le. L'association BOOT n'est pas nécessaire dans ce cas.",12f,color=subdued))
         lanIp = input("Adresse IP locale de l'ESP32 (ex. 192.168.1.50)")
         lanIp.setText(prefs.getString("local_ip", "") ?: "")
@@ -873,7 +882,7 @@ class MainActivity : Activity() {
             connectHomeLan()
         }
         add(lan, lanConnectBtn)
-        lanDiscoverBtn = action("Rechercher sur mon Wi-Fi") { discoverHomeLan() }
+        lanDiscoverBtn = action("Rechercher mes équipements") { discoverHomeLan() }
         add(lan, lanDiscoverBtn)
         add(lan, label("Le code est chiffré dans l'application après une connexion réussie. Pour le remplacer sur l'ESP32, utilise l'option ci-dessous.",12f,color=subdued))
 
@@ -1023,7 +1032,7 @@ class MainActivity : Activity() {
 
         // First inverter interoperability test: authenticated Voltronic GET or
         // SunSpec Modbus/TCP FC03 discovery, never changes inverter settings.
-        val inverter=section(advanced,"Onduleurs Voltronic / SunSpec — lecture seule")
+        val inverter=section(advanced,"Expert · Onduleurs Voltronic / SunSpec (configuration manuelle)")
         add(inverter,label("Détection expérimentale sur le Wi-Fi local. "+
             "Voltronic nécessite un ESP32-S3 équipé d'une interface RS232 "+
             "adaptée ; SunSpec lit directement les modèles Modbus TCP d'un "+
@@ -1110,8 +1119,8 @@ class MainActivity : Activity() {
         val voltVpn=section(advanced,"Accès VPN Voltronic · ESP32 Tailscale")
         add(voltVpn,label("Depuis Internet : Tailscale Android vers l'ESP32 VPN, "+
             "puis uniquement les lectures de INV1/INV2/INV3 sur le réseau local. "+
-            "L'ESP32 VPN doit être configuré dans le flasher avec les IP et "+
-            "codes Voltronic. Écritures distantes interdites par défaut ; "+
+            "La passerelle VPN peut retrouver les nouveaux ESP grâce aux noms et "+
+            "codes saisis au flash. Les IP fixes restent en mode expert. "+
             "possible seulement après installation du firmware VPN compatible "+
             "et autorisation physique USB. Les confirmations et contrôles "+
             "de valeurs restent obligatoires.",12f,color=subdued))
