@@ -136,7 +136,7 @@ int main(void) {
     assert(!se_write_deye_key("raw-register:103"));
     assert(!se_write_deye_key("HOLDING_WRITE_1"));
     assert(!se_write_deye_key(""));
-    assert(!se_write_deye_key("fetch_url"));
+    assert(!se_write_deye_key("fetch/url"));
     /* Syntax-only: reader must still reject any semantic key not on its own
        strict per-firmware allowlist. */
     assert(se_write_route("/api/v1/jk/4/write",true).kind==SE_WRITE_DENIED);
