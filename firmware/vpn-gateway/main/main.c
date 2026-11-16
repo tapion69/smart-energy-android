@@ -940,9 +940,13 @@ static esp_err_t inverter_modbus_read(httpd_req_t *req){
     if(!authorized(req))
         return deny(req,"401 Unauthorized","{\"error\":\"invalid_gateway_token\"}");
     int slot=0;
-    if(strcmp(req->uri,"/api/v1/inverters/1/modbus")==0)slot=1;
-    else if(strcmp(req->uri,"/api/v1/inverters/2/modbus")==0)slot=2;
-    else if(strcmp(req->uri,"/api/v1/inverters/3/modbus")==0)slot=3;
+    for(int candidate=1;candidate<=3;candidate++){
+        char endpoint[48];snprintf(endpoint,sizeof endpoint,
+            "/api/v1/inverters/%d/modbus",candidate);
+        size_t n=strlen(endpoint);
+        if(strncmp(req->uri,endpoint,n)==0 &&
+           (req->uri[n]==0 || req->uri[n]=='?')){slot=candidate;break;}
+    }
     if(!slot || !personal ||
        strcmp(personal->voltronic_protocol[slot-1],"modbus")!=0 ||
        !se_is_private_ipv4(personal->voltronic_ip[slot-1]))
