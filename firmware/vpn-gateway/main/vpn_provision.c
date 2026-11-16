@@ -164,34 +164,21 @@ static bool parse_config(const char *line,se_vpn_config_t *out) {
         if(has_code)any_target=true;
     }
     for(int i=0;i<3 && ok;++i) {
-        char ipkey[16],codekey[16],namekey[16],protokey[20];
+        char ipkey[16],codekey[16],namekey[16];
         snprintf(namekey,sizeof namekey,"volt%d_name",i+1);
         snprintf(ipkey,sizeof ipkey,"volt%d_ip",i+1);
         snprintf(codekey,sizeof codekey,"volt%d_code",i+1);
-        snprintf(protokey,sizeof protokey,"volt%d_proto",i+1);
         ok=text_field(doc,ipkey,result.voltronic_ip[i],sizeof(result.voltronic_ip[i]),false,0) &&
            text_field(doc,namekey,result.voltronic_name[i],sizeof(result.voltronic_name[i]),false,0) &&
-           text_field(doc,codekey,result.voltronic_code[i],sizeof(result.voltronic_code[i]),false,0) &&
-           text_field(doc,protokey,result.voltronic_protocol[i],sizeof(result.voltronic_protocol[i]),false,0);
+           text_field(doc,codekey,result.voltronic_code[i],sizeof(result.voltronic_code[i]),false,0);
         if(!ok)break;
         bool has_ip=result.voltronic_ip[i][0]!=0,has_code=result.voltronic_code[i][0]!=0;
         bool has_name=result.voltronic_name[i][0]!=0;
-        bool modbus=strcmp(result.voltronic_protocol[i],"modbus")==0;
-        if(result.voltronic_protocol[i][0] && !modbus &&
-           strcmp(result.voltronic_protocol[i],"voltronic")!=0)ok=false;
-        if(modbus) {
-            /* A Modbus inverter is addressed only by its USB-approved fixed
-             * RFC1918 address. Its logger has no Smart Energy read code. */
-            if(!has_ip || !se_is_private_ipv4(result.voltronic_ip[i]) ||
-               has_code)ok=false;
-            if(ok)any_target=true;
-        } else {
-            if((has_ip && !se_is_private_ipv4(result.voltronic_ip[i])) ||
-               (has_code!=(has_ip||has_name)) ||
-               (has_code && (strlen(result.voltronic_code[i])<8 ||
-                             strlen(result.voltronic_code[i])>32)))ok=false;
-            if(has_code)any_target=true;
-        }
+        if((has_ip && !se_is_private_ipv4(result.voltronic_ip[i])) ||
+           (has_code!=(has_ip||has_name)) ||
+           (has_code && (strlen(result.voltronic_code[i])<8 ||
+                         strlen(result.voltronic_code[i])>32)))ok=false;
+        if(has_code)any_target=true;
     }
     if(!any_target)ok=false;
     const cJSON *writes=cJSON_GetObjectItemCaseSensitive(doc,"remote_writes_enabled");
