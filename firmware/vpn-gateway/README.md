@@ -63,3 +63,14 @@ Le flasheur d'origine pouvait écrire le firmware par une interface **CH343 USB-
 - Remplacer tout SSID `*_5GHz` par celui du **réseau 2,4 GHz**. Le S3 n'a pas de radio Wi-Fi 5 GHz ; un libellé de réseau ne prouve pas toujours sa bande réelle, d'où un avertissement plutôt qu'un blocage dans le programme Windows.
 - Aucun `erase_flash` automatique ni changement de configuration JK/BMS. Ne pas reflasher l'ESP VPN classique qui fonctionne.
 - La validation réussie exige le retour USB `SEVPN_OK_REBOOT` et ensuite la connexion Wi-Fi/Tailscale : une compilation seule n'en est pas la preuve.
+
+
+## Découverte automatique par nom — prototype de développement
+
+Pour préparer le lecteur à distance sans connaître son adresse IP DHCP future, le flasheur Windows accepte désormais les champs `jk1_name`... `jk3_name` et `volt1_name`... `volt3_name` avec le code correspondant ; les champs `*_ip` sont facultatifs. Les anciens lecteurs en IP fixe conservent leurs routes inchangées.
+
+Les nouveaux ESP JK et Voltronic annoncent périodiquement leur **nom choisi au flash**, leur famille et un identifiant matériel stable sur le réseau local. L'annonce est **signée HMAC-SHA256** avec le code de lecture et l'IP locale ; elle ne comporte aucun secret brut. La passerelle VPN vérifie cette signature avant d'utiliser le code pour confirmer l'identité et communiquer via ses routes HTTP/Tailscale déjà autorisées. En cas de plusieurs identités sous un même nom/slot, le slot est désactivé de manière conservatrice jusqu'à intervention physique.
+
+Les noms servent à identifier l'appareil dans l'interface ; ils ne remplacent ni l'identité cryptographique ni le code. Une découverte impossible (filtrage UDP, isolation Wi-Fi, autre sous-réseau) laisse disponibles les IP statiques dans les outils experts. Choisir des codes longs et aléatoires (16–32 caractères recommandés) : les annonces signées permettent une vérification hors ligne des tentatives de code, et la liaison LAN HTTP n'est pas chiffrée.
+
+**Attention :** la passerelle S3 avec découverte, la préparation USB et la reconnexion après DHCP restent expérimentales, non validées sur matériel réel. Ne flasher aucun module VPN de production avant un essai sur une carte de réserve. La découverte n'ajoute **pas** la prise en charge Deye ni l'OTA distante via Tailscale.
