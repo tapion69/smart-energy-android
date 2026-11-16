@@ -40,28 +40,6 @@ object SunSpecReadOnly {
         throw IllegalArgumentException("Chaîne SunSpec non terminée")
     }
 
-    /** SunSpec discovery through the preapproved, fixed-destination VPN FC03
-     * bridge. Identical model parser as direct LAN, no writable registers. */
-    fun discoverViaVpn(slot:Int,unitId:Int,route:VoltronicVpnRoute):SunSpecDiscovery {
-        require(slot in 1..3 && unitId in 0..247)
-        var failure:Exception?=null
-        for(base in BASES) {
-            try {
-                val signature=VoltronicVpnReadOnlyClient.modbusWords(
-                    slot,base,4,unitId,route)
-                if(!isSunS(signature))continue
-                return discoverModels(base) {address,count ->
-                    VoltronicVpnReadOnlyClient.modbusWords(
-                        slot,address,count,unitId,route)
-                }
-            }catch(ex:Exception) {
-                failure=ex
-            }
-        }
-        throw IllegalStateException("Aucun modèle SunSpec trouvé via VPN : "+
-            (failure?.message ?: "signature SunS absente"))
-    }
-
     fun discover(host:String, port:Int=502, unitId:Int=1):SunSpecDiscovery {
         require(isPrivateIPv4(host)) { "Adresse IP LAN privée obligatoire" }
         require(port in 1..65535 && unitId in 0..247)
