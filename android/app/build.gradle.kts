@@ -20,8 +20,8 @@ android {
         applicationId = "fr.smartenergy.android"
         minSdk = 29
         targetSdk = 35
-        versionCode = 63
-        versionName = "0.3.49-dev"
+        versionCode = 64
+        versionName = "0.3.50-dev"
     }
     signingConfigs {
         if (hasStableSigning) {
