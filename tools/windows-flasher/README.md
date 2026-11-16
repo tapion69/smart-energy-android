@@ -1,80 +1,33 @@
-# Smart Energy Flasher — un EXE Windows : JK, VPN et Onduleurs
+# Smart Energy Flasher — préparation par nom (prototype)
 
-**Version expérimentale :** `SmartEnergyFlasher.exe`, sans Python, Git ni ESP-IDF sur Windows. Il contient les firmwares **JK classique**, **VPN classique et VPN ESP32-S3 N16R8**, ainsi que **Voltronic RS232 ESP32-S3 N16R8 lecture seule**.
+Cette version regroupe **3 onglets uniquement** : **ESP32 JK**, **ESP32 VPN** et **Onduleurs**.
+Tous les firmwares disponibles sont précompilés et inclus dans `SmartEnergyFlasher.exe`.
+**Aucune IP locale à prévoir** et aucun fichier `.bin` externe à choisir.
 
-Télécharger l'artefact **`SmartEnergyFlasher-Windows-AllInOne-JK-VPN`** du dernier build réussi du [workflow tout-en-un](https://github.com/tapion69/smart-energy-android/actions/workflows/build-vpn-gateway.yml). Ne plus télécharger les anciens `SmartEnergyVPNFlasher-Windows-ESP32-Firmware-Included` ou `SmartEnergyFlasher-Windows-EXE` : ils n'ont pas les correctifs décrits ici.
+## Préparer un nouveau module
 
-## Utilisation
+1. Brancher **un seul ESP32** au PC, le sélectionner dans la liste de ports COM.
+2. Sélectionner le bon onglet et le matériel. Pour un appareil vierge uniquement, choisir **FACTORY** ; pour mettre à jour un ESP déjà configuré, **APP-ONLY**.
+3. **JK** (ESP32 classique) : saisir un **nom personnalisé**, le Wi-Fi 2,4 GHz du site et un code privé de 8 à 32 caractères. Les BMS pourront être associés ensuite dans l'APK.
+4. **Onduleurs** (ESP32-S3 N16R8) : sélectionner **Voltronic/Axpert**, saisir le nom, le Wi-Fi et le code privé, puis flasher. **Deye** apparaît en préparation mais le flash est bloqué tant que son vrai firmware n'existe pas.
+5. **VPN** (ESP32 classique ou S3) : saisir son Wi-Fi, sa clé d'association Tailscale et son jeton privé. Pour chaque JK et onduleur préparé, renseigner **le même nom et le même code**. L'adresse IP locale reste vide et sera retrouvée après installation par la passerelle.
+6. Contrôler la confirmation USB et les informations de progression. Lors d'une mise à jour APP-ONLY, la NVS, le Wi-Fi et les codes doivent être conservés. **Une mise à jour ne renomme pas un appareil déjà enregistré.**
 
-1. Brancher **un seul ESP32 à la fois** (classique pour JK, classique ou S3 N16R8 pour VPN), avec un câble USB de données.
-2. En haut, sélectionner son port dans le **menu déroulant COM** (l'EXE détecte automatiquement les appareils USB et permet d'actualiser la liste). Un port débranché n'est jamais remplacé silencieusement par un autre.
-3. Choisir l'onglet **ESP32 JK**, **ESP32 VPN** ou **Onduleurs**. Dans VPN, sélectionner obligatoirement **ESP32 classique** ou **ESP32-S3 N16R8** avant le flash. L'onglet Onduleurs propose Voltronic/Axpert S3 (opérationnel en développement) et Deye (en attente d'un firmware validé ; flash désactivé). Aucun `.bin` externe n'est requis.
-4. Sélectionner **FACTORY** pour un **nouvel ESP32 vierge** ou **APP-ONLY** pour mettre à jour un appareil existant, sans effacer volontairement la NVS.
-5. Sur l'onglet **JK**, cliquer `Flasher le lecteur JK`. Sur l'onglet **VPN**, renseigner les champs **Wi-Fi, clé d'association Tailscale, token de passerelle, noms et codes personnels des ESP JK 1 à 3 et onduleurs compatibles (sans IP fixe)**, puis `Flasher et configurer`. Le firmware VPN enregistre les paramètres reçus via le port série dans la NVS.
-6. Lire la confirmation dans le journal ; contrôler ensuite sur le vrai appareil que les connexions Wi-Fi, BLE et/ou Tailscale sont effectives.
+## Sur place
 
-### Deuxième lecteur JK pour les batteries 3 et 4
+Le destinataire connecte ses ESP à l'alimentation et au Wi-Fi connu. Dans l'application **Smart Energy** : **Configuration → Ajouter un équipement → Rechercher mes équipements**. Il choisit le nom du lecteur et saisit son code une fois. La découverte JK et Voltronic se fait sur le **réseau local**. Pour le VPN, utiliser l'adresse Tailscale déjà connue et le jeton de passerelle.
 
-- Nouveau lecteur ESP32 classique : onglet **JK**, mode **FACTORY 0x0000**, fichier intégré `smart-jk-esp32-factory.bin`.
-- Ancien lecteur déjà configuré : mode **APP-ONLY 0x10000** ; **ne jamais** choisir FACTORY.
-- Nouveau JK vierge : renseigner Wi-Fi, nom personnalisé et code de lecture lors du flash USB. Dans l'APK, cliquer **Rechercher mes équipements**, choisir le lecteur et saisir ce code. La configuration des BMS reste à effectuer dans l'APK, mais aucune association BOOT n'est nécessaire pour cet ESP préconfiguré.
+**Limites importantes :** les annonces LAN nécessitent un réseau qui autorise les broadcasts/mDNS ; les lecteurs doivent pouvoir atteindre le VPN sur le LAN. Les noms sont des étiquettes, **pas des secrets** : utiliser des codes longs et aléatoires (16–32 caractères recommandé). Le VPN vérifie une signature cryptographique avant d'accepter une annonce et d'interroger l'appareil.
 
-### Passerelle VPN
+## Sécurité du flash
 
-- L'onglet VPN montre **de vrais champs de saisie** pour le Wi-Fi/Tailscale et les trois lecteurs, organisés en blocs indépendants pour éviter leur disparition sous les boutons.
-- Le firmware précompilé `smart-energy-vpn-USB-FACTORY-ESP32-0x0.bin` ou `smart-energy-vpn-USB-APP-ESP32-0x10000.bin` est intégré à l'EXE.
-- Le token de passerelle est distinct du code JK ; la clé Tailscale doit être encore valable pour l'association.
-- L'option `Configurer via USB sans reflasher` exige l'autorisation physique BOOT sur un firmware universel déjà installé.
-- **Attention à la migration de l'ancien VPN en service :** même si APP-ONLY n'efface pas volontairement la NVS, le partitionnement, les identifiants compilés dans l'ancienne image et l'identité TailTiny peuvent être incompatibles. Faire le test sur un deuxième ESP32 avant de convertir le VPN fonctionnel.
+- **FACTORY efface/remplace potentiellement le partitionnement : seulement pour un module neuf.**
+- **APP-ONLY** ne doit pas toucher à la NVS ; les mises à jour JK imposent une sauvegarde NVS locale et une vérification des partitions avant écriture.
+- Les mots de passe Wi-Fi, codes et clés Tailscale sont transférés **uniquement via USB physique** pour cette première préparation ; ils ne sont pas intégrés aux firmwares publiés.
+- Le S3 Voltronic nécessite une interface **MAX3232 RS232 3,3 V** : ne jamais brancher la liaison RS232 directement sur des broches GPIO.
+- Aucune écriture automatique de paramètres, aucune commande brute, aucune activation distante des écritures VPN n'est introduite par la découverte.
+- Les nouveaux firmwares et le fonctionnement distant nécessitent encore **une vérification sur ESP physiques de réserve**. Ne pas écraser un VPN fonctionnel avant ces essais.
+- Deye et la mise à jour OTA du lecteur à travers le tunnel VPN ne sont pas livrés dans ce pack.
 
-### Options expertes
-
-Chaque onglet dispose d'un bouton `Options avancées` permettant de sélectionner un autre fichier `.bin`, mais ce n'est **pas nécessaire** en usage normal. N'utiliser que les fichiers du projet et vérifier leur provenance.
-
-## Correctifs du flasheur
-
-- L'exécutable `--windowed` créait `sys.stdout=None` et `sys.stderr=None`, ce qui provoquait `'NoneType' object has no attribute 'flush'` dans esptool. Le flasheur initialise désormais correctement ces flux avant le flash.
-- Le port COM n'a plus à être saisi manuellement : liste déroulante et bouton **Actualiser**, avec description USB des ports.
-- Une **barre de progression toujours visible sous le menu COM** suit le flash JK/VPN. Pendant l'écriture, le pourcentage affiché provient des informations réelles d'esptool ; tant que la connexion et la préparation sont en cours, elle s'anime sans inventer de pourcentage. Pour le VPN, l'installation n'est indiquée comme terminée qu'après la confirmation USB `SEVPN_OK_REBOOT` de l'enregistrement NVS. En cas d'échec, la barre reste incomplète et le journal indique l'erreur.
-- La disposition de l'onglet VPN a été corrigée : les boutons radio de sélection ne masquent plus les champs.
-- JK et VPN sont désormais distribués **dans le même EXE**, sans second téléchargement.
-- Aucune commande `erase_flash` n'est exécutée par le programme.
-
-## Sécurité et limites
-
-Ces versions **ne sont pas encore validées sur les ESP32 physiques**. Les tests et compilations automatisés ne prouvent pas la réussite de l'association Tailscale ou de l'écriture USB ; vérifier sur une carte de réserve. Les configurations VPN restent actuellement stockées dans une **NVS non chiffrée**, donc sensible à l'accès physique. Ne pas publier de clés Tailscale, codes ou mots de passe dans les journaux ou captures.
-
-**JK : ESP32 classique uniquement. VPN : images séparées ESP32 classique et ESP32-S3 N16R8.** La vérification des en-têtes de puce et l'option `--chip` d'esptool empêchent de mélanger les familles ; ne contourne pas ce contrôle avec un fichier externe. Le nouveau firmware S3 n'a pas encore été validé matériellement.
-
-## Préparation du nouveau VPN ESP32-S3
-
-- Télécharger l'artefact `SmartEnergyFlasher-Windows-AllInOne-JK-VPN` du dernier workflow **réussi** (pas un ancien EXE sans S3).
-- Onglet VPN → `ESP32-S3 N16R8` → `FACTORY` pour une carte neuve uniquement.
-- Vérifier que Windows voit bien le port USB de données de la **nouvelle** carte (le port peut changer après flash).
-- Les images S3 sont incluses dans l'EXE : Factory à 0x0 et APP-ONLY à 0x10000, 16 MB flash, **aucun erase_flash**.
-- Les secrets Tailscale/Wi-Fi sont transmis uniquement par USB ; ne jamais les enregistrer dans Git ni les envoyer en capture.
-- Ne pas utiliser ce nouveau firmware pour écraser ton ESP32 VPN actuel, qui demeure fonctionnel. Les connexions Tailscale, la résilience et l'USB natif doivent encore être vérifiés en situation réelle.
-
-## Nouveau lecteur Voltronic ESP32-S3 (prototype — sans modification des onduleurs)
-
-- Choisir **Onduleurs → Voltronic/Axpert** dans le flasheur, sélectionner une **carte S3 N16R8 distincte** de la passerelle VPN.
-- Pour une carte neuve, mode **FACTORY** (bootloader S3 à 0x0). Pour une mise à jour sur partitionnement compatible seulement, **APP-ONLY à 0x10000**, jamais `erase_flash`.
-- Configurer le Wi-Fi 2,4 GHz et un code de lecture personnel de 8–32 caractères. Le programme attend la réponse USB native `SEVOLT_READY_V1`, puis la confirmation `SEVOLT_OK_REBOOT`. Aucun mot de passe n'est affiché dans le journal.
-- Une fois le flash et le Wi-Fi validés, l'APK Android 0.3.20-dev peut tester `GET http://<adresse privée>:18081/api/v1/info` en lecture seule.
-- Pour les mesures Voltronic, prévoir **un convertisseur MAX3232 3,3 V** et le câble du vrai port RS232 PC de l'onduleur. **Ne jamais raccorder une broche RS232 directement au GPIO 3,3 V !** Le branchement et les trames doivent être vérifiés avant une utilisation prolongée.
-- L'ajout de SunSpec dans Android est une découverte Modbus TCP FC03 locale, distincte du firmware Voltronic. Il ne nécessite pas cet ESP quand l'onduleur fournit lui-même Modbus/TCP.
-- Pour reconfigurer le S3 sans reflasher : redémarrer, puis maintenir BOOT 3 s pendant la fenêtre initiale de 9 s, avant d'utiliser le bouton **Configurer via USB**.
-
-Toutes les fonctions S3 sont expérimentales et **ne sont pas validées sur les cartes réelles** ; ne jamais écraser le VPN classique qui fonctionne. Voir aussi `docs/READONLY-INVERTERS-SUNSPEC-VOLTRONIC-S3.md`.
-
-
-## Découverte automatique par nom et code (branche de test)
-
-- Chaque lecteur neuf a son nom librement choisi au flash USB. Le VPN retrouve son adresse locale à partir d'une annonce réseau **signée HMAC-SHA256** avec le code du lecteur, puis vérifie son identité avant tout relais. L'IP est inutile à la préparation des ESP à expédier.
-- Les noms sont limités à **32 octets UTF-8** et doivent être distincts pour les lecteurs du même type. Choisir un code de lecture aléatoire et suffisamment long, idéalement 16–32 caractères, car il sert aussi à signer les annonces de découverte.
-- Le téléphone doit être sur le même Wi-Fi local que les lecteurs au moment de leur première association. Cliquer **Rechercher mes équipements**, sélectionner le nom, saisir le code **une fois**. L'ancien formulaire IP reste accessible dans le menu Expert.
-- Le VPN conserve son adresse Tailscale habituelle ; aucune recherche VPN n'est nécessaire. Le fonctionnement distant est indépendant de l'APK associée localement.
-- **Compatibilité** : les anciens ESP restent fonctionnels avec leurs IP fixes et un firmware APP-ONLY, sans reconfiguration forcée. Ne pas remplacer les cartes de production avant une validation matérielle du nouveau protocole.
-- **Deye** : firmware en développement, aucun binaire Deye précompilé ici. Ne pas sélectionner une image Voltronic pour un Deye.
-- Le flash/USB des **JK et Voltronic préconfigurés n'a pas encore été validé sur le matériel distant**. Les tests logiciels, la compilation et le dépannage réseau restent distincts d'un essai physique.
-- Référence technique : [Découverte universelle](../../docs/UNIVERSAL-READER-DISCOVERY-DEV.md).
+La compilation Windows tout-en-un est générée par [GitHub Actions](https://github.com/tapion69/smart-energy-android/actions/workflows/build-vpn-gateway.yml).
+La conception technique de la découverte figure dans [UNIVERSAL-READER-DISCOVERY-DEV.md](../../docs/UNIVERSAL-READER-DISCOVERY-DEV.md).
