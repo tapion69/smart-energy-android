@@ -527,35 +527,48 @@ class Flasher(tk.Tk):
         ]):
             self._field(connection, caption, key, i, password)
 
-        readers = ttk.LabelFrame(root, text="Lecteurs JK du réseau local", padding=5)
+        readers = ttk.LabelFrame(root, text="Lecteurs JK — noms et codes", padding=5)
         readers.grid(row=4, column=0, columnspan=3, sticky="ew",
                      padx=8, pady=5)
         readers.columnconfigure(1, weight=1)
         for i, (caption, key, password) in enumerate([
-            ("ESP JK 1 — IP locale :", "jk1_ip", False),
+            ("ESP JK 1 — nom personnalisé :", "jk1_name", False),
             ("ESP JK 1 — code :", "jk1_code", True),
-            ("ESP JK 2 — IP (facultatif) :", "jk2_ip", False),
+            ("ESP JK 2 — nom (facultatif) :", "jk2_name", False),
             ("ESP JK 2 — code (facultatif) :", "jk2_code", True),
-            ("ESP JK 3 — IP (facultatif) :", "jk3_ip", False),
+            ("ESP JK 3 — nom (facultatif) :", "jk3_name", False),
             ("ESP JK 3 — code (facultatif) :", "jk3_code", True),
         ]):
             self._field(readers, caption, key, i, password)
 
-        volts=ttk.LabelFrame(root,text="Voltronic ESP32-S3 — INV1 à INV3 (VPN lecture seule)",padding=5)
+        volts=ttk.LabelFrame(root,text="Onduleurs — noms et codes",padding=5)
         volts.grid(row=5,column=0,columnspan=3,sticky="ew",padx=8,pady=5)
         volts.columnconfigure(1,weight=1)
         for i,(caption,key,password) in enumerate([
-            ("INV1 — IP locale :", "volt1_ip",False),
-            ("INV1 — code ESP :", "volt1_code",True),
-            ("INV2 — IP locale (optionnel) :", "volt2_ip",False),
-            ("INV2 — code (optionnel) :", "volt2_code",True),
-            ("INV3 — IP locale (optionnel) :", "volt3_ip",False),
-            ("INV3 — code (optionnel) :", "volt3_code",True),
+            ("Onduleur 1 — nom personnalisé :", "volt1_name",False),
+            ("Onduleur 1 — code ESP :", "volt1_code",True),
+            ("Onduleur 2 — nom (facultatif) :", "volt2_name",False),
+            ("Onduleur 2 — code (facultatif) :", "volt2_code",True),
+            ("Onduleur 3 — nom (facultatif) :", "volt3_name",False),
+            ("Onduleur 3 — code (facultatif) :", "volt3_code",True),
         ]):
             self._field(volts,caption,key,i,password)
+        legacy = ttk.LabelFrame(root,text="Mode expert : anciennes adresses IP fixes",padding=5)
+        legacy.columnconfigure(1,weight=1)
+        legacy.grid(row=6,column=0,columnspan=3,sticky="ew",padx=8)
+        legacy.grid_remove()
+        for idx,(caption,key) in enumerate([
+            ("ESP JK 1 IP :", "jk1_ip"), ("ESP JK 2 IP :", "jk2_ip"),
+            ("ESP JK 3 IP :", "jk3_ip"), ("Voltronic 1 IP :", "volt1_ip"),
+            ("Voltronic 2 IP :", "volt2_ip"), ("Voltronic 3 IP :", "volt3_ip")
+        ]):
+            self._field(legacy,caption,key,idx)
+        ttk.Button(root,text="Expert : afficher les anciennes IP fixes",
+            command=lambda: legacy.grid_remove() if legacy.winfo_ismapped() else legacy.grid()
+        ).grid(row=12,column=0,columnspan=3,padx=8,sticky="w")
         expert = ttk.Frame(root)
         expert.columnconfigure(1, weight=1)
-        expert.grid(row=6, column=0, columnspan=3, sticky="ew", padx=8)
+        expert.grid(row=13, column=0, columnspan=3, sticky="ew", padx=8)
         expert.grid_remove()
         self._label(expert, "Firmware VPN externe (.bin) :", 0)
         self._entry(expert, self.vpn_image, 0, width=42)
@@ -564,15 +577,15 @@ class Flasher(tk.Tk):
             root, text="Options avancées : sélectionner un .bin externe",
             command=lambda: expert.grid_remove()
                 if expert.winfo_ismapped() else expert.grid()
-        ).grid(row=5, column=0, columnspan=3, sticky="w",
+        ).grid(row=14, column=0, columnspan=3, sticky="w",
                padx=8, pady=(4, 0))
         ttk.Label(root,
             text="VPN déjà fonctionnel : tester d’abord sur une carte de réserve. "
                  "Ne pas choisir FACTORY pour une mise à jour.",
             wraplength=720
         ).grid(row=7,column=0,columnspan=3,sticky="w",padx=8,pady=(4,0))
-        ttk.Label(root, text="Actions VPN toujours accessibles en bas de l'onglet. "
-                  "Pour ajouter un onduleur, renseigne seulement son IP et son code.",
+        ttk.Label(root, text="VPN : renseigne les noms et codes définis au flash. "
+                  "Aucune IP requise en mode découverte. Les anciennes IP restent en mode expert.",
                   wraplength=720).grid(
             row=8, column=0, columnspan=3, pady=(8, 4))
         append=ttk.LabelFrame(root,text="Ajouter un onduleur · conserver VPN et JK",padding=6)
