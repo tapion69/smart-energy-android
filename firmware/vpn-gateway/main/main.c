@@ -41,7 +41,7 @@
 #include "cJSON.h"
 #include <math.h>
 
-#define GATEWAY_VERSION "0.3.7-dev-usb-nvs-stack"
+#define GATEWAY_VERSION "0.3.8-dev-vpn-discovery"
 #define GATEWAY_PORT 18767
 #define MAX_JSON_BYTES 32768
 
@@ -395,6 +395,55 @@ static void discovery_listener(void *unused){
             portEXIT_CRITICAL(&discovery_lock);
         }
     }
+}
+/* Read-only discovery inventory. Only readers proven by HMAC + HTTP challenge
+ * enter this list. Do not reveal their LAN IPs, access codes or Tailscale key.
+ * Fixed legacy IP targets are deliberately excluded until migrated to names.
+ */
+static esp_err_t discovery_inventory(httpd_req_t *req) {
+    if(!request_is_private_vpn(req))
+        return deny(req,"403 Forbidden","{\\"error\\":\\"vpn_only\\"}");
+    if(!authorized(req))
+        return deny(req,"401 Unauthorized","{\\"error\\":\\"invalid_gateway_token\\"}");
+    cJSON *root=cJSON_CreateObject();
+    cJSON *items=cJSON_AddArrayToObject(root,"devices");
+    if(!root || !items){if(root)cJSON_Delete(root);
+        return deny(req,"500 Internal Server Error","{\\"error\\":\\"memory\\"}");}
+    cJSON_AddStringToObject(root,"product","smart-energy-vpn-discovery");
+    cJSON_AddNumberToObject(root,"schemaVersion",1);
+    for(int family=0;family<2;family++)for(int slot=0;slot<3;slot++){
+        if(!personal)continue;
+        const char *name=family==0?personal->jk_name[slot]:personal->voltronic_name[slot];
+        const char *legacy=family==0?personal->jk_ip[slot]:personal->voltronic_ip[slot];
+        const char *secret=family==0?personal->jk_code[slot]:personal->voltronic_code[slot];
+        if(!name[0] || se_is_private_ipv4(legacy) || strlen(secret)<8)continue;
+        char confirmed_ip[16]={0},confirmed_id[48]={0};
+        bool ambiguous=false;
+        portENTER_CRITICAL(&discovery_lock);
+        ambiguous=discovery_ambiguous[family][slot];
+        snprintf(confirmed_ip,sizeof confirmed_ip,"%s",discovered_ip[family][slot]);
+        snprintf(confirmed_id,sizeof confirmed_id,"%s",discovered_id[family][slot]);
+        portEXIT_CRITICAL(&discovery_lock);
+        if(ambiguous || !se_is_private_ipv4(confirmed_ip) || !confirmed_id[0])continue;
+        cJSON *entry=cJSON_CreateObject();
+        if(!entry){cJSON_Delete(root);
+            return deny(req,"500 Internal Server Error","{\\"error\\":\\"memory\\"}");}
+        cJSON_AddStringToObject(entry,"family",family==0?"jk":"voltronic");
+        cJSON_AddStringToObject(entry,"name",name);
+        cJSON_AddStringToObject(entry,"device_id",confirmed_id);
+        cJSON_AddNumberToObject(entry,"slot",slot+1);
+        cJSON_AddBoolToObject(entry,"verified",true);
+        cJSON_AddItemToArray(items,entry);
+    }
+    char *json=cJSON_PrintUnformatted(root);
+    cJSON_Delete(root);
+    if(!json)return deny(req,"500 Internal Server Error","{\\"error\\":\\"memory\\"}");
+    httpd_resp_set_type(req,"application/json");
+    httpd_resp_set_hdr(req,"Cache-Control","no-store");
+    httpd_resp_set_hdr(req,"X-Content-Type-Options","nosniff");
+    esp_err_t result=httpd_resp_sendstr(req,json);
+    free(json);
+    return result;
 }
 static const char *configured_reader_host(int family,int slot,
                                            const char *fixed,char copy[16]){
@@ -767,6 +816,7 @@ static void start_private_http(void) {
     ESP_ERROR_CHECK(httpd_start(&http_server, &cfg));
     const httpd_uri_t uris[] = {
         {.uri="/api/v1/health", .method=HTTP_GET, .handler=health_handler},
+        {.uri="/api/v1/discovery",.method=HTTP_GET,.handler=discovery_inventory},
         {.uri="/api/v1/jk/1/info",.method=HTTP_GET,.handler=relay_read},
         {.uri="/api/v1/jk/2/info",.method=HTTP_GET,.handler=relay_read},
         {.uri="/api/v1/jk/3/info",.method=HTTP_GET,.handler=relay_read},
