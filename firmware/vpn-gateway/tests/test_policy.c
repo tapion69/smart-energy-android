@@ -27,15 +27,15 @@ int main(void) {
     for(int slot=1;slot<=3;slot++){
         char path[96];
         snprintf(path,sizeof path,"/api/v1/deye/%d/info",slot);
-        assert(se_route_get(path,true)==SE_ROUTE_DEYE1_INFO+(slot-1)*5);
+        assert(se_route_get(path,true)==(se_route_t)(SE_ROUTE_DEYE1_INFO+(slot-1)*5));
         snprintf(path,sizeof path,"/api/v1/deye/%d/telemetry",slot);
-        assert(se_route_get(path,true)==SE_ROUTE_DEYE1_TELEMETRY+(slot-1)*5);
+        assert(se_route_get(path,true)==(se_route_t)(SE_ROUTE_DEYE1_TELEMETRY+(slot-1)*5));
         snprintf(path,sizeof path,"/api/v1/deye/%d/details",slot);
-        assert(se_route_get(path,true)==SE_ROUTE_DEYE1_DETAILS+(slot-1)*5);
+        assert(se_route_get(path,true)==(se_route_t)(SE_ROUTE_DEYE1_DETAILS+(slot-1)*5));
         snprintf(path,sizeof path,"/api/v1/deye/%d/device-config",slot);
-        assert(se_route_get(path,true)==SE_ROUTE_DEYE1_CONFIG+(slot-1)*5);
+        assert(se_route_get(path,true)==(se_route_t)(SE_ROUTE_DEYE1_CONFIG+(slot-1)*5));
         snprintf(path,sizeof path,"/api/v1/deye/%d/ota/status",slot);
-        assert(se_route_get(path,true)==SE_ROUTE_DEYE1_OTA_STATUS+(slot-1)*5);
+        assert(se_route_get(path,true)==(se_route_t)(SE_ROUTE_DEYE1_OTA_STATUS+(slot-1)*5));
         assert(se_route_get(path,false)==SE_ROUTE_DENIED);
     }
     assert(se_route_get("/api/v1/deye/4/info",true)==SE_ROUTE_DENIED);
