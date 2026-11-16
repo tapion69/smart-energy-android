@@ -2166,12 +2166,242 @@ class MainActivity : Activity() {
         }
     }
 
+    private data class RemoteReader(
+        val family:String,val name:String,val deviceId:String,val vpnSlot:Int
+    )
+
+    /** Strict read-only inventory over the user's already paired VPN.
+     * Never attempt multicast over Tailscale or disclose LAN addresses.
+     * The gateway itself admits only HMAC + challenge-verified ESP readers.
+     */
+    private fun gatewayDiscoveryGet(path:String,host:String,token:String):JSONObject {
+        require(path=="/api/v1/discovery" ||
+            Regex("^/api/v1/(jk|voltronic)/[1-3]/(info|telemetry)$").matches(path)) {
+            "Route de lecture VPN non autorisée"
+        }
+        require(vpnConnected() && allowedTailnetIp(host) && validGatewayToken(token)) {
+            "VPN Tailscale non configuré ou token manquant"
+        }
+        val c=URL("http://$host:18767$path").openConnection() as HttpURLConnection
+        return try {
+            c.requestMethod="GET"
+            c.instanceFollowRedirects=false
+            c.useCaches=false
+            c.connectTimeout=4500
+            c.readTimeout=6500
+            c.setRequestProperty("X-Gateway-Token",token)
+            c.setRequestProperty("Accept","application/json")
+            val statusCode=c.responseCode
+            if(statusCode!=200)throw IllegalStateException(when(statusCode){
+                401 -> "Token VPN refusé par la passerelle"
+                403 -> "La passerelle refuse la requête hors du tunnel Tailscale"
+                404 -> "Firmware VPN trop ancien : route découverte absente"
+                503 -> "Lecteur non configuré ou non encore découvert par la passerelle"
+                else -> "Requête VPN impossible (HTTP $statusCode)"
+            })
+            val body=c.inputStream.bufferedReader().use {it.readText().take(16385)}
+            require(body.length in 2..16384){"Réponse VPN invalide"}
+            JSONObject(body)
+        }finally {c.disconnect()}
+    }
+
+    private fun discoverViaGateway() {
+        if(!vpnConnected()) {
+            state("Active Tailscale pour rechercher les équipements via VPN.")
+            return
+        }
+        val host=prefs.getString("remote_gateway_ip","") ?: ""
+        val token=storedGatewayToken()
+        if(!allowedTailnetIp(host) || !validGatewayToken(token)) {
+            state("Configure d'abord l'adresse Tailscale et le token VPN dans Expert.")
+            return
+        }
+        state("Recherche des lecteurs vérifiés via Tailscale…")
+        io.execute {
+            try {
+                val inventory=gatewayDiscoveryGet("/api/v1/discovery",host,token)
+                require(inventory.optString("product")=="smart-energy-vpn-discovery" &&
+                    inventory.optInt("schemaVersion")==1) {
+                    "Passerelle VPN sans découverte compatible"
+                }
+                val devices=inventory.optJSONArray("devices") ?: JSONArray()
+                val entries=(0 until devices.length()).mapNotNull { index ->
+                    val item=devices.optJSONObject(index) ?: return@mapNotNull null
+                    val family=item.optString("family")
+                    val name=item.optString("name")
+                    val identity=item.optString("device_id")
+                    val slot=item.optInt("slot")
+                    if(family !in setOf("jk","voltronic") || slot !in 1..3 ||
+                        !item.optBoolean("verified") || name.length !in 1..32 ||
+                        identity.length !in 6..47)return@mapNotNull null
+                    RemoteReader(family,name,identity,slot)
+                }.distinctBy { it.family+":"+it.vpnSlot }
+                runOnUiThread {
+                    if(entries.isEmpty()){
+                        state("Aucun lecteur vérifié par la passerelle VPN. "+
+                            "Vérifie que les noms et codes sont enregistrés sur le VPN "+
+                            "et que les ESP diffusent leurs annonces locales.")
+                    }else {
+                        AlertDialog.Builder(this)
+                            .setTitle("Équipements détectés via VPN")
+                            .setItems(entries.map {
+                                it.name+" — "+(if(it.family=="jk")"JK" else "Onduleur")+
+                                    " (VPN "+it.vpnSlot+")"
+                            }.toTypedArray()) { _,index ->
+                                promptRemoteReader(entries[index],host,token)
+                            }.setNegativeButton("Annuler",null).show()
+                    }
+                }
+            }catch(ex:Exception){
+                state("Recherche VPN impossible : "+(ex.message ?: ex.javaClass.simpleName))
+            }
+        }
+    }
+
+    private fun promptRemoteReader(reader:RemoteReader,host:String,token:String) {
+        val inputCode=input("Code du lecteur (8 à 32 caractères)",true)
+        AlertDialog.Builder(this)
+            .setTitle("Associer "+reader.name+" via Tailscale")
+            .setMessage("L'ESP VPN vérifiera directement le lecteur. Son IP locale "+
+                "reste privée. Le code saisi est mémorisé pour une future connexion locale ; "+
+                "la connexion VPN est authentifiée par le token de passerelle.")
+            .setView(inputCode)
+            .setNegativeButton("Annuler",null)
+            .setPositiveButton("Vérifier et associer"){ _,_ ->
+                val code=inputCode.text.toString().trim()
+                if(code.length !in 8..32){
+                    state("Code lecteur invalide (8 à 32 caractères).")
+                    return@setPositiveButton
+                }
+                if(reader.family=="jk"){
+                    val matching=(1..3).firstOrNull{slot ->
+                        prefs.getString(if(slot==activeReaderSlot)"device_id"
+                            else slotKey(slot,"device_id"),"")==reader.deviceId
+                    }
+                    val free=(1..3).firstOrNull{slot ->
+                        prefs.getString(if(slot==activeReaderSlot)"device_id"
+                            else slotKey(slot,"device_id"),"").isNullOrBlank()
+                    }
+                    val chosenSlot=matching ?: free
+                    if(chosenSlot==null || lanConnectionPending || setupTransport){
+                        state("Aucun emplacement JK libre ou association en cours. "+
+                            "Libère d'abord un emplacement dans Expert.")
+                        return@setPositiveButton
+                    }
+                    state("Vérification JK via VPN, sans écriture…")
+                    io.execute {
+                        try {
+                            val info=gatewayDiscoveryGet(
+                                "/api/v1/jk/${reader.vpnSlot}/info",host,token)
+                            require(info.optString("product")=="smart-jk-esp32" &&
+                                info.optString("device_id")==reader.deviceId){
+                                "L'identité du JK distant a changé : association refusée"
+                            }
+                            val telemetry=gatewayDiscoveryGet(
+                                "/api/v1/jk/${reader.vpnSlot}/telemetry",host,token)
+                            require(telemetry.optString("source")=="jk02-ffe1-read-only" &&
+                                telemetry.optJSONArray("devices")!=null){
+                                "Télémétrie JK distante non reconnue"
+                            }
+                            val devices=telemetry.getJSONArray("devices")
+                            val macs=JkBmsRegistry.normalized(
+                                (0 until devices.length()).mapNotNull { i ->
+                                    devices.optJSONObject(i)?.optString("mac")
+                                })
+                            runOnUiThread {
+                                if(lanConnectionPending || setupTransport){
+                                    state("Une autre association a commencé : opération annulée.")
+                                    return@runOnUiThread
+                                }
+                                if(chosenSlot!=activeReaderSlot)
+                                    switchReaderSlot(chosenSlot,autoConnect=false)
+                                if(chosenSlot!=activeReaderSlot){
+                                    state("Impossible de sélectionner ESP $chosenSlot.")
+                                    return@runOnUiThread
+                                }
+                                savePairing(reader.deviceId,
+                                    "SmartJK-Setup-"+reader.deviceId.substringAfter("-").uppercase(Locale.ROOT),
+                                    code)
+                                prefs.edit().remove("local_ip")
+                                    .putString("paired_bms_json",JSONArray(macs).toString())
+                                    .putString("remote_gateway_ip",host)
+                                    .putBoolean("remote_gateway_enabled",true)
+                                    .putString("connection_preference","gateway")
+                                    .apply()
+                                saveGatewayToken(token)
+                                localHost=""
+                                lanIp.setText("")
+                                setupCode.text.clear()
+                                registeredBms.clear()
+                                registeredBms.addAll(macs)
+                                chosen.clear()
+                                chosen.addAll(macs)
+                                rememberKnownBms(macs)
+                                refreshReaderSelector()
+                                renderFleetOverview()
+                                state("ESP $chosenSlot associé via VPN : "+reader.name+
+                                    ". "+macs.size+" batterie(s) détectée(s).")
+                                if(macs.isNotEmpty())connectGatewayRemote()
+                            }
+                        }catch(ex:Exception) {
+                            state("Association JK VPN refusée : "+(ex.message ?: "erreur réseau"))
+                        }
+                    }
+                }else{
+                    // Voltronic VPN uses its existing fixed read-only /info
+                    // relay. No local ESP password is transmitted by the gateway.
+                    state("Vérification onduleur via VPN…")
+                    io.execute {
+                        try {
+                            val info=gatewayDiscoveryGet(
+                                "/api/v1/voltronic/${reader.vpnSlot}/info",host,token)
+                            require(info.optString("product")=="smart-energy-voltronic-s3" &&
+                                info.optString("device_id")==reader.deviceId){
+                                "L'identité de l'onduleur distant ne correspond pas"
+                            }
+                            runOnUiThread {
+                                val slot=reader.vpnSlot
+                                val prefix=if(slot==1)"inverter_probe_" else "inverter_${slot}_"
+                                val oldIp=prefs.getString(prefix+"ip","") ?: ""
+                                if(voltronicFleet.configured(slot) && oldIp.isNotBlank()){
+                                    state("Onduleur $slot déjà associé en local. "+
+                                        "Supprime son association avant de le remplacer.")
+                                    return@runOnUiThread
+                                }
+                                saveAuxiliaryCode(
+                                    if(slot==1)"premium_voltronic_code_cipher"
+                                    else "premium_voltronic_${slot}_code_cipher",code)
+                                prefs.edit().remove(prefix+"ip")
+                                    .putInt(prefix+"port",18081)
+                                    .putString(prefix+"type","voltronic")
+                                    .putBoolean(prefix+"validated",true)
+                                    .putString("inverter_${slot}_name",reader.name)
+                                    .putString("remote_gateway_ip",host)
+                                    .putBoolean("remote_gateway_enabled",true)
+                                    .putString("connection_preference","gateway").apply()
+                                saveGatewayToken(token)
+                                voltronicFleet.changed()
+                                state("Onduleur $slot associé par VPN : "+reader.name)
+                            }
+                        }catch(ex:Exception){
+                            state("Association onduleur VPN refusée : "+
+                                (ex.message ?: "erreur réseau"))
+                        }
+                    }
+                }
+            }.show()
+    }
+
     /** Local NSD/mDNS discovery for the preflashed JK and Voltronic readers.
      * Never sends private credentials until an operator chooses a device.
      * A network name is not authentication: the subsequent endpoint/code and
      * saved identity verification remain mandatory.
      */
     private fun discoverHomeLan() {
+        if(vpnConnected() && voltronicWifiNetwork()==null) {
+            discoverViaGateway()
+            return
+        }
         if (discoverListener!=null) { state("Recherche déjà en cours."); return }
         val nsd=getSystemService(Context.NSD_SERVICE) as NsdManager
         val candidates=linkedMapOf<String,LocalReader>()
@@ -2253,7 +2483,11 @@ class MainActivity : Activity() {
                         candidates.values.sortedWith(compareBy({it.family},{it.name})).toList()
                     }
                     if(discovered.isEmpty()) {
-                        state("Aucun ESP Smart Energy détecté. Vérifie le Wi-Fi 2,4 GHz, puis réessaie.")
+                        if(vpnConnected() && allowedTailnetIp(
+                            prefs.getString("remote_gateway_ip","") ?: "") &&
+                            validGatewayToken(storedGatewayToken()))
+                            discoverViaGateway()
+                        else state("Aucun ESP Smart Energy détecté. Vérifie le Wi-Fi 2,4 GHz, puis réessaie.")
                     } else {
                         val labels=discovered.map {
                             it.name+" — "+(if(it.family=="jk")"JK" else "Voltronic")
