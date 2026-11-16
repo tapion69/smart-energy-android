@@ -136,30 +136,37 @@ static bool parse_config(const char *line,se_vpn_config_t *out) {
     // Individual targets optional; require at least one JK or Voltronic target.
     bool any_target=false;
     for(int i=0;i<3 && ok;++i) {
-        char ipkey[12],codekey[12];
+        char ipkey[12],codekey[12],namekey[15];
+        snprintf(namekey,sizeof namekey,"jk%d_name",i+1);
         snprintf(ipkey,sizeof ipkey,"jk%d_ip",i+1);
         snprintf(codekey,sizeof codekey,"jk%d_code",i+1);
         ok=text_field(doc,ipkey,result.jk_ip[i],sizeof(result.jk_ip[i]),false,0) &&
+           text_field(doc,namekey,result.jk_name[i],sizeof(result.jk_name[i]),false,0) &&
            text_field(doc,codekey,result.jk_code[i],sizeof(result.jk_code[i]),false,0);
         if(!ok)break;
         bool has_ip=result.jk_ip[i][0]!=0, has_code=result.jk_code[i][0]!=0;
-        if(has_ip!=has_code || (has_ip && (!se_is_private_ipv4(result.jk_ip[i]) ||
-            strlen(result.jk_code[i])<8)))ok=false;
-        if(has_ip)any_target=true;
+        bool has_name=result.jk_name[i][0]!=0;
+        if((has_ip && !se_is_private_ipv4(result.jk_ip[i])) ||
+           (has_code!=(has_ip||has_name)) ||
+           (has_code && (strlen(result.jk_code[i])<8 || strlen(result.jk_code[i])>32)))ok=false;
+        if(has_code)any_target=true;
     }
     for(int i=0;i<3 && ok;++i) {
-        char ipkey[16],codekey[16];
+        char ipkey[16],codekey[16],namekey[16];
+        snprintf(namekey,sizeof namekey,"volt%d_name",i+1);
         snprintf(ipkey,sizeof ipkey,"volt%d_ip",i+1);
         snprintf(codekey,sizeof codekey,"volt%d_code",i+1);
         ok=text_field(doc,ipkey,result.voltronic_ip[i],sizeof(result.voltronic_ip[i]),false,0) &&
+           text_field(doc,namekey,result.voltronic_name[i],sizeof(result.voltronic_name[i]),false,0) &&
            text_field(doc,codekey,result.voltronic_code[i],sizeof(result.voltronic_code[i]),false,0);
         if(!ok)break;
         bool has_ip=result.voltronic_ip[i][0]!=0,has_code=result.voltronic_code[i][0]!=0;
-        if(has_ip!=has_code || (has_ip &&
-           (!se_is_private_ipv4(result.voltronic_ip[i]) ||
-            strlen(result.voltronic_code[i])<8 ||
-            strlen(result.voltronic_code[i])>32)))ok=false;
-        if(has_ip)any_target=true;
+        bool has_name=result.voltronic_name[i][0]!=0;
+        if((has_ip && !se_is_private_ipv4(result.voltronic_ip[i])) ||
+           (has_code!=(has_ip||has_name)) ||
+           (has_code && (strlen(result.voltronic_code[i])<8 ||
+                         strlen(result.voltronic_code[i])>32)))ok=false;
+        if(has_code)any_target=true;
     }
     if(!any_target)ok=false;
     const cJSON *writes=cJSON_GetObjectItemCaseSensitive(doc,"remote_writes_enabled");
