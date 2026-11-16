@@ -866,6 +866,10 @@ class MainActivity : Activity() {
         readerHeader=label("",13f,false,normal)
         add(readers,readerHeader,8)
         refreshReaderSelector()
+        add(readers,action("Libérer l'emplacement ESP sélectionné") {
+            confirmForgetReaderSlot()
+        },8)
+        add(readers,label("Retire uniquement l'ancienne association de cet ESP sur le téléphone : identité, IP, code et liste BMS du lecteur. Aucun effacement du firmware ni des autres ESP, du VPN ou des batteries physiques.",12f,color=subdued),6)
 
         val lan = section(jkConfiguration, "Expert · IP et code ESP32 JK (anciens lecteurs)",false)
         add(lan,label("Utilise ce formulaire uniquement si un ancien firmware ne prend pas en charge la découverte.",12f,color=subdued))
@@ -3137,6 +3141,56 @@ class MainActivity : Activity() {
     private val readerKeys get() = listOf("pairing_code_cipher","device_id",
         "setup_ssid","local_ip","paired_bms_json","known_jk_macs")
     private fun slotKey(slot:Int,key:String) = "reader_${slot}_${key}"
+
+    private fun confirmForgetReaderSlot() {
+        val slot=activeReaderSlot
+        if(setupTransport || lanConnectionPending) {
+            state("Une connexion ou association est en cours. Termine-la avant de libérer ESP $slot.")
+            return
+        }
+        val name=prefs.getString("device_id","") ?: ""
+        AlertDialog.Builder(this)
+            .setTitle("Libérer l'emplacement ESP $slot ?")
+            .setMessage("L'APK oubliera uniquement le lecteur associé à ESP $slot" +
+                (if(name.isNotBlank()) " ($name)" else "") +
+                " : son identité, son IP, son code et la liste BMS propre à cet emplacement. " +
+                "Les autres ESP, l'accès VPN, les noms des batteries et les réglages physiques " +
+                "des ESP/BMS ne seront pas modifiés. Tu pourras ensuite réassocier un ESP dans cet emplacement.")
+            .setNegativeButton("Annuler",null)
+            .setPositiveButton("Libérer ESP $slot") { _,_ ->
+                readerSelectionEpoch++
+                pendingReaderTarget=null
+                releaseConnection()
+                val editor=prefs.edit()
+                for(key in readerKeys) {
+                    editor.remove(key)
+                    editor.remove(slotKey(slot,key))
+                }
+                editor.commit()
+                selectedDeviceId=""
+                activeSetupCode=""
+                localHost=""
+                lanVerified=false
+                remoteGatewayConnection=false
+                remoteVpnConnection=false
+                registeredBms.clear()
+                chosen.clear()
+                lastScannedBms=emptyList()
+                fleetCache.remove(slot)
+                scanPanel.removeAllViews()
+                lanIp.setText("")
+                apName.setText("")
+                setupCode.text.clear()
+                parameterEditingEnabled=false
+                lastTelemetry=null
+                lastDetails=null
+                dashboardMacs=emptyList()
+                telemetryPanel.removeAllViews()
+                refreshReaderSelector()
+                renderFleetOverview()
+                state("ESP $slot est libre. Lance « Rechercher mes équipements » pour l'associer à un nouveau lecteur.")
+            }.show()
+    }
 
     private fun refreshReaderSelector() {
         readerSelector.removeAllViews()
