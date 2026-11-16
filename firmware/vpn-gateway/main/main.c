@@ -60,6 +60,11 @@ static char discovered_id[2][3][48];
 static bool discovery_ambiguous[2][3];
 static portMUX_TYPE discovery_lock=portMUX_INITIALIZER_UNLOCKED;
 
+/* Handlers below are defined later and also serve the legacy relay routes. */
+static bool request_is_private_vpn(httpd_req_t *req);
+static bool authorized(httpd_req_t *req);
+static esp_err_t deny(httpd_req_t *req,const char *status,const char *json);
+
 /* Per-slot VPN relay ports are separate from the original credential NVS blob.
  * APP-ONLY upgrades preserve all original TailTiny/Wi-Fi/reader identities. */
 static int inverter_relay_port(int slot) {
