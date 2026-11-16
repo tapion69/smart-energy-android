@@ -41,7 +41,7 @@
 #include "cJSON.h"
 #include <math.h>
 
-#define GATEWAY_VERSION "0.3.8-dev-vpn-discovery"
+#define GATEWAY_VERSION "0.3.9-dev-inverter-port-config"
 #define GATEWAY_PORT 18767
 #define MAX_JSON_BYTES 32768
 
@@ -59,6 +59,101 @@ static char discovered_ip[2][3][16];
 static char discovered_id[2][3][48];
 static bool discovery_ambiguous[2][3];
 static portMUX_TYPE discovery_lock=portMUX_INITIALIZER_UNLOCKED;
+
+/* Per-slot VPN relay ports are separate from the original credential NVS blob.
+ * APP-ONLY upgrades preserve all original TailTiny/Wi-Fi/reader identities. */
+static int inverter_relay_port(int slot) {
+    if(slot<1 || slot>3)return 18081;
+    nvs_handle_t handle;
+    uint32_t port=18081;
+    char key[8];snprintf(key,sizeof key,"port%d",slot);
+    if(nvs_open("se_inv_ports",NVS_READONLY,&handle)==ESP_OK){
+        uint32_t found=0;
+        if(nvs_get_u32(handle,key,&found)==ESP_OK && found>=1 && found<=65535)
+            port=found;
+        nvs_close(handle);
+    }
+    return (int)port;
+}
+static bool inverter_port_save(int slot,int port) {
+    if(slot<1 || slot>3 || port<1 || port>65535)return false;
+    nvs_handle_t handle;
+    if(nvs_open("se_inv_ports",NVS_READWRITE,&handle)!=ESP_OK)return false;
+    char key[8];snprintf(key,sizeof key,"port%d",slot);
+    esp_err_t result=nvs_set_u32(handle,key,(uint32_t)port);
+    if(result==ESP_OK)result=nvs_commit(handle);
+    nvs_close(handle);
+    if(result!=ESP_OK)return false;
+    return inverter_relay_port(slot)==port;
+}
+static bool inverter_slot_authorized(int slot) {
+    if(!personal || slot<1 || slot>3)return false;
+    int i=slot-1;
+    return (personal->voltronic_name[i][0] ||
+        se_is_private_ipv4(personal->voltronic_ip[i])) &&
+        strlen(personal->voltronic_code[i])>=8 &&
+        strlen(personal->voltronic_code[i])<=32;
+}
+static int64_t last_port_change_us[3]={0};
+static esp_err_t inverter_port_management(httpd_req_t *req){
+    if(!request_is_private_vpn(req))
+        return deny(req,"403 Forbidden","{\"error\":\"vpn_only\"}");
+    if(!authorized(req))
+        return deny(req,"401 Unauthorized","{\"error\":\"invalid_gateway_token\"}");
+    if(req->method==HTTP_GET){
+        cJSON *root=cJSON_CreateObject();
+        if(!root)return deny(req,"500 Internal Server Error","{\"error\":\"memory\"}");
+        cJSON *ports=cJSON_AddArrayToObject(root,"ports");
+        for(int slot=1;slot<=3;slot++){
+            cJSON *item=cJSON_CreateObject();
+            cJSON_AddNumberToObject(item,"slot",slot);
+            cJSON_AddBoolToObject(item,"configured",inverter_slot_authorized(slot));
+            cJSON_AddNumberToObject(item,"port",inverter_relay_port(slot));
+            cJSON_AddItemToArray(ports,item);
+        }
+        cJSON_AddStringToObject(root,"product","smart-energy-inverter-relay-ports");
+        char *body=cJSON_PrintUnformatted(root);cJSON_Delete(root);
+        if(!body)return deny(req,"500 Internal Server Error","{\"error\":\"memory\"}");
+        httpd_resp_set_type(req,"application/json");
+        httpd_resp_set_hdr(req,"Cache-Control","no-store");
+        esp_err_t result=httpd_resp_sendstr(req,body);free(body);
+        return result;
+    }
+    if(req->method!=HTTP_POST || req->content_len<12 || req->content_len>96)
+        return deny(req,"400 Bad Request","{\"error\":\"invalid_request\"}");
+    char buffer[97]={0};int total=0;
+    while(total<req->content_len){
+        int n=httpd_req_recv(req,buffer+total,req->content_len-total);
+        if(n<=0)return deny(req,"400 Bad Request","{\"error\":\"invalid_body\"}");
+        total+=n;
+    }
+    cJSON *json=cJSON_Parse(buffer);
+    const cJSON *slotj=json?cJSON_GetObjectItemCaseSensitive(json,"slot"):NULL;
+    const cJSON *portj=json?cJSON_GetObjectItemCaseSensitive(json,"port"):NULL;
+    bool valid=cJSON_IsObject(json) && cJSON_GetArraySize(json)==2 &&
+        cJSON_IsNumber(slotj) && cJSON_IsNumber(portj);
+    int slot=valid?slotj->valueint:0,port=valid?portj->valueint:0;
+    valid=valid && slotj->valuedouble==(double)slot &&
+        portj->valuedouble==(double)port &&
+        slot>=1 && slot<=3 && port>=1 && port<=65535;
+    cJSON_Delete(json);
+    if(!valid)return deny(req,"400 Bad Request","{\"error\":\"invalid_port\"}");
+    if(!inverter_slot_authorized(slot))
+        return deny(req,"403 Forbidden","{\"error\":\"slot_not_preconfigured\"}");
+    const int64_t now=esp_timer_get_time();
+    if(last_port_change_us[slot-1] && now-last_port_change_us[slot-1]<60000000LL)
+        return deny(req,"429 Too Many Requests","{\"error\":\"port_change_cooldown\"}");
+    if(!inverter_port_save(slot,port))
+        return deny(req,"500 Internal Server Error","{\"error\":\"nvs_write_failed\"}");
+    last_port_change_us[slot-1]=now;
+    char reply[96];snprintf(reply,sizeof reply,
+        "{\"product\":\"smart-energy-inverter-relay-ports\",\"slot\":%d,\"port\":%d,\"saved\":true}",
+        slot,port);
+    httpd_resp_set_type(req,"application/json");
+    httpd_resp_set_hdr(req,"Cache-Control","no-store");
+    return httpd_resp_sendstr(req,reply);
+}
+
 
 /* Reasons are intentionally generic: log no passwords, SSIDs, tokens, MACs,
  * or captured 802.11 frames. Only standard ESP-IDF Wi-Fi reason codes. */
@@ -505,7 +600,7 @@ static bool get_target(se_route_t route, lan_target_t *out) {
             route==SE_ROUTE_VOLT2_INFO || route==SE_ROUTE_VOLT3_INFO);
         out->path=info?"/api/v1/info":
             details?"/api/v1/details":"/api/v1/telemetry";
-        out->port=18081;
+        out->port=inverter_relay_port(slot);
         return se_is_private_ipv4(out->host) &&
             strlen(out->access_code)>=8 && strlen(out->access_code)<=32;
     }
@@ -817,6 +912,8 @@ static void start_private_http(void) {
     const httpd_uri_t uris[] = {
         {.uri="/api/v1/health", .method=HTTP_GET, .handler=health_handler},
         {.uri="/api/v1/discovery",.method=HTTP_GET,.handler=discovery_inventory},
+        {.uri="/api/v1/inverters/ports",.method=HTTP_GET,.handler=inverter_port_management},
+        {.uri="/api/v1/inverters/ports",.method=HTTP_POST,.handler=inverter_port_management},
         {.uri="/api/v1/jk/1/info",.method=HTTP_GET,.handler=relay_read},
         {.uri="/api/v1/jk/2/info",.method=HTTP_GET,.handler=relay_read},
         {.uri="/api/v1/jk/3/info",.method=HTTP_GET,.handler=relay_read},
