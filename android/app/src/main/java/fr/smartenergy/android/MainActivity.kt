@@ -103,7 +103,7 @@ class MainActivity : Activity() {
     private lateinit var physicalRecoverBtn: Button
     private lateinit var lanDiscoverBtn: Button
     private var discoverListener: NsdManager.DiscoveryListener? = null
-    private data class LocalReader(val family:String,val name:String,val ip:String,val port:Int)
+    private data class LocalReader(val family:String,val name:String,val ip:String,val port:Int,val deviceId:String="")
     private val chosen = linkedSetOf<String>() // Uncommitted selection, UI thread only.
     private val registeredBms = linkedSetOf<String>() // Confirmed by ESP32 /api/v1/bms.
     private var lastScannedBms = emptyList<JkBmsRegistry.ScanItem>()
@@ -2216,11 +2216,37 @@ class MainActivity : Activity() {
                         if(!allowedLocalIp(ip))return
                         val port=if(family=="jk")80 else 18081
                         if(info.port!=port)return
-                        val name=if(family=="voltronic")
-                            service.substringBefore(" (sevolt-").trim()
-                        else service
-                        synchronized(candidates) {
-                            candidates[family+":"+ip]=LocalReader(family,name,ip,port)
+                        if(family=="jk") {
+                            // Read public identity/name only. Never transmit the access code
+                            // to a device discovered by mDNS before user confirmation.
+                            io.execute {
+                                val candidate=try {
+                                    val c=URL("http://$ip:$port/api/v1/info").openConnection() as HttpURLConnection
+                                    try {
+                                        c.connectTimeout=2500
+                                        c.readTimeout=2500
+                                        c.requestMethod="GET"
+                                        if(c.responseCode!=200) throw IllegalStateException("info unavailable")
+                                        val doc=c.inputStream.bufferedReader().use { JSONObject(it.readText()) }
+                                        val id=doc.optString("device_id")
+                                        if(doc.optString("product")!="smart-jk-esp32" ||
+                                            !Regex("^smartjk-[A-F0-9]{6}$",RegexOption.IGNORE_CASE).matches(id) ||
+                                            !id.equals(service,true)) throw IllegalStateException("unrecognized discovery identity")
+                                        val named=doc.optString("device_name").trim()
+                                        LocalReader(family,if(named.isNotBlank()) named else service,ip,port,id)
+                                    } finally { c.disconnect() }
+                                }catch(_:Exception) {
+                                    // Keep legacy readers discoverable; identity and code
+                                    // are still checked by the authenticated pairing flow.
+                                    LocalReader(family,service,ip,port,service)
+                                }
+                                synchronized(candidates) { candidates[family+":"+ip]=candidate }
+                            }
+                        } else {
+                            val name=service.substringBefore(" (sevolt-").trim()
+                            synchronized(candidates) {
+                                candidates[family+":"+ip]=LocalReader(family,name,ip,port)
+                            }
                         }
                     }
                 })
@@ -2268,12 +2294,32 @@ class MainActivity : Activity() {
                 if(secret.length !in 8..32){
                     state("Code invalide : il doit contenir 8 à 32 caractères.")
                 }else if(reader.family=="jk"){
-                    lanIp.setText(reader.ip)
-                    setupCode.setText(secret)
-                    remoteCheck.isChecked=false
-                    prefs.edit().putString("connection_preference","local")
-                        .putBoolean("remote_gateway_enabled",false).apply()
-                    connectHomeLan() // Existing identity + authenticated BMS check.
+                    // Discovery must not try to attach a new reader to the identity
+                    // already paired in the active slot. Reuse a matching profile,
+                    // otherwise allocate an empty one; never overwrite a known reader.
+                    val deviceId=reader.deviceId
+                    val matching=(1..3).firstOrNull { slot ->
+                        val key=if(slot==activeReaderSlot) "device_id" else slotKey(slot,"device_id")
+                        prefs.getString(key,"")?.equals(deviceId,true)==true
+                    }
+                    val free=(1..3).firstOrNull { slot ->
+                        val key=if(slot==activeReaderSlot) "device_id" else slotKey(slot,"device_id")
+                        prefs.getString(key,"").isNullOrBlank()
+                    }
+                    val slot=matching ?: free
+                    if(slot==null) {
+                        state("Les trois emplacements JK sont occupés. Libère un emplacement dans Expert avant d'ajouter ce lecteur.")
+                    } else if(lanConnectionPending) {
+                        state("Connexion JK en cours : relance l'association après la connexion.")
+                    } else {
+                        if(slot!=activeReaderSlot) switchReaderSlot(slot,autoConnect=false)
+                        lanIp.setText(reader.ip)
+                        setupCode.setText(secret)
+                        remoteCheck.isChecked=false
+                        prefs.edit().putString("connection_preference","local")
+                            .putBoolean("remote_gateway_enabled",false).apply()
+                        connectHomeLan() // Verify authenticated /bms before persisting the new identity.
+                    }
                 }else{
                     val slot=(1..3).firstOrNull {
                         !voltronicFleet.configured(it)
@@ -3119,7 +3165,7 @@ class MainActivity : Activity() {
                     "Recherche son réseau SmartJK-Setup, puis associe-le avec BOOT.")
     }
 
-    private fun switchReaderSlot(target:Int) {
+    private fun switchReaderSlot(target:Int, autoConnect:Boolean=true) {
         if(target !in 1..3 || target==activeReaderSlot) return
         if(setupTransport) {
             pairingState("Une association BOOT est active. "+
@@ -3200,7 +3246,7 @@ class MainActivity : Activity() {
         setupCode.hint="Code ESP $target (vide si mémorisé)"
         if(::accessCodeNew.isInitialized)accessCodeNew.text.clear()
         refreshReaderSelector()
-        if(selectedDeviceId.isNotBlank() && storedCode().isNotBlank()) {
+        if(autoConnect && selectedDeviceId.isNotBlank() && storedCode().isNotBlank()) {
             when(selectedRoute()) {
                 JkTransportPolicy.Route.GATEWAY_VPN -> connectGatewayRemote()
                 JkTransportPolicy.Route.LOCAL_WIFI -> connectHomeLan(false)
