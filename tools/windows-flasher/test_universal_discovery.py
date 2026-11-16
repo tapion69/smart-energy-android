@@ -23,6 +23,7 @@ def gateway():
 class UniversalDiscoveryTests(unittest.TestCase):
     def test_vpn_accepts_preflashed_name_without_known_lan_ip(self):
         values=gateway()
+        values["gateway_name"]="maison-vpn"
         values["jk1_name"]="Batteries maison"
         values["jk1_code"]="readerSecret1"
         values["volt1_name"]="Onduleur principal"
@@ -30,10 +31,18 @@ class UniversalDiscoveryTests(unittest.TestCase):
         validate_vpn_config(values)
         message=format_usb_configuration(values).decode("ascii")
         payload=json.loads(message.removeprefix("SEVPN_CONFIG ").strip())
+        self.assertEqual(payload["gateway_name"],"maison-vpn")
         self.assertEqual(payload["jk1_ip"],"")
         self.assertEqual(payload["jk1_name"],"Batteries maison")
         self.assertEqual(payload["volt1_name"],"Onduleur principal")
         self.assertEqual(payload["volt1_ip"],"")
+
+    def test_invalid_vpn_name_rejected(self):
+        values=gateway()
+        values["jk1_name"]="Batteries"
+        values["jk1_code"]="readerSecret1"
+        values["gateway_name"]="My VPN With Spaces"
+        with self.assertRaises(ValueError):validate_vpn_config(values)
 
     def test_unconfigured_reader_without_name_or_ip_is_rejected(self):
         values=gateway()

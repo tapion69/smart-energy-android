@@ -131,8 +131,20 @@ static bool parse_config(const char *line,se_vpn_config_t *out) {
     bool ok=text_field(doc,"wifi_ssid",result.wifi_ssid,sizeof(result.wifi_ssid),true,1) &&
        text_field(doc,"wifi_password",result.wifi_password,sizeof(result.wifi_password),true,8) &&
        text_field(doc,"tailscale_key",result.tailscale_key,sizeof(result.tailscale_key),true,12) &&
-       text_field(doc,"gateway_token",result.gateway_token,sizeof(result.gateway_token),true,20);
+       text_field(doc,"gateway_token",result.gateway_token,sizeof(result.gateway_token),true,20) &&
+       text_field(doc,"gateway_name",result.gateway_name,sizeof(result.gateway_name),false,0);
     if(ok && strncmp(result.tailscale_key,"tskey-auth-",11)!=0)ok=false;
+    // Optional DNS-friendly VPN node name. Default to MAC suffix if absent.
+    if(ok && result.gateway_name[0]){
+        size_t n=strlen(result.gateway_name);
+        if(n<3 || n>31 || result.gateway_name[0]=='-' ||
+           result.gateway_name[n-1]=='-')ok=false;
+        for(size_t i=0;i<n && ok;i++){
+            char c=result.gateway_name[i];
+            if(!((c>='a'&&c<='z') || (c>='0'&&c<='9') || c=='-'))
+                ok=false;
+        }
+    }
     // Individual targets optional; require at least one JK or Voltronic target.
     bool any_target=false;
     for(int i=0;i<3 && ok;++i) {

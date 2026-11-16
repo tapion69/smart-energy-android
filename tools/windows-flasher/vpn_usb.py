@@ -29,7 +29,8 @@ def format_usb_configuration(values: dict[str, str]) -> bytes:
     optional={f"{family}{idx}_name":values.get(f"{family}{idx}_name","")
               for family in ("jk","volt") for idx in (1,2,3)}
     payload = json.dumps(
-        {**{key: values[key] for key in sorted(expected)}, **optional},
+        {**{key: values[key] for key in sorted(expected)}, **optional,
+         "gateway_name":values.get("gateway_name","")},
         ensure_ascii=True, separators=(",", ":")
     )
     data = ("SEVPN_CONFIG " + payload + "\n").encode("ascii")

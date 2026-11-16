@@ -57,6 +57,9 @@ def validate_vpn_config(values: dict[str, str]) -> None:
         raise ValueError("Indique une clé d'association Tailscale tskey-auth- personnelle.")
     if not 20 <= len(values["gateway_token"]) <= 128:
         raise ValueError("Token VPN : utilise 20 à 128 caractères.")
+    vpn_name=values.get("gateway_name","")
+    if vpn_name and not re.fullmatch(r"[a-z0-9](?:[a-z0-9-]{1,29}[a-z0-9])",vpn_name):
+        raise ValueError("Nom VPN : 3 à 31 caractères minuscules, chiffres ou tirets (sans espace).")
     count=0
     seen={"jk":set(),"volt":set()}
     for index in range(1, 4):
@@ -259,14 +262,14 @@ class Flasher(tk.Tk):
         self.operation_mode = ""
         self.progress_percent = 0
         self.port = tk.StringVar()
-        self.jk_image = tk.StringVar()
+        self.jk_image = tk.StringVar() # Reserved for old unit test API; not user-visible
         self.jk_fields: dict[str, tk.StringVar] = {}
         self.jk_mode = tk.StringVar(value="update")
-        self.vpn_image = tk.StringVar()
+        self.vpn_image = tk.StringVar() # No custom firmware picker in UI
         self.vpn_mode = tk.StringVar(value="update")
         self.vpn_chip = tk.StringVar(value="esp32")  # Explicit chip; never guess from COM port.
         self.volt_mode = tk.StringVar(value="update")
-        self.volt_image = tk.StringVar()
+        self.volt_image = tk.StringVar() # No custom firmware picker in UI
         self.inverter_type = tk.StringVar(value="voltronic")
         self.volt_fields: dict[str, tk.StringVar] = {}
         self.fields: dict[str, tk.StringVar] = {}
@@ -358,7 +361,7 @@ class Flasher(tk.Tk):
         ttk.Label(outer, text="Journal (aucun mot de passe ne doit apparaître) :").pack(anchor="w")
         self.log_widget = tk.Text(outer, height=5, wrap="word", state="disabled")
         self.log_widget.pack(fill="x")
-        self._log("Le bouton Flash ne lance jamais erase_flash.")
+        self._log("Firmware précompilé uniquement ; aucune IP locale ni erase_flash.")
         self._ports()
 
     def _scroll_active_tab(self, event: tk.Event) -> str | None:
@@ -436,7 +439,7 @@ class Flasher(tk.Tk):
     def _build_jk(self, root: ttk.Frame) -> None:
         ttk.Label(
             root,
-            text="Firmware JK 0.3.14-dev corrigé (identifiant unique par ESP32), précompilé et inclus dans cet EXE. "
+            text="Lecteur JK : firmware précompilé intégré. "
                  "Aucun fichier à chercher.",
             wraplength=720
         ).grid(row=0, column=0, columnspan=3, sticky="w", padx=8, pady=(10, 15))
@@ -458,18 +461,6 @@ class Flasher(tk.Tk):
                  "FACTORY reste réservé à une carte neuve.",
             wraplength=720
         ).grid(row=2, column=0, columnspan=3, sticky="w", padx=8, pady=12)
-        expert = ttk.Frame(root)
-        expert.columnconfigure(1, weight=1)
-        expert.grid(row=4, column=0, columnspan=3, sticky="ew", padx=8)
-        expert.grid_remove()
-        self._label(expert, "Firmware JK externe (.bin) :", 0)
-        self._entry(expert, self.jk_image, 0, width=42)
-        self._picker(expert, 0, self.jk_image, "Choisir un firmware JK officiel")
-        ttk.Button(
-            root, text="Options avancées : utiliser un autre firmware",
-            command=lambda: expert.grid_remove()
-                if expert.winfo_ismapped() else expert.grid()
-        ).grid(row=3, column=0, columnspan=3, sticky="w", padx=8)
         ttk.Label(root,text="JK neuf : Wi-Fi, nom et code définis au flash USB. "
             "APP-ONLY préserve les lecteurs existants.",wraplength=700).grid(
             row=5,column=0,columnspan=3,pady=8)
@@ -532,6 +523,7 @@ class Flasher(tk.Tk):
             ("Mot de passe Wi-Fi :", "wifi_password", True),
             ("Clé Tailscale tskey-auth- :", "tailscale_key", True),
             ("Token de passerelle (20-128) :", "gateway_token", True),
+            ("Nom du VPN dans Tailscale (3–31, sans espaces) :", "gateway_name", False),
         ]):
             self._field(connection, caption, key, i, password)
 
@@ -561,69 +553,12 @@ class Flasher(tk.Tk):
             ("Onduleur 3 — code (facultatif) :", "volt3_code",True),
         ]):
             self._field(volts,caption,key,i,password)
-        legacy = ttk.LabelFrame(root,text="Mode expert : anciennes adresses IP fixes",padding=5)
-        legacy.columnconfigure(1,weight=1)
-        legacy.grid(row=6,column=0,columnspan=3,sticky="ew",padx=8)
-        legacy.grid_remove()
-        for idx,(caption,key) in enumerate([
-            ("ESP JK 1 IP :", "jk1_ip"), ("ESP JK 2 IP :", "jk2_ip"),
-            ("ESP JK 3 IP :", "jk3_ip"), ("Voltronic 1 IP :", "volt1_ip"),
-            ("Voltronic 2 IP :", "volt2_ip"), ("Voltronic 3 IP :", "volt3_ip")
-        ]):
-            self._field(legacy,caption,key,idx)
-        ttk.Button(root,text="Expert : afficher les anciennes IP fixes",
-            command=lambda: legacy.grid_remove() if legacy.winfo_ismapped() else legacy.grid()
-        ).grid(row=12,column=0,columnspan=3,padx=8,sticky="w")
-        expert = ttk.Frame(root)
-        expert.columnconfigure(1, weight=1)
-        expert.grid(row=13, column=0, columnspan=3, sticky="ew", padx=8)
-        expert.grid_remove()
-        self._label(expert, "Firmware VPN externe (.bin) :", 0)
-        self._entry(expert, self.vpn_image, 0, width=42)
-        self._picker(expert, 0, self.vpn_image, "Choisir un firmware VPN officiel")
-        ttk.Button(
-            root, text="Options avancées : sélectionner un .bin externe",
-            command=lambda: expert.grid_remove()
-                if expert.winfo_ismapped() else expert.grid()
-        ).grid(row=14, column=0, columnspan=3, sticky="w",
-               padx=8, pady=(4, 0))
-        ttk.Label(root,
-            text="VPN déjà fonctionnel : tester d’abord sur une carte de réserve. "
-                 "Ne pas choisir FACTORY pour une mise à jour.",
-            wraplength=720
-        ).grid(row=7,column=0,columnspan=3,sticky="w",padx=8,pady=(4,0))
-        ttk.Label(root, text="VPN : renseigne les noms et codes définis au flash. "
-                  "Aucune IP requise en mode découverte. Les anciennes IP restent en mode expert.",
-                  wraplength=720).grid(
-            row=8, column=0, columnspan=3, pady=(8, 4))
-        append=ttk.LabelFrame(legacy,text="Ajouter un onduleur · ancien mode IP",padding=6)
-        append.grid(row=7,column=0,columnspan=3,sticky="ew",padx=8,pady=6)
-        ttk.Label(append,text="INV à ajouter :").grid(row=0,column=0,padx=5)
-        self.vpn_patch_slot=tk.StringVar(value="1")
-        ttk.Combobox(append,textvariable=self.vpn_patch_slot,
-                     values=["1","2","3"],state="readonly",width=5).grid(
-                     row=0,column=1,sticky="w",padx=4)
-        ttk.Label(append,text="Sélectionne INV1 / INV2 / INV3 ci-dessus, puis "
-                  "clique « Ajouter INV sans effacer le reste » en bas de l'écran.",
-                  wraplength=680).grid(
-                   row=1,column=0,columnspan=3,pady=(6,2))
-        update_jk=ttk.LabelFrame(legacy,text="Corriger un ESP JK · ancien mode IP",padding=6)
-        update_jk.grid(row=8,column=0,columnspan=3,sticky="ew",padx=8,pady=6)
-        ttk.Label(update_jk,text="Lecteur JK à corriger :").grid(row=0,column=0,padx=5)
-        self.vpn_jk_patch_slot=tk.StringVar(value="2")
-        ttk.Combobox(update_jk,textvariable=self.vpn_jk_patch_slot,
-                     values=["1","2","3"],state="readonly",width=5).grid(
-                     row=0,column=1,sticky="w",padx=4)
-        ttk.Label(update_jk,text="Renseigne seulement la nouvelle IP JK dans les champs ci-dessus. "+
-                  "Laisse son code vide s'il n'a pas changé : il sera conservé dans le VPN. "+
-                  "Puis clique « Corriger IP ESP JK dans VPN » en bas.",
-                  wraplength=700).grid(row=1,column=0,columnspan=3,pady=(6,2))
-        ttk.Button(legacy, text="Ajouter un ancien onduleur par IP",
-            command=self._add_voltronic_only).grid(row=10,column=0,columnspan=3,pady=3)
-        ttk.Button(legacy,text="Corriger une ancienne IP JK",
-            command=self._patch_jk_vpn).grid(row=11,column=0,columnspan=3,pady=3)
-        ttk.Button(legacy,text="Reconfigurer TOUT via USB (expert)",
-            command=self._configure_only).grid(row=12,column=0,columnspan=3,pady=4)
+        ttk.Label(root,text="Les noms des ESP et leurs codes doivent correspondre "
+            "exactement à ceux choisis au premier flash. Aucune adresse IP "
+            "n'est nécessaire.",wraplength=700).grid(
+              row=6,column=0,columnspan=3,sticky="w",padx=8,pady=8)
+        ttk.Button(root,text="Configurer VPN par USB sans reflasher",
+            command=self._configure_only).grid(row=7,column=0,columnspan=3,pady=8)
 
     def _build_voltronic(self, root: ttk.Frame) -> None:
         ttk.Label(root,
@@ -631,22 +566,22 @@ class Flasher(tk.Tk):
                  "Voltronic conserve son câblage RS232 MAX3232.",
             wraplength=690).grid(row=0,column=0,columnspan=3,sticky="w",padx=8,pady=8)
         selector=ttk.LabelFrame(root,text="Famille d'onduleur",padding=8)
-        selector.grid(row=11,column=0,columnspan=3,sticky="ew",padx=8)
+        selector.grid(row=1,column=0,columnspan=3,sticky="ew",padx=8)
         ttk.Radiobutton(selector,text="Voltronic / Axpert (disponible)",
               variable=self.inverter_type,value="voltronic").pack(anchor="w")
         ttk.Radiobutton(selector,text="Deye (firmware en développement)",
               variable=self.inverter_type,value="deye").pack(anchor="w")
         modes=ttk.LabelFrame(root,text="Type de flash onduleur S3",padding=8)
-        modes.grid(row=1,column=0,columnspan=3,sticky="ew",padx=8,pady=8)
+        modes.grid(row=2,column=0,columnspan=3,sticky="ew",padx=8,pady=8)
         ttk.Radiobutton(modes,text="Nouvel ESP32-S3 — FACTORY à 0x0",
                         variable=self.volt_mode,value="factory").pack(anchor="w")
         ttk.Radiobutton(modes,text="Mise à jour Voltronic S3 — APP-ONLY : conserver Wi-Fi et code",
                         variable=self.volt_mode,value="update").pack(anchor="w")
         ttk.Label(root,text="APP-ONLY : conserve Wi-Fi, code de lecture et NVS, "
                   "sans reconfiguration USB. FACTORY : S3 neuf uniquement.",
-                  wraplength=690).grid(row=8,column=0,columnspan=3,sticky="w",padx=8,pady=4)
+                  wraplength=690).grid(row=6,column=0,columnspan=3,sticky="w",padx=8,pady=4)
         params=ttk.LabelFrame(root,text="Configuration USB (première installation)",padding=8)
-        params.grid(row=2,column=0,columnspan=3,sticky="ew",padx=8,pady=8)
+        params.grid(row=3,column=0,columnspan=3,sticky="ew",padx=8,pady=8)
         params.columnconfigure(1,weight=1)
         for i,(description,key,secret) in enumerate([
             ("Wi-Fi 2,4 GHz (SSID) :","wifi_ssid",False),
@@ -658,34 +593,11 @@ class Flasher(tk.Tk):
             self.volt_fields[key]=variable
             self._label(params,description,i)
             self._entry(params,variable,i,password=secret)
-        expert=ttk.Frame(root)
-        expert.columnconfigure(1,weight=1)
-        expert.grid(row=4,column=0,columnspan=3,sticky="ew",padx=8)
-        expert.grid_remove()
-        self._label(expert,"Image Voltronic S3 externe (.bin) :",0)
-        self._entry(expert,self.volt_image,0,width=42)
-        self._picker(expert,0,self.volt_image,"Choisir un firmware Voltronic S3")
-        ttk.Button(root,text="Options expertes : fichier .bin externe",
-                   command=lambda: expert.grid_remove()
-                       if expert.winfo_ismapped() else expert.grid()).grid(
-            row=3,column=0,columnspan=3,sticky="w",padx=8,pady=5)
         ttk.Label(root,
             text="Attention : un port RS232 onduleur NE se branche jamais "
                  "directement sur un GPIO 3,3 V ! MAX3232 et câblage validé "
                  "indispensables. Ne pas écraser le VPN avec ce firmware.",
             wraplength=690).grid(row=5,column=0,columnspan=3,sticky="w",padx=8,pady=8)
-        ttk.Label(root,text="Les actions Voltronic principales restent "
-                  "accessibles dans la barre fixe en bas de l'onglet.",
-                  wraplength=690).grid(
-            row=6,column=0,columnspan=3,pady=6)
-        ttk.Button(root,text="EXPERT · Migration USB vers OTA (S3 de test uniquement)",
-                   command=self._migrate_voltronic_to_ota).grid(
-            row=9,column=0,columnspan=3,pady=8)
-        ttk.Label(root,text="Attention : cette opération modifie le bootloader et "
-                  "la table des partitions. Uniquement pour un S3 de réserve ; "
-                  "validation sur la carte de production en attente.",
-                  wraplength=690).grid(row=10,column=0,columnspan=3,pady=5)
-
     @staticmethod
     def _bundled_voltronic_image(mode: str) -> Path:
         base=Path(getattr(sys,"_MEIPASS",Path(__file__).resolve().parent))
@@ -954,6 +866,12 @@ class Flasher(tk.Tk):
             ) else field.get()
             for key, field in self.fields.items()
         }
+        # The secure NVS name is only a display identity in Tailscale.
+        values["gateway_name"]=values.get("gateway_name","").strip().lower()
+        # New discovery-only flash: no legacy IP address entry anywhere in UI.
+        for family in ("jk","volt"):
+            for slot in (1,2,3):
+                values[f"{family}{slot}_ip"]=""
         validate_vpn_config(values)
         self.secret_values = [
             v for k, v in values.items() if k.endswith("_code")

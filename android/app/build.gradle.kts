@@ -17,11 +17,11 @@ android {
     namespace = "fr.smartenergy.android"
     compileSdk = 35
     defaultConfig {
-        applicationId = "fr.smartenergy.android.espbridge"
+        applicationId = "fr.smartenergy.android"
         minSdk = 29
         targetSdk = 35
-        versionCode = 61
-        versionName = "0.3.46-espbridge-test"
+        versionCode = 62
+        versionName = "0.3.48-dev"
     }
     signingConfigs {
         if (hasStableSigning) {
@@ -35,12 +35,7 @@ android {
     }
     buildTypes {
         debug {
-            // The GitHub runner's default debug key is ephemeral. A new trial
-            // package ID avoids INSTALL_FAILED_UPDATE_INCOMPATIBLE and leaves
-            // older debug installations (and their Keystore data) untouched.
-            // From 0.3.33 onwards, the test package ID is fixed. If the
-            // runner signing key changes, Android still refuses an upgrade.
-            // Production updates require the stable signing secrets.
+            // Only release builds with the permanent signing key may upgrade the official app.
             applicationIdSuffix = ".debug"
             if (hasStableSigning) signingConfig = signingConfigs.getByName("stable")
         }

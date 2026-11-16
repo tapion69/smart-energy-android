@@ -1,0 +1,173 @@
+name: Publish Smart Energy Android 0.3.48 signed in-place update
+on:
+  push:
+    branches: ['feature/names-only-signed-android-20261116']
+    paths:
+      - 'android/**'
+      - '.github/workflows/publish-android-signed-0348.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  actions: read
+
+concurrency:
+  group: smart-energy-signed-release-0348
+  cancel-in-progress: false
+
+jobs:
+  signed-android:
+    name: Verify original signature and publish version 0.3.48-dev
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - name: Check exact production identity and unique version number
+        shell: bash
+        run: |
+          set -euo pipefail
+          grep -Fq 'applicationId = "fr.smartenergy.android"' android/app/build.gradle.kts
+          grep -Fq 'versionCode = 62' android/app/build.gradle.kts
+          grep -Fq 'versionName = "0.3.48-dev"' android/app/build.gradle.kts
+          grep -Fq 'android:label="Smart Energy"' android/app/src/main/AndroidManifest.xml
+          ! grep -q 'espbridge' android/app/build.gradle.kts
+
+      - name: Preserve the SHA256-verified embedded Voltronic OTA test asset
+        uses: actions/download-artifact@v4
+        with:
+          name: SmartEnergy-VOLTRONIC-S3-OTA-0.3.3-PREFLIGHT
+          run-id: 43585410799
+          repository: tapion69/smart-energy-android
+          github-token: ${{ github.token }}
+          path: android/app/src/main/assets
+      - name: Verify identical embedded asset to current signed app
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd android/app/src/main/assets
+          echo '9cfc8c87280c50bf92eb4f6b8029ea67004aa79cfbe7ff0faa0f24f78e3bf289  smart-energy-voltronic-S3-OTA.bin' | sha256sum -c -
+          test "$(wc -c < smart-energy-voltronic-S3-OTA.bin)" -eq 901664
+          mv smart-energy-voltronic-S3-OTA.bin voltronic-s3-0.3.4-test.bin
+
+      - name: Load original permanent Android signing key, never print credentials
+        shell: bash
+        env:
+          SE_KEYSTORE_B64: ${{ secrets.SMART_ENERGY_ANDROID_KEYSTORE_BASE64 }}
+          SE_STORE_PASSWORD: ${{ secrets.SMART_ENERGY_ANDROID_STORE_PASSWORD }}
+          SE_KEY_ALIAS: ${{ secrets.SMART_ENERGY_ANDROID_KEY_ALIAS }}
+          SE_KEY_PASSWORD: ${{ secrets.SMART_ENERGY_ANDROID_KEY_PASSWORD }}
+          TRUSTED_CERT: ${{ secrets.SMART_ENERGY_ANDROID_CERT_SHA256 }}
+        run: |
+          set -euo pipefail
+          test -n "$SE_KEYSTORE_B64" && test -n "$SE_STORE_PASSWORD"
+          test -n "$SE_KEY_ALIAS" && test -n "$SE_KEY_PASSWORD"
+          [[ "$TRUSTED_CERT" =~ ^[a-fA-F0-9]{64}$ ]]
+          printf '%s' "$SE_KEYSTORE_B64" | base64 --decode > "$RUNNER_TEMP/smart-energy-android-release.jks"
+          chmod 600 "$RUNNER_TEMP/smart-energy-android-release.jks"
+          echo "SMART_ENERGY_ANDROID_KEYSTORE_FILE=$RUNNER_TEMP/smart-energy-android-release.jks" >> "$GITHUB_ENV"
+          echo "SMART_ENERGY_ANDROID_STORE_PASSWORD=$SE_STORE_PASSWORD" >> "$GITHUB_ENV"
+          echo "SMART_ENERGY_ANDROID_KEY_ALIAS=$SE_KEY_ALIAS" >> "$GITHUB_ENV"
+          echo "SMART_ENERGY_ANDROID_KEY_PASSWORD=$SE_KEY_PASSWORD" >> "$GITHUB_ENV"
+
+      - name: Android unit tests and permanently signed release build
+        working-directory: android
+        run: ./gradlew --no-daemon testDebugUnitTest assembleRelease
+
+      - name: Verify version, APK signature against installed 0.3.47 and original Keystore
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TRUSTED_CERT: ${{ secrets.SMART_ENERGY_ANDROID_CERT_SHA256 }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p release-files previous
+          APK=android/app/build/outputs/apk/release/app-release.apk
+          APKSIGNER=$(find "$ANDROID_HOME/build-tools" -type f -name apksigner | sort -V | tail -n 1)
+          AAPT=$(find "$ANDROID_HOME/build-tools" -type f -name aapt | sort -V | tail -n 1)
+          test -s "$APK"
+          "$APKSIGNER" verify --verbose "$APK"
+          "$AAPT" dump badging "$APK" > /tmp/smart-energy-new-badging
+          head -n 1 /tmp/smart-energy-new-badging
+          grep -q "name='fr.smartenergy.android'" /tmp/smart-energy-new-badging
+          grep -q "versionCode='62'" /tmp/smart-energy-new-badging
+          grep -q "versionName='0.3.48-dev'" /tmp/smart-energy-new-badging
+          echo "Production package/version verification succeeded."
+          test "$(unzip -p "$APK" assets/voltronic-s3-0.3.4-test.bin | sha256sum | awk '{print $1}')" = 9cfc8c87280c50bf92eb4f6b8029ea67004aa79cfbe7ff0faa0f24f78e3bf289
+          echo "Embedded asset verification succeeded."
+          gh release download android-v0.3.47-dev -R "$GITHUB_REPOSITORY" --pattern SmartEnergy-Android.apk --dir previous
+          OLD=previous/SmartEnergy-Android.apk
+          "$APKSIGNER" verify "$OLD"
+          echo "Downloaded official previous release and verified signature."
+          "$AAPT" dump badging "$OLD" > /tmp/smart-energy-old-badging
+          grep -q "name='fr.smartenergy.android'" /tmp/smart-energy-old-badging
+          head -n 1 /tmp/smart-energy-old-badging
+          grep -q "versionCode='61'" /tmp/smart-energy-old-badging
+          echo "Previous release identity verified."
+          cert() {
+            # Android build-tools use different prefix casing / spacing.
+            # Extract only a full 256-bit certificate digest, as prior
+            # successful official signed release pipelines do.
+            "$APKSIGNER" verify --print-certs "$1" |
+              grep -Eio '([[:xdigit:]]{2}:){31}[[:xdigit:]]{2}|[[:xdigit:]]{64}' |
+              head -n 1 | tr -d ':' | tr '[:upper:]' '[:lower:]'
+          }
+          NEW_CERT=$(cert "$APK")
+          OLD_CERT=$(cert "$OLD")
+          EXPECTED=$(printf '%s' "$TRUSTED_CERT" | tr '[:upper:]' '[:lower:]')
+          [[ "$NEW_CERT" =~ ^[a-f0-9]{64}$ && "$OLD_CERT" =~ ^[a-f0-9]{64}$ ]]
+          if [[ "$NEW_CERT" != "$OLD_CERT" || "$NEW_CERT" != "$EXPECTED" ]]; then
+            echo "::error::Official signer mismatch: refusing publication"
+            exit 1
+          fi
+          echo "Original permanent signature matches previous APK and trusted certificate."
+          cp "$APK" release-files/SmartEnergy-Android.apk
+          sha256sum release-files/SmartEnergy-Android.apk
+          echo "Verified direct in-place upgrade 0.3.47-dev (61) -> 0.3.48-dev (62)."
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: SmartEnergy-Android-0348-Official-Signed-Upgrade
+          path: release-files/SmartEnergy-Android.apk
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Publish officially signed prerelease for in-app updates
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          TAG=android-v0.3.48-dev
+          if gh release view "$TAG" -R "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "::error::Tag already published; refuse to overwrite signed APK"
+            exit 1
+          fi
+          gh release create "$TAG" release-files/SmartEnergy-Android.apk \
+            -R "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --prerelease \
+            --title "Smart Energy Android 0.3.48 — association automatique JK et onduleurs" \
+            --notes "Experimental signed in-place update: same original fr.smartenergy.android package and certificate; versionCode 62. Adds LAN discovery of preconfigured JK and Voltronic readers by name, then requires private code. Manual configurations remain accessible; existing JK dashboard, saved data and firmware are unchanged. No automatic ESP flash and Deye firmware not yet included."
+
+      - name: Activate existing application's official in-app update checker
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch origin main
+          git worktree add /tmp/smart-energy-official-main origin/main
+          cd /tmp/smart-energy-official-main
+          python -m unittest discover -s tools/releases -p 'test_*.py'
+          python tools/releases/publish_update_manifest.py \
+            --tag android-v0.3.48-dev \
+            --asset "$GITHUB_WORKSPACE/release-files/SmartEnergy-Android.apk" \
+            --version 0.3.48-dev --version-code 62
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add updates/android.json
+          if ! git diff --cached --quiet; then
+            git commit -m 'chore(updates): publish signed Android 0.3.48-dev'
+            git pull --rebase origin main
+            git push origin HEAD:main
+          fi
+          echo 'Official Android 0.3.48 update manifest activated.'
