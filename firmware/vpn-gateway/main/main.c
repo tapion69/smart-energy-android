@@ -402,13 +402,13 @@ static void discovery_listener(void *unused){
  */
 static esp_err_t discovery_inventory(httpd_req_t *req) {
     if(!request_is_private_vpn(req))
-        return deny(req,"403 Forbidden","{\\"error\\":\\"vpn_only\\"}");
+        return deny(req,"403 Forbidden","{\"error\":\"vpn_only\"}");
     if(!authorized(req))
-        return deny(req,"401 Unauthorized","{\\"error\\":\\"invalid_gateway_token\\"}");
+        return deny(req,"401 Unauthorized","{\"error\":\"invalid_gateway_token\"}");
     cJSON *root=cJSON_CreateObject();
     cJSON *items=cJSON_AddArrayToObject(root,"devices");
     if(!root || !items){if(root)cJSON_Delete(root);
-        return deny(req,"500 Internal Server Error","{\\"error\\":\\"memory\\"}");}
+        return deny(req,"500 Internal Server Error","{\"error\":\"memory\"}");}
     cJSON_AddStringToObject(root,"product","smart-energy-vpn-discovery");
     cJSON_AddNumberToObject(root,"schemaVersion",1);
     for(int family=0;family<2;family++)for(int slot=0;slot<3;slot++){
@@ -427,7 +427,7 @@ static esp_err_t discovery_inventory(httpd_req_t *req) {
         if(ambiguous || !se_is_private_ipv4(confirmed_ip) || !confirmed_id[0])continue;
         cJSON *entry=cJSON_CreateObject();
         if(!entry){cJSON_Delete(root);
-            return deny(req,"500 Internal Server Error","{\\"error\\":\\"memory\\"}");}
+            return deny(req,"500 Internal Server Error","{\"error\":\"memory\"}");}
         cJSON_AddStringToObject(entry,"family",family==0?"jk":"voltronic");
         cJSON_AddStringToObject(entry,"name",name);
         cJSON_AddStringToObject(entry,"device_id",confirmed_id);
@@ -437,7 +437,7 @@ static esp_err_t discovery_inventory(httpd_req_t *req) {
     }
     char *json=cJSON_PrintUnformatted(root);
     cJSON_Delete(root);
-    if(!json)return deny(req,"500 Internal Server Error","{\\"error\\":\\"memory\\"}");
+    if(!json)return deny(req,"500 Internal Server Error","{\"error\":\"memory\"}");
     httpd_resp_set_type(req,"application/json");
     httpd_resp_set_hdr(req,"Cache-Control","no-store");
     httpd_resp_set_hdr(req,"X-Content-Type-Options","nosniff");
