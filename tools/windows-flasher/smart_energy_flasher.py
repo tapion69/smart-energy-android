@@ -474,10 +474,22 @@ class Flasher(tk.Tk):
             command=lambda: expert.grid_remove()
                 if expert.winfo_ismapped() else expert.grid()
         ).grid(row=3, column=0, columnspan=3, sticky="w", padx=8)
-        ttk.Label(root, text="Le bouton « Flasher le lecteur JK » reste visible "
-                  "en bas de l'onglet.", wraplength=720).grid(
-            row=5, column=0, columnspan=3, pady=12
-        )
+        ttk.Label(root,text="JK neuf : Wi-Fi, nom et code définis au flash USB. "
+            "APP-ONLY préserve les lecteurs existants.",wraplength=700).grid(
+            row=5,column=0,columnspan=3,pady=8)
+        factory=ttk.LabelFrame(root,text="Première installation USB — ESP JK neuf",padding=8)
+        factory.grid(row=6,column=0,columnspan=3,sticky="ew",padx=8,pady=5)
+        factory.columnconfigure(1,weight=1)
+        for i,(caption,key,secret) in enumerate([
+            ("Nom personnalisé :","display_name",False),
+            ("Wi-Fi 2,4 GHz (SSID) :","wifi_ssid",False),
+            ("Mot de passe Wi-Fi :","wifi_password",True),
+            ("Code de lecture (8–32) :","read_code",True),
+        ]):
+            variable=tk.StringVar(value="Batteries JK" if key=="display_name" else "")
+            self.jk_fields[key]=variable
+            self._label(factory,caption,i)
+            self._entry(factory,variable,i,password=secret)
 
     def _field(self, frame: ttk.Frame, text: str, key: str, row: int,
                password: bool = False) -> None:
@@ -616,10 +628,16 @@ class Flasher(tk.Tk):
 
     def _build_voltronic(self, root: ttk.Frame) -> None:
         ttk.Label(root,
-            text="ESP32-S3 N16R8 uniquement · lecteur Voltronic RS232 2400 bauds. "
-                 "Firmware Voltronic avec polling stable et OTA sous réserve de migration.",
+            text="Onglet Onduleurs. Voltronic/Axpert est disponible ; Deye sera ajouté après validation du firmware. "
+                 "Voltronic conserve son câblage RS232 MAX3232.",
             wraplength=690).grid(row=0,column=0,columnspan=3,sticky="w",padx=8,pady=8)
-        modes=ttk.LabelFrame(root,text="Type de flash Voltronic S3",padding=8)
+        selector=ttk.LabelFrame(root,text="Famille d'onduleur",padding=8)
+        selector.grid(row=11,column=0,columnspan=3,sticky="ew",padx=8)
+        ttk.Radiobutton(selector,text="Voltronic / Axpert (disponible)",
+              variable=self.inverter_type,value="voltronic").pack(anchor="w")
+        ttk.Radiobutton(selector,text="Deye (firmware en développement)",
+              variable=self.inverter_type,value="deye").pack(anchor="w")
+        modes=ttk.LabelFrame(root,text="Type de flash onduleur S3",padding=8)
         modes.grid(row=1,column=0,columnspan=3,sticky="ew",padx=8,pady=8)
         ttk.Radiobutton(modes,text="Nouvel ESP32-S3 — FACTORY à 0x0",
                         variable=self.volt_mode,value="factory").pack(anchor="w")
@@ -635,8 +653,9 @@ class Flasher(tk.Tk):
             ("Wi-Fi 2,4 GHz (SSID) :","wifi_ssid",False),
             ("Mot de passe Wi-Fi :","wifi_password",True),
             ("Code privé de lecture (8–32) :","read_code",True),
+            ("Nom personnalisé (1–32 octets) :","display_name",False),
         ]):
-            variable=tk.StringVar()
+            variable=tk.StringVar(value="Onduleur Voltronic" if key=="display_name" else "")
             self.volt_fields[key]=variable
             self._label(params,description,i)
             self._entry(params,variable,i,password=secret)
@@ -693,6 +712,8 @@ class Flasher(tk.Tk):
 
     def _flash_voltronic(self) -> None:
         try:
+            if self.inverter_type.get()!="voltronic":
+                raise ValueError("Deye n'a pas encore de binaire validé. Flash volontairement bloqué.")
             from vpn_usb import check_precompiled_image
             port=self._assert_ready()
             mode=self.volt_mode.get()
