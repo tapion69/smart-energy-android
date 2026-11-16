@@ -2176,66 +2176,136 @@ class MainActivity : Activity() {
         }
     }
 
+    /** Local NSD/mDNS discovery for the preflashed JK and Voltronic readers.
+     * Never sends private credentials until an operator chooses a device.
+     * A network name is not authentication: the subsequent endpoint/code and
+     * saved identity verification remain mandatory.
+     */
     private fun discoverHomeLan() {
-        val code = storedCode()
-        if (code.isBlank()) {
-            state("Code ESP32 manquant. Saisis son code original dans la section 2, puis connecte-toi via son IP dans la section 1.")
-            return
-        }
-        if (discoverListener != null) {
-            state("Recherche déjà en cours.")
-            return
-        }
-        val nsd = getSystemService(Context.NSD_SERVICE) as NsdManager
-        var found = false
-        val listener = object : NsdManager.DiscoveryListener {
-            override fun onDiscoveryStarted(serviceType: String) {
-                state("Recherche des passerelles Smart JK sur le réseau local…")
+        if (discoverListener!=null) { state("Recherche déjà en cours."); return }
+        val nsd=getSystemService(Context.NSD_SERVICE) as NsdManager
+        val candidates=linkedMapOf<String,LocalReader>()
+        val listener=object : NsdManager.DiscoveryListener {
+            override fun onDiscoveryStarted(serviceType:String) {
+                state("Recherche locale Smart Energy (JK et onduleurs)…")
             }
-            override fun onStartDiscoveryFailed(serviceType: String, errorCode: Int) {
-                state("Recherche réseau indisponible : indique l'adresse IP manuellement.")
-                try { nsd.stopServiceDiscovery(this) } catch (_: Exception) {}
-                discoverListener = null
+            override fun onStartDiscoveryFailed(serviceType:String,errorCode:Int) {
+                try{nsd.stopServiceDiscovery(this)}catch(_:Exception){}
+                discoverListener=null
+                state("Découverte réseau indisponible. Le mode IP manuel reste accessible.")
             }
-            override fun onStopDiscoveryFailed(serviceType: String, errorCode: Int) {
-                discoverListener = null
+            override fun onStopDiscoveryFailed(serviceType:String,errorCode:Int) {
+                discoverListener=null
             }
-            override fun onDiscoveryStopped(serviceType: String) { discoverListener = null }
-            override fun onServiceLost(serviceInfo: NsdServiceInfo) {}
-            override fun onServiceFound(serviceInfo: NsdServiceInfo) {
-                val expected = prefs.getString("device_id", "") ?: ""
-                if (found || !serviceInfo.serviceName.startsWith("smartjk-", true) ||
-                    (expected.isNotBlank() && !serviceInfo.serviceName.equals(expected, true))) return
-                nsd.resolveService(serviceInfo, object : NsdManager.ResolveListener {
-                    override fun onResolveFailed(serviceInfo: NsdServiceInfo, errorCode: Int) {}
-                    override fun onServiceResolved(serviceInfo: NsdServiceInfo) {
-                        val host = serviceInfo.host
-                        if (found || host !is Inet4Address) return
-                        val ip = host.hostAddress ?: return
-                        if (!allowedLocalIp(ip)) return
-                        found = true
-                        runOnUiThread {
-                            lanIp.setText(ip)
-                            connectHomeLan() // verifies stored device ID before accepting IP
+            override fun onDiscoveryStopped(serviceType:String) {discoverListener=null}
+            override fun onServiceLost(info:NsdServiceInfo) {}
+            override fun onServiceFound(info:NsdServiceInfo) {
+                val service=info.serviceName
+                val family=when {
+                    service.startsWith("smartjk-",true) -> "jk"
+                    service.startsWith("sevolt-",true) ||
+                        service.contains("(sevolt-",true) -> "voltronic"
+                    else -> return
+                }
+                nsd.resolveService(info,object:NsdManager.ResolveListener {
+                    override fun onResolveFailed(info:NsdServiceInfo,code:Int) {}
+                    override fun onServiceResolved(info:NsdServiceInfo) {
+                        val address=info.host
+                        if(address !is Inet4Address)return
+                        val ip=address.hostAddress ?: return
+                        if(!allowedLocalIp(ip))return
+                        val port=if(family=="jk")80 else 18081
+                        if(info.port!=port)return
+                        val name=if(family=="voltronic")
+                            service.substringBefore(" (sevolt-").trim()
+                        else service
+                        synchronized(candidates) {
+                            candidates[family+":"+ip]=LocalReader(family,name,ip,port)
                         }
                     }
                 })
             }
         }
-        discoverListener = listener
+        discoverListener=listener
         try {
-            nsd.discoverServices("_http._tcp.", NsdManager.PROTOCOL_DNS_SD, listener)
+            nsd.discoverServices("_http._tcp.",NsdManager.PROTOCOL_DNS_SD,listener)
             uiHandler.postDelayed({
-                if (discoverListener === listener) {
-                    try { nsd.stopServiceDiscovery(listener) } catch (_: Exception) {}
-                    discoverListener = null
-                    if (!found) state("Aucune passerelle trouvée : renseigne son IP une fois.")
+                if(discoverListener===listener) {
+                    try{nsd.stopServiceDiscovery(listener)}catch(_:Exception){}
+                    discoverListener=null
+                    val discovered=synchronized(candidates) {
+                        candidates.values.sortedWith(compareBy({it.family},{it.name})).toList()
+                    }
+                    if(discovered.isEmpty()) {
+                        state("Aucun ESP Smart Energy détecté. Vérifie le Wi-Fi 2,4 GHz, puis réessaie.")
+                    } else {
+                        val labels=discovered.map {
+                            it.name+" — "+(if(it.family=="jk")"JK" else "Voltronic")
+                        }.toTypedArray()
+                        AlertDialog.Builder(this)
+                            .setTitle("Choisir un équipement Smart Energy")
+                            .setItems(labels) { _,which -> promptReaderCode(discovered[which]) }
+                            .setNegativeButton("Annuler",null).show()
+                    }
                 }
-            }, 12000)
-        } catch (ex: Exception) {
-            discoverListener = null
-            state("Recherche impossible : " + (ex.message ?: "erreur système"))
+            },15000)
+        }catch(ex:Exception){
+            discoverListener=null
+            state("Découverte impossible : "+(ex.message ?: "réseau indisponible"))
         }
+    }
+
+    private fun promptReaderCode(reader:LocalReader) {
+        val field=input("Code de lecture choisi au flash (8 à 32 caractères)",true)
+        AlertDialog.Builder(this)
+            .setTitle("Associer "+reader.name)
+            .setMessage("Saisis le code de lecture de ce lecteur préconfiguré. "+
+                "Aucun appui sur BOOT n'est nécessaire.")
+            .setView(field)
+            .setNegativeButton("Annuler",null)
+            .setPositiveButton("Vérifier et associer") { _,_ ->
+                val secret=field.text.toString().trim()
+                if(secret.length !in 8..32){
+                    state("Code invalide : il doit contenir 8 à 32 caractères.")
+                }else if(reader.family=="jk"){
+                    lanIp.setText(reader.ip)
+                    setupCode.setText(secret)
+                    remoteCheck.isChecked=false
+                    prefs.edit().putString("connection_preference","local")
+                        .putBoolean("remote_gateway_enabled",false).apply()
+                    connectHomeLan() // Existing identity + authenticated BMS check.
+                }else{
+                    val slot=(1..3).firstOrNull {
+                        !prefs.getBoolean("inverter_"+it+"_validated",false)
+                    }
+                    if(slot==null){
+                        state("Trois onduleurs sont configurés. Retire un ancien appareil avant d'en ajouter.")
+                    }else{
+                        state("Vérification en lecture seule de "+reader.name+"…")
+                        inverterWorker.execute {
+                            val result=try {
+                                val wifi=voltronicWifiNetwork()
+                                    ?: throw IllegalStateException("Wi-Fi local requis")
+                                val info=VoltronicReadOnlyClient.probe(
+                                    reader.ip,secret,reader.port,wifi)
+                                if(info.optString("product")!="smart-energy-voltronic-s3")
+                                    throw IllegalStateException("Lecteur non reconnu")
+                                saveAuxiliaryCode("premium_voltronic_"+slot+"_code_cipher",secret)
+                                prefs.edit()
+                                    .putString("inverter_"+slot+"_ip",reader.ip)
+                                    .putString("inverter_"+slot+"_name",reader.name)
+                                    .putInt("inverter_"+slot+"_port",reader.port)
+                                    .putBoolean("inverter_"+slot+"_validated",true)
+                                    .apply()
+                                "Onduleur "+reader.name+" associé avec succès (slot "+slot+")."
+                            }catch(ex:Exception){
+                                "Association refusée : "+(ex.message ?: "authentification ou réseau")
+                            }
+                            runOnUiThread {state(result);voltronicFleet.changed()}
+                        }
+                    }
+                }
+            }.show()
     }
 
     private fun assignedSetupSlots():Map<Int,String> =
