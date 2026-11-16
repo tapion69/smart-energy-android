@@ -1034,92 +1034,140 @@ class MainActivity : Activity() {
         add(diagnosticSection,label("Désactivé par défaut. Les alertes réelles du BMS restent visibles sur les cartes.",12f,color=subdued))
         renderFleetOverview()
 
-        // First inverter interoperability test: authenticated Voltronic GET or
-        // SunSpec Modbus/TCP FC03 discovery, never changes inverter settings.
-        val inverter=section(advanced,"Expert · Onduleurs Voltronic / SunSpec (configuration manuelle)")
-        add(inverter,label("Détection expérimentale sur le Wi-Fi local. "+
-            "Voltronic nécessite un ESP32-S3 équipé d'une interface RS232 "+
-            "adaptée ; SunSpec lit directement les modèles Modbus TCP d'un "+
-            "onduleur qui prend en charge cette norme. Aucun réglage n'est écrit.",
-            12f,color=subdued))
-        val inverterTypes=RadioGroup(this).apply { orientation=RadioGroup.VERTICAL }
-        val inverterVolt=RadioButton(this).apply {
-            text="Voltronic / Axpert — ESP32-S3 RS232"
-            setTextColor(normal)
-        }
-        val inverterSun=RadioButton(this).apply {
-            text="SunSpec — Modbus TCP (FC03 uniquement)"
-            setTextColor(normal)
-        }
-        inverterTypes.addView(inverterVolt)
-        inverterTypes.addView(inverterSun)
-        inverterVolt.isChecked=prefs.getString("inverter_probe_type","voltronic")!="sunspec"
-        inverterSun.isChecked=!inverterVolt.isChecked
-        add(inverter,inverterTypes,5)
-        val inverterIp=input("Adresse IP locale du lecteur / onduleur")
-        inverterIp.setText(prefs.getString("inverter_probe_ip","") ?: "")
-        add(inverter,inverterIp,6)
-        val inverterPort=input("Port TCP : 18081 (Voltronic) ou 502 (SunSpec)")
-        inverterPort.inputType=android.text.InputType.TYPE_CLASS_NUMBER
-        inverterPort.setText(prefs.getInt("inverter_probe_port",18081).toString())
-        inverterVolt.setOnClickListener { inverterPort.setText("18081") }
-        inverterSun.setOnClickListener { inverterPort.setText("502") }
-        add(inverter,inverterPort,6)
-        val inverterCode=input("Code de lecture ESP32 Voltronic (8–32 caractères)",true)
-        add(inverter,inverterCode,6)
-        val inverterUnit=input("Adresse esclave SunSpec (1 par défaut)")
-        inverterUnit.inputType=android.text.InputType.TYPE_CLASS_NUMBER
-        inverterUnit.setText("1")
-        add(inverter,inverterUnit,6)
-        val inverterStatus=label("Aucune connexion testée.",12f,false,subdued)
-        add(inverter,inverterStatus,6)
-        add(inverter,action("Tester mon onduleur en lecture seule") {
-            val ip=inverterIp.text.toString().trim()
-            val type=if(inverterSun.isChecked)"sunspec" else "voltronic"
-            val port=inverterPort.text.toString().trim().toIntOrNull()
-            val unit=inverterUnit.text.toString().trim().toIntOrNull()
-            val code=inverterCode.text.toString()
-            if(!SunSpecReadOnly.isPrivateIPv4(ip) || port==null ||
-                port !in 1..65535 || (type=="voltronic" && code.length !in 8..32) ||
-                (type=="sunspec" && (unit==null || unit !in 0..247))) {
-                inverterStatus.text="Vérifie l'IP privée, le port, le code Voltronic "+
-                    "ou l'adresse esclave SunSpec."
-            }else {
-                prefs.edit().putString("inverter_probe_ip",ip)
-                    .putString("inverter_probe_type",type)
-                    .putInt("inverter_probe_port",port)
-                    .putBoolean("inverter_probe_validated",false).apply()
-                inverterStatus.text="Lecture réseau en cours (aucune écriture)…"
-                inverterWorker.execute {
-                    val result=try {
-                        if(type=="sunspec"){
-                            val found=SunSpecReadOnly.discover(ip,port,unit!!)
-                            prefs.edit().putBoolean("inverter_probe_validated",true).apply()
-                            "SunSpec détecté : base ${found.baseRegister}, "+
-                                "${found.models.size} modèle(s) (IDs : "+
-                                found.models.joinToString(",") { it.modelId.toString() }+")."
-                        }else{
-                            val wifi=voltronicWifiNetwork()
-                                ?: throw IllegalStateException("Connecte le téléphone au Wi-Fi local de l'ESP32-S3")
-                            val found=VoltronicReadOnlyClient.probe(ip,code,port,wifi)
-                            saveAuxiliaryCode("premium_voltronic_code_cipher",code)
-                            prefs.edit().putBoolean("inverter_probe_validated",true).apply()
-                            "Lecteur Voltronic reconnu : "+
-                                found.optString("version","version inconnue")+
-                                " · mode lecture seule confirmé."
+        // Three equal inverter slots; preserve the original INV1 storage keys.
+        val inverter=section(advanced,"Expert · Onduleurs 1 / 2 / 3 (configuration manuelle)",false)
+        add(inverter,label("Chaque emplacement accepte Voltronic / Axpert, SunSpec Modbus TCP ou "+
+            "Deye. Deye est actuellement testé uniquement par détection SunSpec FC03 : "+
+            "un modèle Deye sans table SunSpec compatible ne peut pas encore être lu. "+
+            "Aucune commande d'écriture n'est envoyée.",12f,color=subdued))
+        for(slot in 1..3) {
+            val panel=section(inverter,"Onduleur $slot · configuration et association",false)
+            val prefix=if(slot==1)"inverter_probe_" else "inverter_${slot}_"
+            val codeKey=if(slot==1)"premium_voltronic_code_cipher"
+                else "premium_voltronic_${slot}_code_cipher"
+            val selected=prefs.getString(prefix+"type","voltronic") ?: "voltronic"
+            val types=RadioGroup(this).apply { orientation=RadioGroup.VERTICAL }
+            val vol=RadioButton(this).apply {
+                text="Voltronic / Axpert — ESP32-S3 RS232"
+                setTextColor(normal)
+            }
+            val sun=RadioButton(this).apply {
+                text="SunSpec — Modbus TCP (FC03)"
+                setTextColor(normal)
+            }
+            val deye=RadioButton(this).apply {
+                text="Deye — détection SunSpec si compatible (expérimental)"
+                setTextColor(normal)
+            }
+            types.addView(vol)
+            types.addView(sun)
+            types.addView(deye)
+            when(selected) {
+                "sunspec" -> sun.isChecked=true
+                "deye" -> deye.isChecked=true
+                else -> vol.isChecked=true
+            }
+            add(panel,types,5)
+            val ip=input("Adresse IP locale · Onduleur $slot")
+            ip.setText(prefs.getString(prefix+"ip","") ?: "")
+            add(panel,ip,6)
+            val port=input("Port TCP : 18081 (Voltronic) ou 502 (Modbus)")
+            port.inputType=android.text.InputType.TYPE_CLASS_NUMBER
+            port.setText(prefs.getInt(prefix+"port",
+                if(selected=="voltronic")18081 else 502).toString())
+            add(panel,port,6)
+            val code=input("Code ESP32 Voltronic (8–32 caractères ; vide si enregistré)",true)
+            add(panel,code,6)
+            val unit=input("Adresse esclave Modbus (1 par défaut)")
+            unit.inputType=android.text.InputType.TYPE_CLASS_NUMBER
+            unit.setText(prefs.getInt(prefix+"unit",1).toString())
+            add(panel,unit,6)
+            vol.setOnClickListener { port.setText("18081") }
+            sun.setOnClickListener { port.setText("502") }
+            deye.setOnClickListener { port.setText("502") }
+            val feedback=label(
+                if(voltronicFleet.configured(slot))
+                    "Onduleur $slot : enregistré (${selected.uppercase()})"
+                else "Onduleur $slot : aucun équipement associé",
+                12f,false,subdued)
+            add(panel,feedback,6)
+            add(panel,action("Tester et enregistrer Onduleur $slot") {
+                val host=ip.text.toString().trim()
+                val kind=when {
+                    deye.isChecked -> "deye"
+                    sun.isChecked -> "sunspec"
+                    else -> "voltronic"
+                }
+                val tcpPort=port.text.toString().trim().toIntOrNull()
+                val slave=unit.text.toString().trim().toIntOrNull()
+                val typedCode=code.text.toString()
+                val secret=if(typedCode.isNotBlank())typedCode else auxiliaryCode(codeKey)
+                if(!SunSpecReadOnly.isPrivateIPv4(host) || tcpPort==null ||
+                    tcpPort !in 1..65535 ||
+                    (kind=="voltronic" && secret.length !in 8..32) ||
+                    (kind!="voltronic" && (slave==null || slave !in 0..247))) {
+                    feedback.text="Vérifie l'IP privée, le port, le code Voltronic ou l'adresse Modbus."
+                }else{
+                    feedback.text="Onduleur $slot : test réseau en lecture seule…"
+                    inverterWorker.execute {
+                        val result=try {
+                            val summary=if(kind=="voltronic") {
+                                val wifi=voltronicWifiNetwork()
+                                    ?: throw IllegalStateException("Wi-Fi local requis")
+                                val found=VoltronicReadOnlyClient.probe(host,secret,tcpPort,wifi)
+                                if(typedCode.isNotBlank())saveAuxiliaryCode(codeKey,secret)
+                                "Voltronic détecté : "+found.optString("version","version inconnue")
+                            } else {
+                                val found=SunSpecReadOnly.discover(host,tcpPort,slave!!)
+                                (if(kind=="deye")"Deye compatible SunSpec" else "SunSpec détecté")+
+                                    " : ${found.models.size} modèle(s) reconnus"
+                            }
+                            prefs.edit().putString(prefix+"ip",host)
+                                .putString(prefix+"type",kind)
+                                .putInt(prefix+"port",tcpPort)
+                                .putInt(prefix+"unit",slave ?: 1)
+                                .putBoolean(prefix+"validated",true).apply()
+                            "Onduleur $slot enregistré. $summary"
+                        }catch(ex:Exception) {
+                            "Onduleur $slot non enregistré : "+
+                                (ex.message?.take(130) ?: ex.javaClass.simpleName)+
+                                (if(kind=="deye")" · Deye sans SunSpec requiert un protocole dédié."
+                                 else "")
                         }
-                    }catch(ex:Exception){
-                        "Aucune lecture compatible : "+
-                            (ex.message?.take(120) ?: ex.javaClass.simpleName)
-                    }
-                    runOnUiThread {
-                        inverterStatus.text=result
-                        lastVoltronicReadAt=0L
-                        pollPremiumVoltronic(android.os.SystemClock.elapsedRealtime())
+                        runOnUiThread {
+                            feedback.text=result
+                            voltronicFleet.changed()
+                        }
                     }
                 }
-            }
-        },8)
+            },8)
+            add(panel,action("Supprimer l'association · Onduleur $slot") {
+                AlertDialog.Builder(this)
+                    .setTitle("Libérer Onduleur $slot ?")
+                    .setMessage("Supprime seulement l'association Android de cet emplacement "+
+                        "(IP, famille, port, code chiffré et adresse Modbus). "+
+                        "Les deux autres onduleurs, le VPN, les ESP JK et les données physiques "+
+                        "restent inchangés.")
+                    .setNegativeButton("Annuler",null)
+                    .setPositiveButton("Libérer Onduleur $slot") { _,_ ->
+                        prefs.edit()
+                            .remove(prefix+"ip")
+                            .remove(prefix+"port")
+                            .remove(prefix+"type")
+                            .remove(prefix+"unit")
+                            .remove(prefix+"validated")
+                            .remove("inverter_${slot}_name")
+                            .remove(codeKey).apply()
+                        ip.setText("")
+                        port.setText("18081")
+                        code.text.clear()
+                        unit.setText("1")
+                        vol.isChecked=true
+                        feedback.text="Onduleur $slot : emplacement libre"
+                        voltronicFleet.changed()
+                    }.show()
+            },8)
+        }
         val voltVpn=section(advanced,"Expert · VPN des onduleurs (Tailscale)")
         add(voltVpn,label("Depuis Internet : Tailscale Android vers l'ESP32 VPN, "+
             "puis uniquement les lectures de INV1/INV2/INV3 sur le réseau local. "+
@@ -1157,69 +1205,7 @@ class MainActivity : Activity() {
                 runOnUiThread { state(result) }
             }
         })
-        // Independent Voltronic slots INV2/INV3: never modify JK configuration.
-        for(slot in 2..3) {
-            val panel=section(advanced,"Onduleur INV$slot · Voltronic (lecture seule)")
-            add(panel,label("ESP32-S3 Voltronic indépendant. Le code est conservé "+
-                "avec la protection Android Keystore.",12f,color=subdued))
-            val ip=input("Adresse IP privée INV$slot")
-            ip.setText(prefs.getString("inverter_${slot}_ip","") ?: "")
-            add(panel,ip,6)
-            val port=input("Port HTTP · 18081")
-            port.inputType=android.text.InputType.TYPE_CLASS_NUMBER
-            port.setText(prefs.getInt("inverter_${slot}_port",18081).toString())
-            add(panel,port,6)
-            val code=input("Code ESP32-S3 (8 à 32 caractères)",true)
-            add(panel,code,6)
-            val feedback=label(
-                if(voltronicFleet.configured(slot)) "INV$slot : enregistré"
-                else "INV$slot : non configuré",12f,false,subdued)
-            add(panel,feedback,6)
-            add(panel,action("Tester et enregistrer INV$slot") {
-                val host=ip.text.toString().trim()
-                val tcpPort=port.text.toString().trim().toIntOrNull()
-                val secret=code.text.toString()
-                if(!SunSpecReadOnly.isPrivateIPv4(host) || tcpPort==null ||
-                   tcpPort !in 1..65535 || secret.length !in 8..32) {
-                    feedback.text="Vérifie IP privée, port et code de lecture."
-                } else {
-                    feedback.text="Lecture de contrôle en cours…"
-                    inverterWorker.execute {
-                        val response=try {
-                            val wifi=voltronicWifiNetwork()
-                                ?: throw IllegalStateException("Wi-Fi local requis pour INV$slot")
-                            VoltronicReadOnlyClient.probe(host,secret,tcpPort,wifi)
-                            saveAuxiliaryCode("premium_voltronic_${slot}_code_cipher",secret)
-                            prefs.edit().putString("inverter_${slot}_ip",host)
-                                .putInt("inverter_${slot}_port",tcpPort)
-                                .putBoolean("inverter_${slot}_validated",true).apply()
-                            "INV$slot : lecture seule vérifiée, équipement enregistré"
-                        } catch(ex:Exception) {
-                            "INV$slot : " + (ex.message?.take(110) ?: "connexion impossible")
-                        }
-                        runOnUiThread {
-                            feedback.text=response
-                            voltronicFleet.changed()
-                        }
-                    }
-                }
-            },8)
-            add(panel,action("Retirer INV$slot") {
-                AlertDialog.Builder(this).setTitle("Retirer INV$slot ?")
-                    .setMessage("Cette action retire uniquement cet onduleur de la "+
-                        "configuration. Les JK et leurs associations restent inchangés.")
-                    .setNegativeButton("Annuler",null)
-                    .setPositiveButton("Retirer") { _,_ ->
-                        prefs.edit().putBoolean("inverter_${slot}_validated",false)
-                            .remove("inverter_${slot}_ip")
-                            .remove("inverter_${slot}_port")
-                            .remove("premium_voltronic_${slot}_code_cipher").apply()
-                        feedback.text="INV$slot : non configuré"
-                        voltronicFleet.changed()
-                    }.show()
-            },6)
-        }
-        add(inverter,label("Après association, les mesures Voltronic s'affichent "+
+        add(inverter,label("Après association, les mesures disponibles s'affichent "+
             "sur Accueil. Les mesures absentes restent indisponibles, sans valeur "+
             "fictive.",12f,color=subdued))
         add(advanced, label("BLE multi-batteries, OTA et accès distant : fonctions en développement.", 12f, color = subdued), 12)
