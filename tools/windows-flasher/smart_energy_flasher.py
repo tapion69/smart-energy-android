@@ -15,6 +15,7 @@ import os
 from pathlib import Path
 import queue
 import re
+import secrets
 import urllib.request
 import zipfile
 import shutil
@@ -485,6 +486,21 @@ class Flasher(tk.Tk):
         self._label(frame, text, row)
         self._entry(frame, variable, row, password=password)
 
+    def _generate_gateway_token(self) -> None:
+        """Create a fresh cryptographically secure credential locally, never log it."""
+        self.fields["gateway_token"].set(secrets.token_urlsafe(32))
+
+    def _copy_gateway_token(self) -> None:
+        """User-visible clipboard action; only on explicit click."""
+        token=self.fields["gateway_token"].get()
+        if not 20<=len(token)<=128 or any(c.isspace() for c in token):
+            messagebox.showerror("Token VPN","Le token doit contenir 20 à 128 caractères sans espace.")
+            return
+        self.clipboard_clear()
+        self.clipboard_append(token)
+        self.update_idletasks()
+        messagebox.showinfo("Token VPN","Token copié dans le presse-papiers. Colle-le dans Smart Energy puis efface-le du presse-papiers après association. Ne le partage pas.")
+
     def _build_vpn(self, root: ttk.Frame) -> None:
         # Each section owns its own 2-column grid. The old overlapping
         # radio button in column 2 consumed the available width and made all
@@ -526,6 +542,18 @@ class Flasher(tk.Tk):
             ("Nom du VPN dans Tailscale (3–31, sans espaces) :", "gateway_name", False),
         ]):
             self._field(connection, caption, key, i, password)
+
+        # An independently generated token is the secure default for NEW VPN
+        # installations. Existing gateways retain their current NVS token.
+        self._generate_gateway_token()
+        token_actions=ttk.Frame(connection)
+        token_actions.grid(row=5,column=0,columnspan=3,sticky="w",padx=8,pady=5)
+        ttk.Button(token_actions,text="Générer un nouveau token",
+                   command=self._generate_gateway_token).pack(side="left",padx=(0,8))
+        ttk.Button(token_actions,text="Copier le token",
+                   command=self._copy_gateway_token).pack(side="left")
+        ttk.Label(connection,text="Tu peux aussi saisir ton propre token. Pour une passerelle déjà associée, conserve l'ancien : générer un autre token ne modifie PAS l'ESP.",
+                  wraplength=670).grid(row=6,column=0,columnspan=3,sticky="w",padx=8,pady=(0,6))
 
         readers = ttk.LabelFrame(root, text="Lecteurs JK — noms et codes", padding=5)
         readers.grid(row=4, column=0, columnspan=3, sticky="ew",
