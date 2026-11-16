@@ -7,6 +7,7 @@
 #include <Preferences.h>
 #include <ESPmDNS.h>
 #include <WiFiUdp.h>
+#include <mbedtls/md.h>
 #include <NimBLEDevice.h>
 #include "jk_reader.h"
 #include "jk_write.h"
@@ -873,6 +874,18 @@ static void publishDiscovery(){
   j["name"]=displayName;
   j["id"]=hostName;
   j["port"]=80;
+  String localIp=WiFi.localIP().toString();
+  j["ip"]=localIp; // Signed; VPN verifies actual UDP source.
+  String canonical="smart-energy-discovery-v1|jk|"+displayName+"|"+hostName+"|80|"+localIp;
+  unsigned char digest[32]={0};
+  const mbedtls_md_info_t *sha=mbedtls_md_info_from_type(MBEDTLS_MD_SHA256);
+  if(!sha || mbedtls_md_hmac(sha,(const unsigned char*)setupCode.c_str(),
+       setupCode.length(),(const unsigned char*)canonical.c_str(),
+       canonical.length(),digest)!=0)return;
+  const char hex[]="0123456789abcdef";
+  char tag[65]={0};
+  for(int i=0;i<32;i++){tag[i*2]=hex[digest[i]>>4];tag[i*2+1]=hex[digest[i]&15];}
+  j["auth"]=tag;
   String payload;serializeJson(j,payload);
   discoveryUdp.beginPacket(IPAddress(255,255,255,255),18769);
   discoveryUdp.print(payload);
