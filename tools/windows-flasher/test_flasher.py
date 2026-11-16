@@ -244,22 +244,24 @@ class FlasherTests(unittest.TestCase):
             self.assertTrue(any("NVS conservée" in str(x)
                                 for x in stage.call_args_list))
 
-    def test_flasher_source_vpn_buttons_do_not_overlap(self):
+    def test_flasher_uses_names_only_without_legacy_ip_ui(self):
         from inspect import getsource
-        source=getsource(Flasher._build_vpn)
-        configure=source.index("command=self._configure_only).grid(")
-        self.assertIn("row=7,",source[source.index("append.grid("):source.index("append.grid(")+130])
-        self.assertIn("row=12,",source[configure:configure+100])
-        self.assertIn("append=ttk.LabelFrame(legacy,",source)
-        self.assertIn("update_jk=ttk.LabelFrame(legacy,",source)
-        self.assertIn("command=self._add_voltronic_only",source)
-        self.assertIn("command=self._patch_jk_vpn",source)
+        vpn = getsource(Flasher._build_vpn)
+        self.assertIn("Lecteurs BMS JK",vpn)
+        self.assertIn("Lecteurs d'onduleur",vpn)
+        self.assertIn("command=self._configure_only",vpn)
+        self.assertNotIn("legacy",vpn)
+        self.assertNotIn("_patch_jk_vpn",vpn)
+        self.assertNotIn("IP fixe",vpn)
+        self.assertNotIn("Firmware VPN externe",vpn)
+        for operation in ("_build_jk","_build_voltronic"):
+            view=getsource(getattr(Flasher,operation))
+            self.assertIn("display_name",view)
+            self.assertNotIn("_picker(",view)
         layout=getsource(Flasher._build)
         for action in ("_flash_vpn","_flash_jk",
                        "_flash_voltronic","_configure_voltronic_only"):
             self.assertIn("command=self."+action+")",layout)
-        # Main flashing stays pinned; legacy fixes and full reconfiguration
-        # are still available from the collapsed expert section.
         self.assertIn("vpn.actions",layout)
         self.assertNotIn("command=self._configure_only",layout)
 
