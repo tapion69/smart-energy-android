@@ -9,6 +9,7 @@ typedef struct {
     char wifi_password[65];
     char tailscale_key[256];
     char gateway_token[129];
+    char gateway_name[33]; // Optional Tailscale DNS-friendly name set through physical USB.
     char jk_ip[3][16];
     char jk_name[3][33]; // Optional name-based discovery for preflashed readers.
     char jk_code[3][33];
