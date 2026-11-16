@@ -119,7 +119,7 @@ class VoltronicFleet(
         lastPoll=now
         val configs=(1..3).filter {configured(it)}.map { slot ->
             val kind=if(slot==1) prefs.getString("inverter_probe_type","voltronic")
-                ?: "voltronic" else "voltronic"
+                ?: "voltronic" else prefs.getString("inverter_${slot}_type","voltronic") ?: "voltronic"
             val host=if(slot==1)prefs.getString("inverter_probe_ip","") ?: ""
                 else prefs.getString("inverter_${slot}_ip","") ?: ""
             val port=if(slot==1)prefs.getInt("inverter_probe_port",18081)
@@ -138,7 +138,7 @@ class VoltronicFleet(
                 val next=when {
                     c.kind!="voltronic" -> JSONObject().put("configured",true)
                         .put("slot",c.slot).put("fresh",false)
-                        .put("name","SunSpec INV${c.slot}")
+                        .put("name",if(c.kind=="deye")"Deye · Onduleur ${c.slot}" else "SunSpec · Onduleur ${c.slot}")
                         .put("detail","Découverte seulement : aucune mesure disponible")
                     (wifiNetwork==null && privateGateway==null) ||
                         (privateGateway==null && !SunSpecReadOnly.isPrivateIPv4(c.host)) ||
@@ -218,7 +218,7 @@ class VoltronicFleet(
             (lastEnergyPoll>0L && now-lastEnergyPoll<90000L))return
         val configs=(1..3).filter {configured(it)}.mapNotNull { slot ->
             val type=if(slot==1)prefs.getString("inverter_probe_type","voltronic")
-                else "voltronic"
+                else prefs.getString("inverter_${slot}_type","voltronic")
             if(type!="voltronic")return@mapNotNull null
             val host=if(slot==1)prefs.getString("inverter_probe_ip","") ?: ""
                 else prefs.getString("inverter_"+slot+"_ip","") ?: ""
