@@ -90,16 +90,22 @@ jobs:
           test -s "$APK"
           "$APKSIGNER" verify --verbose "$APK"
           "$AAPT" dump badging "$APK" > /tmp/smart-energy-new-badging
+          head -n 1 /tmp/smart-energy-new-badging
           grep -q "name='fr.smartenergy.android'" /tmp/smart-energy-new-badging
           grep -q "versionCode='62'" /tmp/smart-energy-new-badging
           grep -q "versionName='0.3.48-dev'" /tmp/smart-energy-new-badging
+          echo "Production package/version verification succeeded."
           test "$(unzip -p "$APK" assets/voltronic-s3-0.3.4-test.bin | sha256sum | awk '{print $1}')" = 9cfc8c87280c50bf92eb4f6b8029ea67004aa79cfbe7ff0faa0f24f78e3bf289
+          echo "Embedded asset verification succeeded."
           gh release download android-v0.3.47-dev -R "$GITHUB_REPOSITORY" --pattern SmartEnergy-Android.apk --dir previous
           OLD=previous/SmartEnergy-Android.apk
           "$APKSIGNER" verify "$OLD"
+          echo "Downloaded official previous release and verified signature."
           "$AAPT" dump badging "$OLD" > /tmp/smart-energy-old-badging
           grep -q "name='fr.smartenergy.android'" /tmp/smart-energy-old-badging
+          head -n 1 /tmp/smart-energy-old-badging
           grep -q "versionCode='61'" /tmp/smart-energy-old-badging
+          echo "Previous release identity verified."
           cert() {
             "$APKSIGNER" verify --print-certs "$1" |
               sed -n 's/.*Signer #1 certificate SHA-256 digest: //p' | head -n 1 |
@@ -109,7 +115,11 @@ jobs:
           OLD_CERT=$(cert "$OLD")
           EXPECTED=$(printf '%s' "$TRUSTED_CERT" | tr '[:upper:]' '[:lower:]')
           [[ "$NEW_CERT" =~ ^[a-f0-9]{64}$ && "$OLD_CERT" =~ ^[a-f0-9]{64}$ ]]
-          test "$NEW_CERT" = "$OLD_CERT" && test "$NEW_CERT" = "$EXPECTED"
+          if [[ "$NEW_CERT" != "$OLD_CERT" || "$NEW_CERT" != "$EXPECTED" ]]; then
+            echo "::error::Official signer mismatch: refusing publication"
+            exit 1
+          fi
+          echo "Original permanent signature matches previous APK and trusted certificate."
           cp "$APK" release-files/SmartEnergy-Android.apk
           sha256sum release-files/SmartEnergy-Android.apk
           echo "Verified direct in-place upgrade 0.3.47-dev (61) -> 0.3.48-dev (62)."
