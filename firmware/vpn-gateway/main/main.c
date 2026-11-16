@@ -16,6 +16,8 @@
 #include <netinet/in.h>
 #include <arpa/inet.h>
 #include <sys/time.h>
+#include <unistd.h>
+#include "mbedtls/md.h"
 
 #include "sdkconfig.h"
 #include "esp_log.h"
@@ -250,6 +252,32 @@ static esp_err_t discovery_proof_data(esp_http_client_event_t *ev){
     }
     return ESP_OK;
 }
+// Refuse to disclose X-Setup-Code to an unauthenticated LAN beacon source.
+// The beacon must be authenticated against the preconfigured reader secret and
+// must be bound to the actual sender address. Compare in constant time.
+static bool se_discovery_auth(const char *family,const char *name,
+        const char *id,int port,const char *ip,
+        const char *secret,const char *hex_tag){
+    if(!family||!name||!id||!ip||!secret||!hex_tag ||
+       strlen(hex_tag)!=64 || strlen(secret)<8)return false;
+    char msg[256]={0};
+    int n=snprintf(msg,sizeof(msg),
+        "smart-energy-discovery-v1|%s|%s|%s|%d|%s",
+        family,name,id,port,ip);
+    if(n<=0||n>=(int)sizeof(msg))return false;
+    unsigned char digest[32]={0};
+    const mbedtls_md_info_t *sha=mbedtls_md_info_from_type(MBEDTLS_MD_SHA256);
+    if(!sha||mbedtls_md_hmac(sha,(const unsigned char*)secret,
+        strlen(secret),(const unsigned char*)msg,(size_t)n,digest)!=0)
+        return false;
+    const char hex[]="0123456789abcdef";
+    unsigned mismatch=0;
+    for(int i=0;i<32;i++){
+       mismatch|=(unsigned)(unsigned char)(hex_tag[2*i]^hex[digest[i]>>4]);
+       mismatch|=(unsigned)(unsigned char)(hex_tag[2*i+1]^hex[digest[i]&15]);
+    }
+    return mismatch==0;
+}
 static bool discovery_prove(const char *host,int port,int family,
                             const char *code,const char *claimed_id){
     se_discovery_proof_t answer={0};
@@ -312,9 +340,12 @@ static void discovery_listener(void *unused){
         const cJSON *namej=j?cJSON_GetObjectItemCaseSensitive(j,"name"):NULL;
         const cJSON *idj=j?cJSON_GetObjectItemCaseSensitive(j,"id"):NULL;
         const cJSON *portj=j?cJSON_GetObjectItemCaseSensitive(j,"port"):NULL;
+        const cJSON *ipj=j?cJSON_GetObjectItemCaseSensitive(j,"ip"):NULL;
+        const cJSON *tagj=j?cJSON_GetObjectItemCaseSensitive(j,"auth"):NULL;
         if(!cJSON_IsString(proto)||strcmp(proto->valuestring,"smart-energy-discovery-v1") ||
            !cJSON_IsString(familyj)||!cJSON_IsString(namej)||!cJSON_IsString(idj)||
-           !cJSON_IsNumber(portj)){
+           !cJSON_IsNumber(portj)||!cJSON_IsString(ipj)||!cJSON_IsString(tagj) ||
+           !ipj->valuestring || strcmp(ipj->valuestring,sender)!=0){
             cJSON_Delete(j);continue;
         }
         int family=strcmp(familyj->valuestring,"jk")==0?0:
@@ -326,9 +357,10 @@ static void discovery_listener(void *unused){
           strlen(id)>5 && strlen(id)<48;
         if(!valid){cJSON_Delete(j);continue;}
         // Copy identity before freeing the untrusted JSON.
-        char label[33],identity[48];
+        char label[33],identity[48],signed_tag[65];
         snprintf(label,sizeof(label),"%s",name);
         snprintf(identity,sizeof(identity),"%s",id);
+        snprintf(signed_tag,sizeof(signed_tag),"%s",tagj->valuestring);
         cJSON_Delete(j);
         if(!personal)continue;
         for(int slot=0;slot<3;slot++){
@@ -340,6 +372,9 @@ static void discovery_listener(void *unused){
                                          personal->voltronic_code[slot];
             if(!expected[0] || strcmp(expected,label)!=0 ||
                strlen(secret)<8 || se_is_private_ipv4(fixed))continue;
+            // HMAC must be verified BEFORE HTTP carries the private reader code.
+            if(!se_discovery_auth(family==0?"jk":"voltronic",label,
+                 identity,port,sender,secret,signed_tag))continue;
             bool skip=false;
             portENTER_CRITICAL(&discovery_lock);
             skip=discovery_ambiguous[family][slot] ||
