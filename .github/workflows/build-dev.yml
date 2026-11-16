@@ -127,7 +127,7 @@ jobs:
           retention-days: 30
 
   publish-android-fix:
-    name: Publish verified signed 0.3.49 and enable in-app upgrades
+    name: Publish verified signed 0.3.50 and enable in-app upgrades
     if: github.ref == 'refs/heads/fix/jk-discovery-pairing-20261116'
     needs: [android]
     runs-on: ubuntu-latest
@@ -147,7 +147,9 @@ jobs:
           EXPECTED_CERT: ${{ secrets.SMART_ENERGY_ANDROID_CERT_SHA256 }}
         run: |
           set -euo pipefail
-          APK=signed-apk/app-release.apk
+          mkdir -p release-files
+          APK=release-files/SmartEnergy-Android.apk
+          cp signed-apk/app-release.apk "$APK"
           test -s "$APK"
           if [[ ! "$EXPECTED_CERT" =~ ^[A-Fa-f0-9]{64}$ ]]; then
             echo "::error::Missing trusted certificate fingerprint"
@@ -163,8 +165,8 @@ jobs:
           AAPT=$(find "$ANDROID_HOME/build-tools" -type f -name aapt | sort -V | tail -n 1)
           "$AAPT" dump badging "$APK" | head -n 1 | tee /tmp/smart-energy-package
           grep -q "name='fr.smartenergy.android'" /tmp/smart-energy-package
-          grep -q "versionCode='63'" /tmp/smart-energy-package
-          grep -q "versionName='0.3.49-dev'" /tmp/smart-energy-package
+          grep -q "versionCode='64'" /tmp/smart-energy-package
+          grep -q "versionName='0.3.50-dev'" /tmp/smart-energy-package
           sha256sum "$APK"
       - name: Publish signed release and update canonical manifest
         shell: bash
@@ -172,8 +174,8 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          TAG=android-v0.3.49-dev
-          APK=signed-apk/app-release.apk
+          TAG=android-v0.3.50-dev
+          APK=release-files/SmartEnergy-Android.apk
           HASH=$(sha256sum "$APK" | awk '{print $1}')
           # Never overwrite an existing release or replace newer updates.
           if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
@@ -186,13 +188,13 @@ jobs:
           import base64,json
           r=json.load(open('/tmp/manifest-response.json'))
           current=json.loads(base64.b64decode(r['content']))
-          if current.get('versionCode') != 62:
+          if current.get('versionCode') != 63:
               raise SystemExit('Official manifest changed; refusing to overwrite')
           PY
-          gh release create "$TAG" "$APK#SmartEnergy-Android.apk" \
+          gh release create "$TAG" "$APK" \
             --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" \
-            --title "Smart Energy Android 0.3.49 (JK discovery fix)" \
-            --notes "Signed update for Android 0.3.48: correct JK reader custom names and safely assign new JK readers to free slots. No ESP32 firmware flash needed."
+            --title "Smart Energy Android 0.3.50 (JK slot management)" \
+            --notes "Signed update for Android 0.3.49: free selected JK reader slot without resetting the other readers, saved VPN, or physical BMS. Fixes JK discovery and association. No ESP32 flash needed."
           export HASH
           python - <<'PY'
           import base64,json,os
@@ -201,15 +203,15 @@ jobs:
             'schemaVersion':1,
             'product':'smart-energy-android',
             'available':True,
-            'versionName':'0.3.49-dev',
-            'versionCode':63,
-            'downloadUrl':'https://github.com/tapion69/smart-energy-android/releases/download/android-v0.3.49-dev/SmartEnergy-Android.apk',
+            'versionName':'0.3.50-dev',
+            'versionCode':64,
+            'downloadUrl':'https://github.com/tapion69/smart-energy-android/releases/download/android-v0.3.50-dev/SmartEnergy-Android.apk',
             'sha256':os.environ['HASH'],
-            'releaseNotesUrl':'https://github.com/tapion69/smart-energy-android/releases/tag/android-v0.3.49-dev',
+            'releaseNotesUrl':'https://github.com/tapion69/smart-energy-android/releases/tag/android-v0.3.50-dev',
             'minimumSupportedVersionCode':1,
           }
           payload={
-            'message':'Publish verified Smart Energy Android 0.3.49 signed update',
+            'message':'Publish verified Smart Energy Android 0.3.50 signed update',
             'content':base64.b64encode((json.dumps(m,indent=2,ensure_ascii=False)+'\n').encode()).decode(),
             'sha':r['sha'],
             'branch':'main',
@@ -218,7 +220,7 @@ jobs:
           PY
           gh api --method PUT "repos/$GITHUB_REPOSITORY/contents/updates/android.json" \
             --input /tmp/android-update-request.json
-          echo "Official 0.3.49 manifest published after APK verification."
+          echo "Official 0.3.50 manifest published after APK verification."
   migration-backup-policy:
     name: Validate legacy backup excludes private credentials
     runs-on: ubuntu-latest
