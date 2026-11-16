@@ -80,21 +80,29 @@ def validate_vpn_config(values: dict[str, str]) -> None:
             raise ValueError(f"ESP JK {index} : code personnel invalide (8–32).")
         if code:count+=1
     for index in range(1,4):
+        proto=values.get(f"volt{index}_proto","voltronic")
         host=values.get(f"volt{index}_ip","").strip()
         name=values.get(f"volt{index}_name","").strip()
         code=values[f"volt{index}_code"]
-        if bool(code)!=(bool(host) or bool(name)):
-            raise ValueError(f"Onduleur {index} : indique le nom et le code ou l'IP et le code.")
-        if host and not valid_lan_ip(host):
-            raise ValueError(f"Onduleur {index} : IP invalide.")
+        if proto not in ("voltronic","modbus"):
+            raise ValueError(f"Onduleur {index} : protocole inconnu.")
+        if proto=="modbus":
+            if not valid_lan_ip(host) or code:
+                raise ValueError(f"Onduleur {index} Modbus : IP privée requise, aucun code ESP.")
+            count+=1
+        else:
+            if bool(code)!=(bool(host) or bool(name)):
+                raise ValueError(f"Onduleur {index} : indique le nom et le code ou l'IP et le code.")
+            if host and not valid_lan_ip(host):
+                raise ValueError(f"Onduleur {index} : IP invalide.")
+            if code and not 8<=len(code)<=32:
+                raise ValueError(f"Onduleur {index} : code invalide (8–32).")
+            if code:count+=1
         if name and (len(name.encode("utf-8"))>32 or any(ord(c)<32 or c=="|" for c in name)):
             raise ValueError(f"Onduleur {index} : nom invalide.")
         if name and name in seen["volt"]:
             raise ValueError("Deux onduleurs ont le même nom.")
         if name:seen["volt"].add(name)
-        if code and not 8<=len(code)<=32:
-            raise ValueError(f"Onduleur {index} : code invalide (8–32).")
-        if code:count+=1
     if count<1:raise ValueError("Configure au moins un ESP JK ou onduleur.")
     # Reject syntax injection into sdkconfig / subprocess commands.
     for name, val in values.items():
@@ -599,6 +607,20 @@ class Flasher(tk.Tk):
             ("Onduleur 3 — code (facultatif) :", "volt3_code",True),
         ]):
             self._field(volts,caption,key,i,password)
+        ttk.Label(volts,text="Pour Deye/SunSpec Modbus TCP : choisir Modbus et saisir "+
+            "l'IP privée initiale. Le port pourra ensuite être modifié à distance dans l'APK. "+
+            "Le relais Modbus est en lecture seule (FC03).",
+            wraplength=690).grid(row=8,column=0,columnspan=3,pady=5)
+        for slot in (1,2,3):
+            idx=9+(slot-1)*2
+            self._field(volts,f"Onduleur {slot} — IP directe Modbus (si applicable) :",
+                        f"volt{slot}_ip",idx)
+            self._label(volts,f"Onduleur {slot} — protocole VPN :",idx+1)
+            proto=tk.StringVar(value="voltronic")
+            self.fields[f"volt{slot}_proto"]=proto
+            ttk.Combobox(volts,textvariable=proto,state="readonly",
+                values=("voltronic","modbus"),width=30).grid(
+                row=idx+1,column=1,sticky="w",padx=8,pady=5)
         ttk.Label(root,text="Les noms des ESP et leurs codes doivent correspondre "
             "exactement à ceux choisis au premier flash. Aucune adresse IP "
             "n'est nécessaire.",wraplength=700).grid(
@@ -915,9 +937,10 @@ class Flasher(tk.Tk):
         # The secure NVS name is only a display identity in Tailscale.
         values["gateway_name"]=values.get("gateway_name","").strip().lower()
         # New discovery-only flash: no legacy IP address entry anywhere in UI.
-        for family in ("jk","volt"):
-            for slot in (1,2,3):
-                values[f"{family}{slot}_ip"]=""
+        for slot in (1,2,3):
+            values[f"jk{slot}_ip"]=""
+            if values.get(f"volt{slot}_proto")!="modbus":
+                values[f"volt{slot}_ip"]=""
         validate_vpn_config(values)
         self.secret_values = [
             v for k, v in values.items() if k.endswith("_code")
