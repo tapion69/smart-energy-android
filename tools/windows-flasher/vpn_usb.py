@@ -28,6 +28,8 @@ def format_usb_configuration(values: dict[str, str]) -> bytes:
     # The VPN resolves their IP at runtime after a verified read-code challenge.
     optional={f"{family}{idx}_name":values.get(f"{family}{idx}_name","")
               for family in ("jk","volt") for idx in (1,2,3)}
+    optional.update({f"volt{idx}_proto":values.get(f"volt{idx}_proto","voltronic")
+                     for idx in (1,2,3)})
     payload = json.dumps(
         {**{key: values[key] for key in sorted(expected)}, **optional,
          "gateway_name":values.get("gateway_name","")},
