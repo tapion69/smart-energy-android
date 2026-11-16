@@ -1141,6 +1141,47 @@ class MainActivity : Activity() {
                     }
                 }
             },8)
+            add(panel,action("Appliquer le port au VPN · Onduleur $slot") {
+                val tcpPort=port.text.toString().trim().toIntOrNull()
+                if(tcpPort==null || tcpPort !in 1..65535) {
+                    feedback.text="Port TCP invalide : choisir entre 1 et 65535."
+                } else if(!vpnConnected()) {
+                    feedback.text="Active Tailscale pour configurer le port VPN."
+                } else {
+                    val gateway=prefs.getString("remote_gateway_ip","") ?: ""
+                    val token=storedGatewayToken()
+                    val vpn=connectivity.allNetworks.firstOrNull { net ->
+                        connectivity.getNetworkCapabilities(net)?.hasTransport(
+                            NetworkCapabilities.TRANSPORT_VPN)==true
+                    }
+                    if(!allowedTailnetIp(gateway) || !validGatewayToken(token) || vpn==null) {
+                        feedback.text="Configure d'abord la passerelle VPN et son token."
+                    } else {
+                        AlertDialog.Builder(this)
+                            .setTitle("Port VPN · Onduleur $slot")
+                            .setMessage("Enregistrer le port TCP $tcpPort dans la passerelle VPN "+
+                                "pour l'Onduleur $slot ? Les autres onduleurs, le Wi-Fi et "+
+                                "l'identité Tailscale seront conservés. "+
+                                "Attention : un port Modbus ne fonctionne pas avec un relais HTTP.")
+                            .setNegativeButton("Annuler",null)
+                            .setPositiveButton("Appliquer") { _,_ ->
+                                feedback.text="Configuration du port VPN…"
+                                val route=VoltronicVpnRoute(gateway,token,vpn)
+                                inverterWorker.execute {
+                                    val result=try {
+                                        VoltronicVpnReadOnlyClient.configureInverterPort(
+                                            slot,tcpPort,route)
+                                        "Port VPN $tcpPort confirmé pour Onduleur $slot."
+                                    }catch(ex:Exception) {
+                                        "Configuration VPN refusée : "+
+                                            (ex.message?.take(130) ?: ex.javaClass.simpleName)
+                                    }
+                                    runOnUiThread {feedback.text=result}
+                                }
+                            }.show()
+                    }
+                }
+            },8)
             add(panel,action("Supprimer l'association · Onduleur $slot") {
                 AlertDialog.Builder(this)
                     .setTitle("Libérer Onduleur $slot ?")
