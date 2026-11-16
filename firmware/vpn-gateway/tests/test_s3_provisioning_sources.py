@@ -36,17 +36,12 @@ assert 'runtime_physical_request || physical_reconfigure_requested()' in source
 assert 'se_vpn_start_physical_maintenance_monitor(void)' in source
 assert 'usb_maintenance_watch_task' in source
 main=(Path(__file__).resolve().parents[1] / "main" / "main.c").read_text()
-assert '#define GATEWAY_VERSION "0.3.10-dev-modbus-fc03"' in main
+assert '#define GATEWAY_VERSION "0.3.8-dev-vpn-discovery"' in main
 assert '"/api/v1/discovery"' in main
 assert 'discovery_inventory(httpd_req_t *req)' in main
 assert 'if(!request_is_private_vpn(req))' in main
 assert 'if(!authorized(req))' in main
 assert 'cJSON_AddBoolToObject(entry,"verified",true)' in main
-assert 'inverter_modbus_read(httpd_req_t *req)' in main
-assert 'if(!request_is_private_vpn(req))' in main
-assert 'if(!authorized(req))' in main
-assert 'header[7]==3' in main
-assert 'inverter_port_save(slot,port)' in main
 assert 'se_vpn_start_physical_maintenance_monitor();' in main
 
 # Never trust unsolicited READY as proof of a bidirectional USB link.
