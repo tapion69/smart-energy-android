@@ -1037,8 +1037,9 @@ class MainActivity : Activity() {
         // Three equal inverter slots; preserve the original INV1 storage keys.
         val inverter=section(advanced,"Expert · Onduleurs 1 / 2 / 3 (configuration manuelle)",false)
         add(inverter,label("Chaque emplacement accepte Voltronic / Axpert, SunSpec Modbus TCP ou "+
-            "Deye. Deye est actuellement testé uniquement par détection SunSpec FC03 : "+
-            "un modèle Deye sans table SunSpec compatible ne peut pas encore être lu. "+
+            "Deye. En VPN, le port est enregistré sur la passerelle avant le test FC03. "+
+            "L'adresse Modbus doit avoir été autorisée initialement par USB dans le flasher. "+
+            "Les équipements Deye sans Modbus TCP/SunSpec compatible ne sont pas pris en charge. "+
             "Aucune commande d'écriture n'est envoyée.",12f,color=subdued))
         for(slot in 1..3) {
             val panel=section(inverter,"Onduleur $slot · configuration et association",false)
@@ -1102,8 +1103,11 @@ class MainActivity : Activity() {
                 val slave=unit.text.toString().trim().toIntOrNull()
                 val typedCode=code.text.toString()
                 val secret=if(typedCode.isNotBlank())typedCode else auxiliaryCode(codeKey)
-                if(!SunSpecReadOnly.isPrivateIPv4(host) || tcpPort==null ||
-                    tcpPort !in 1..65535 ||
+                val useRemoteModbus=kind!="voltronic" && vpnConnected() &&
+                    allowedTailnetIp(prefs.getString("remote_gateway_ip","") ?: "") &&
+                    validGatewayToken(storedGatewayToken())
+                if((!useRemoteModbus && !SunSpecReadOnly.isPrivateIPv4(host)) ||
+                    tcpPort==null || tcpPort !in 1..65535 ||
                     (kind=="voltronic" && secret.length !in 8..32) ||
                     (kind!="voltronic" && (slave==null || slave !in 0..247))) {
                     feedback.text="Vérifie l'IP privée, le port, le code Voltronic ou l'adresse Modbus."
@@ -1118,9 +1122,22 @@ class MainActivity : Activity() {
                                 if(typedCode.isNotBlank())saveAuxiliaryCode(codeKey,secret)
                                 "Voltronic détecté : "+found.optString("version","version inconnue")
                             } else {
-                                val found=SunSpecReadOnly.discover(host,tcpPort,slave!!)
+                                val found=if(useRemoteModbus) {
+                                    val gateway=prefs.getString("remote_gateway_ip","") ?: ""
+                                    val token=storedGatewayToken()
+                                    val vpn=connectivity.allNetworks.firstOrNull { net ->
+                                        connectivity.getNetworkCapabilities(net)?.hasTransport(
+                                            NetworkCapabilities.TRANSPORT_VPN)==true
+                                    } ?: throw IllegalStateException("Tailscale indisponible")
+                                    val route=VoltronicVpnRoute(gateway,token,vpn)
+                                    // Server confirms the new port before a Modbus read.
+                                    VoltronicVpnReadOnlyClient.configureInverterPort(
+                                        slot,tcpPort,route)
+                                    SunSpecReadOnly.discoverViaVpn(slot,slave!!,route)
+                                }else SunSpecReadOnly.discover(host,tcpPort,slave!!)
                                 (if(kind=="deye")"Deye compatible SunSpec" else "SunSpec détecté")+
-                                    " : ${found.models.size} modèle(s) reconnus"
+                                    " : ${found.models.size} modèle(s) reconnus"+
+                                    (if(useRemoteModbus)" via VPN" else " en local")
                             }
                             prefs.edit().putString(prefix+"ip",host)
                                 .putString(prefix+"type",kind)
