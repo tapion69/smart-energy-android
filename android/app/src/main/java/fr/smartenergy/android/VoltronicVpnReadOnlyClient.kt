@@ -54,20 +54,29 @@ object VoltronicVpnReadOnlyClient {
             }
     }
 
-    fun remoteWritesEnabled(route:VoltronicVpnRoute):Boolean {
+    /** Explicit capability read. Do not turn an HTTP failure into an
+     * anonymous "read only" status: the editor must display the real cause.
+     * The gateway default read_only=true is NOT the write capability flag. */
+    fun remoteWriteStatus(route:VoltronicVpnRoute):JSONObject {
         val c=connection(route,"/api/v1/health")
         return try {
             c.requestMethod="GET"
-            require(c.responseCode==200){"Passerelle VPN inaccessible"}
-            val result=JSONObject(c.inputStream.bufferedReader().use {
-                it.readText().take(4096)
-            })
+            val code=c.responseCode
+            if(code!=200)throw VoltronicVpnHttpException(code)
+            val body=c.inputStream.bufferedReader().use{it.readText().take(4097)}
+            require(body.length in 2..4096){"Réponse /health VPN invalide"}
+            val result=JSONObject(body)
             require(result.optString("product")=="smart-energy-vpn-gateway" &&
                 result.optBoolean("vpn_only") && result.optBoolean("vpn_connected")) {
-                "Identité VPN incorrecte"
+                "Identité VPN /health incorrecte"
             }
-            result.optBoolean("remote_parameter_writes_opt_in",false)
+            result
         }finally{c.disconnect()}
+    }
+    fun remoteWritesEnabled(route:VoltronicVpnRoute):Boolean {
+        val status=remoteWriteStatus(route)
+        return status.has("remote_parameter_writes_opt_in") &&
+            status.optBoolean("remote_parameter_writes_opt_in",false)
     }
 
     fun info(slot:Int,route:VoltronicVpnRoute):JSONObject {
