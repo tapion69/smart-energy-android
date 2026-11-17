@@ -282,8 +282,8 @@ static void start_wifi(void){
     ESP_ERROR_CHECK(esp_event_handler_register(IP_EVENT,IP_EVENT_STA_GOT_IP,
         &wifi_events,NULL));
     wifi_config_t wifi={0};
-    snprintf((char *)wifi.sta.ssid,sizeof(wifi.sta.ssid),"%s",cfg.wifi_ssid);
-    snprintf((char *)wifi.sta.password,sizeof(wifi.sta.password),"%s",cfg.wifi_password);
+    memcpy(wifi.sta.ssid,cfg.wifi_ssid,strnlen(cfg.wifi_ssid,sizeof wifi.sta.ssid));
+    memcpy(wifi.sta.password,cfg.wifi_password,strnlen(cfg.wifi_password,sizeof wifi.sta.password));
     wifi.sta.threshold.authmode=WIFI_AUTH_WPA2_PSK;
     ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA));
     ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_STA,&wifi));
@@ -560,7 +560,8 @@ static bool read_json_body(httpd_req_t *r,cJSON **parsed){
     int done=0;
     while(done<r->content_len){
         int n=httpd_req_recv(r,body+done,r->content_len-done);
-        if(n<=0)return false;done+=n;
+        if(n<=0)return false;
+        done+=n;
     }
     body[done]=0;*parsed=cJSON_Parse(body);
     return cJSON_IsObject(*parsed);
