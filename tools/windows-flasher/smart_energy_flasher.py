@@ -275,6 +275,7 @@ class Flasher(tk.Tk):
         self.volt_image = tk.StringVar() # No custom firmware picker in UI
         self.inverter_type = tk.StringVar(value="voltronic")
         self.volt_fields: dict[str, tk.StringVar] = {}
+        self.deye_fields: dict[str, tk.StringVar] = {}
         self.fields: dict[str, tk.StringVar] = {}
         self.gateway_token_entry: ttk.Entry | None = None
         self.gateway_token_visible = False
@@ -620,14 +621,14 @@ class Flasher(tk.Tk):
         selector=ttk.LabelFrame(root,text="Famille d'onduleur",padding=8)
         selector.grid(row=1,column=0,columnspan=3,sticky="ew",padx=8)
         ttk.Radiobutton(selector,text="Voltronic / Axpert (disponible)",
-              variable=self.inverter_type,value="voltronic").pack(anchor="w")
-        ttk.Radiobutton(selector,text="Deye (firmware en développement)",
-              variable=self.inverter_type,value="deye").pack(anchor="w")
+              variable=self.inverter_type,value="voltronic",command=self._show_inverter_type).pack(anchor="w")
+        ttk.Radiobutton(selector,text="Deye (Solarman V5 · lecture seule)",
+              variable=self.inverter_type,value="deye",command=self._show_inverter_type).pack(anchor="w")
         modes=ttk.LabelFrame(root,text="Type de flash onduleur S3",padding=8)
         modes.grid(row=2,column=0,columnspan=3,sticky="ew",padx=8,pady=8)
         ttk.Radiobutton(modes,text="Nouvel ESP32-S3 — FACTORY à 0x0",
                         variable=self.volt_mode,value="factory").pack(anchor="w")
-        ttk.Radiobutton(modes,text="Mise à jour Voltronic S3 — APP-ONLY : conserver Wi-Fi et code",
+        ttk.Radiobutton(modes,text="Mise à jour S3 — APP-ONLY : conserver Wi-Fi et code",
                         variable=self.volt_mode,value="update").pack(anchor="w")
         ttk.Label(root,text="APP-ONLY : conserve Wi-Fi, code de lecture et NVS, "
                   "sans reconfiguration USB. FACTORY : S3 neuf uniquement.",
@@ -645,11 +646,45 @@ class Flasher(tk.Tk):
             self.volt_fields[key]=variable
             self._label(params,description,i)
             self._entry(params,variable,i,password=secret)
-        ttk.Label(root,
-            text="Attention : un port RS232 onduleur NE se branche jamais "
-                 "directement sur un GPIO 3,3 V ! MAX3232 et câblage validé "
-                 "indispensables. Ne pas écraser le VPN avec ce firmware.",
-            wraplength=690).grid(row=5,column=0,columnspan=3,sticky="w",padx=8,pady=8)
+        self.deye_frame=ttk.LabelFrame(root,
+            text="Clé Wi-Fi Deye — paramètres Solarman V5",padding=8)
+        self.deye_frame.grid(row=4,column=0,columnspan=3,sticky="ew",padx=8,pady=8)
+        self.deye_frame.columnconfigure(1,weight=1)
+        for i,(label,key,default) in enumerate([
+            ("IP privée de la clé Wi-Fi Deye :","dongle_ip",""),
+            ("Port TCP de la clé :","dongle_port","8899"),
+            ("Adresse esclave Modbus ID :","modbus_id","1"),
+            ("Numéro de série du dongle :","dongle_serial",""),
+            ("Numéro de série de l'onduleur :","inverter_serial",""),
+        ]):
+            variable=tk.StringVar(value=default)
+            self.deye_fields[key]=variable
+            self._label(self.deye_frame,label,i)
+            self._entry(self.deye_frame,variable,i)
+        ttk.Label(self.deye_frame,
+            text="Première installation : paramètres enregistrés sur l'ESP32. "
+                 "FC03 lecture seulement tant que les écritures n'ont pas été "
+                 "validées sur le matériel.",
+            wraplength=690).grid(row=5,column=0,columnspan=3,padx=8,pady=5)
+        self.inverter_warning=ttk.Label(root,wraplength=690)
+        self.inverter_warning.grid(row=5,column=0,columnspan=3,sticky="w",padx=8,pady=8)
+        self._show_inverter_type()
+
+    def _show_inverter_type(self)->None:
+        if not hasattr(self,"deye_frame"):return
+        if self.inverter_type.get()=="deye":
+            self.deye_frame.grid()
+            self.inverter_warning.configure(text="Deye : ESP32 → Wi-Fi → clé Solarman. "
+                "Ne pas flasher sur un ESP VPN, JK ou Voltronic en service.")
+            if self.volt_fields["display_name"].get()=="Onduleur Voltronic":
+                self.volt_fields["display_name"].set("Onduleur Deye")
+        else:
+            self.deye_frame.grid_remove()
+            self.inverter_warning.configure(text="Voltronic : RS232 avec MAX3232 ; "
+                "jamais directement sur les GPIO 3,3 V.")
+            if self.volt_fields["display_name"].get()=="Onduleur Deye":
+                self.volt_fields["display_name"].set("Onduleur Voltronic")
+
     @staticmethod
     def _bundled_voltronic_image(mode: str) -> Path:
         base=Path(getattr(sys,"_MEIPASS",Path(__file__).resolve().parent))
