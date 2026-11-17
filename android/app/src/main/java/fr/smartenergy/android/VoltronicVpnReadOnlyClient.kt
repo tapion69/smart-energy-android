@@ -75,8 +75,12 @@ object VoltronicVpnReadOnlyClient {
     }
     fun remoteWritesEnabled(route:VoltronicVpnRoute):Boolean {
         val status=remoteWriteStatus(route)
-        return status.has("remote_parameter_writes_opt_in") &&
-            status.optBoolean("remote_parameter_writes_opt_in",false)
+        // New VPN: no separate USB activation; explicit confirmation remains.
+        if(status.has("remote_parameter_writes_supported"))
+            return status.optBoolean("remote_parameter_writes_supported",false) &&
+                status.optBoolean("remote_write_confirmation_required",false)
+        // Old VPNs cannot be unlocked remotely; retain their actual capability.
+        return status.optBoolean("remote_parameter_writes_opt_in",false)
     }
 
     fun info(slot:Int,route:VoltronicVpnRoute):JSONObject {
@@ -97,15 +101,16 @@ object VoltronicVpnReadOnlyClient {
         }finally{c.disconnect()}
     }
 
-    /** Strictly semantic fixed write route, only after USB opt-in and
+    /** Strictly semantic fixed write route, after user confirmation and
      * fresh QPIRI/QDOP readback. The gateway never forwards serial commands.
      * No retry after any failure: SET may have been applied already. */
     fun change(slot:Int,route:VoltronicVpnRoute,
                key:String,old:Double,new:Double):JSONObject {
         require(slot in 1..3)
         require(remoteWritesEnabled(route)){
-            "Écritures VPN non autorisées sur l'ESP passerelle : "+
-            "activer explicitement par USB après installation du nouveau firmware."
+            "Cette passerelle VPN ne prend pas en charge les écritures "+
+            "confirmées. Firmware VPN ancien ou incompatible : vérifier "+
+            "sa version avant toute modification."
         }
         require(old.isFinite() && new.isFinite() && old!=new) {
             "Ancienne ou nouvelle valeur invalide"
