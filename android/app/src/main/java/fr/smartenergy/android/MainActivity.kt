@@ -1036,11 +1036,11 @@ class MainActivity : Activity() {
 
         // Three equal inverter slots; preserve the original INV1 storage keys.
         val inverter=section(advanced,"Expert · Onduleurs 1 / 2 / 3 (configuration manuelle)",false)
-        add(inverter,label("Le VPN découvre uniquement les ESP32 Onduleur par nom et code. "+
-            "Pour un Deye, IP de la clé Wi-Fi, port et esclave seront configurés "+
-            "dans l'ESP32 Onduleur depuis l'APK. En attendant le firmware ESP "+
-            "compatible, ces valeurs restent des brouillons sauvegardés localement, "+
-            "sans connexion Deye validée.",12f,color=subdued))
+        add(inverter,label("ESP32 Onduleur découvert par nom via le VPN. Pour Deye, "+
+            "l'IP du lecteur ESP32 est distincte de l'IP de la clé Wi-Fi. "+
+            "Le firmware Deye expérimental lit mesures et paramètres ; "+
+            "les écritures électriques nécessitent une validation du modèle.",
+            12f,color=subdued))
         for(slot in 1..3) {
             val panel=section(inverter,"Onduleur $slot · configuration et association",false)
             val prefix=if(slot==1)"inverter_probe_" else "inverter_${slot}_"
@@ -1059,7 +1059,7 @@ class MainActivity : Activity() {
                 setTextColor(normal)
             }
             val deye=RadioButton(this).apply {
-                text="Deye — clé Wi-Fi (firmware ESP32 en développement)"
+                text="Deye — ESP32 Solarman V5 (lecture et paramètres)"
                 setTextColor(normal)
             }
             types.addView(vol)
@@ -1071,40 +1071,59 @@ class MainActivity : Activity() {
                 else -> vol.isChecked=true
             }
             add(panel,types,5)
-            val ip=input("IP de l'ESP32 lecteur (Voltronic), ou de la clé Deye")
-            ip.setText(if(selected=="voltronic") prefs.getString(prefix+"ip","") ?: ""
-                else prefs.getString("deye_${slot}_dongle_ip",
-                    prefs.getString(prefix+"ip","")) ?: "")
+            val ip=input("IP locale de l'ESP32 Onduleur (distincte de la clé Deye)")
+            ip.setText(if(selected=="deye")
+                prefs.getString("deye_${slot}_esp_ip","") ?: ""
+                else prefs.getString(prefix+"ip","") ?: "")
             add(panel,ip,6)
-            val port=input("Port TCP : 18081 (Voltronic) ou 502 (Modbus)")
+            val port=input("Port HTTP de l'ESP32 Onduleur (18081)")
             port.inputType=android.text.InputType.TYPE_CLASS_NUMBER
-            port.setText(if(selected=="voltronic")
-                prefs.getInt(prefix+"port",18081).toString()
-                else prefs.getInt("deye_${slot}_port",prefs.getInt(prefix+"port",502)).toString())
+            port.setText(if(selected=="deye")"18081"
+                else prefs.getInt(prefix+"port",18081).toString())
             add(panel,port,6)
-            val code=input("Code de lecture ESP32 Voltronic (inutile pour la clé Deye)",true)
+            val code=input("Code privé de l'ESP32 Onduleur (ne concerne pas la clé)",true)
             add(panel,code,6)
+
+            val deyeSection=section(panel,"Clé Deye · paramètres Solarman V5",true)
+            val deyeShell=panel.getChildAt(panel.childCount-1)
+            val dongleIp=input("Adresse IP de la clé Wi-Fi Deye")
+            dongleIp.setText(prefs.getString("deye_${slot}_dongle_ip","") ?: "")
+            add(deyeSection,dongleIp,6)
+            val donglePort=input("Port TCP de la clé Deye (8899)")
+            donglePort.inputType=android.text.InputType.TYPE_CLASS_NUMBER
+            donglePort.setText(prefs.getInt("deye_${slot}_port",8899).toString())
+            add(deyeSection,donglePort,6)
             val unit=input("Adresse esclave Modbus (1 par défaut)")
             unit.inputType=android.text.InputType.TYPE_CLASS_NUMBER
-            unit.setText(prefs.getInt("deye_${slot}_unit",
-                prefs.getInt(prefix+"unit",1)).toString())
-            add(panel,unit,6)
-            vol.setOnClickListener {
-                ip.setText(prefs.getString(prefix+"ip","") ?: "")
-                port.setText(prefs.getInt(prefix+"port",18081).toString())
+            unit.setText(prefs.getInt("deye_${slot}_unit",1).toString())
+            add(deyeSection,unit,6)
+            val dongleSerial=input("Numéro de série de la clé Wi-Fi Deye")
+            dongleSerial.setText(prefs.getString("deye_${slot}_dongle_serial","") ?: "")
+            add(deyeSection,dongleSerial,6)
+            val inverterSerial=input("Numéro de série de l'onduleur Deye")
+            inverterSerial.setText(prefs.getString("deye_${slot}_inverter_serial","") ?: "")
+            add(deyeSection,inverterSerial,6)
+            fun showDeye() {
+                deyeShell.visibility=if(deye.isChecked)View.VISIBLE else View.GONE
+                if(deye.isChecked){
+                    ip.setText(prefs.getString("deye_${slot}_esp_ip","") ?: "")
+                    port.setText("18081")
+                }else{
+                    ip.setText(prefs.getString(prefix+"ip","") ?: "")
+                    port.setText(prefs.getInt(prefix+"port",18081).toString())
+                }
             }
-            fun selectDeyeSettings() {
-                ip.setText(prefs.getString("deye_${slot}_dongle_ip","") ?: "")
-                port.setText(prefs.getInt("deye_${slot}_port",502).toString())
-                unit.setText(prefs.getInt("deye_${slot}_unit",1).toString())
-            }
-            sun.setOnClickListener {selectDeyeSettings()}
-            deye.setOnClickListener {selectDeyeSettings()}
+            vol.setOnClickListener { showDeye() }
+            sun.setOnClickListener { showDeye() }
+            deye.setOnClickListener { showDeye() }
+            deyeShell.visibility=if(selected=="deye")View.VISIBLE else View.GONE
             val feedback=label(
                 if(voltronicFleet.configured(slot))
                     "Onduleur $slot : enregistré (${selected.uppercase()})"
+                else if(prefs.getBoolean("deye_${slot}_validated",false))
+                    "Onduleur $slot : ESP32 Deye identifié, configuration de clé distincte"
                 else if(prefs.getString("deye_${slot}_dongle_ip","")?.isNotEmpty()==true)
-                    "Onduleur $slot : paramètres Deye/SunSpec préparés, firmware ESP en attente"
+                    "Onduleur $slot : paramètres Deye enregistrés localement"
                 else "Onduleur $slot : aucun équipement associé",
                 12f,false,subdued)
             add(panel,feedback,6)
