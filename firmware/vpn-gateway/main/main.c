@@ -41,7 +41,7 @@
 #include "cJSON.h"
 #include <math.h>
 
-#define GATEWAY_VERSION "0.3.11-dev-deye-relay-ready"
+#define GATEWAY_VERSION "0.3.12-dev-confirmed-writes"
 #define GATEWAY_PORT 18767
 #define MAX_JSON_BYTES 32768
 
@@ -227,7 +227,7 @@ static esp_err_t health_handler(httpd_req_t *req) {
         return deny(req, "403 Forbidden", "{\"error\":\"vpn_only\"}");
     // Compatibility: read_only still describes the default JK telemetry
     // interface. Writable routes are separate and individually gated by USB.
-    char body[320]={0};
+    char body[512]={0};
     snprintf(body,sizeof body,
         "{\"product\":\"smart-energy-vpn-gateway\","
         "\"version\":\"%s\",\"vpn_connected\":true,"
@@ -235,9 +235,13 @@ static esp_err_t health_handler(httpd_req_t *req) {
         "\"jk_reader_slots\":3,\"voltronic_reader_slots\":3,"
         "\"deye_esp_relay_ready\":true,\"deye_reader_slots\":3,"
         "\"deye_ota_command_only\":true,"
-        "\"remote_parameter_writes_opt_in\":%s}",
-        GATEWAY_VERSION,
-        personal && personal->remote_writes_enabled?"true":"false");
+        /* Legacy status compatibility: older Android apps look at this flag.
+         * No physical USB opt-in is required in this firmware: authenticated,
+         * explicitly confirmed semantic write requests are accepted. */
+        "\"remote_parameter_writes_opt_in\":true,"
+        "\"remote_parameter_writes_supported\":true,"
+        "\"remote_write_confirmation_required\":true}",
+        GATEWAY_VERSION);
     httpd_resp_set_type(req,"application/json");
     httpd_resp_set_hdr(req,"Cache-Control","no-store");
     return httpd_resp_sendstr(req,body);
@@ -781,8 +785,10 @@ static esp_err_t relay_parameter_control(httpd_req_t *req) {
         return deny(req,"403 Forbidden","{\"error\":\"vpn_only\"}");
     if(!authorized(req))
         return deny(req,"401 Unauthorized","{\"error\":\"invalid_gateway_token\"}");
-    if(!personal || !personal->remote_writes_enabled)
-        return deny(req,"403 Forbidden","{\"error\":\"remote_writes_disabled_usb_opt_in_required\"}");
+    /* No second per-installation USB permission: confirmed writes are
+     * allowed for authenticated Tailnet clients only. Each POST still
+     * requires X-Remote-Write-Confirmed=yes and confirmed:true, then the
+     * inverter/JK reader enforces its own verified semantic write rules. */
     const bool post=req->method==HTTP_POST;
     const se_write_route_t route=se_write_route(req->uri,post);
     if(route.kind==SE_WRITE_DENIED)
