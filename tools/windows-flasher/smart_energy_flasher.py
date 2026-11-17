@@ -700,6 +700,25 @@ class Flasher(tk.Tk):
                 "télécharge le nouveau EXE tout-en-un GitHub.")
         return file
 
+    @staticmethod
+    def _bundled_deye_image(mode:str)->Path:
+        base=Path(getattr(sys,"_MEIPASS",Path(__file__).resolve().parent))
+        names={"factory":"smart-energy-deye-S3-FACTORY-0x0.bin",
+               "update":"smart-energy-deye-S3-APP-0x10000.bin"}
+        if mode not in names:raise ValueError("Mode flash Deye invalide.")
+        file=base/"embedded_firmware"/names[mode]
+        if not file.is_file():
+            raise ValueError("Firmware Deye précompilé absent du flasher Windows.")
+        return file
+
+    def _deye_values(self)->dict[str,str]:
+        from deye_usb import deye_config_line
+        values={k:v.get() for k,v in self.volt_fields.items()}
+        values.update({k:v.get() for k,v in self.deye_fields.items()})
+        deye_config_line(values)
+        self.secret_values=[values.get("wifi_password",""),values.get("read_code","")]
+        return values
+
     def _voltronic_values(self) -> dict[str,str]:
         from voltronic_usb import voltronic_config_line
         values={key:variable.get() for key,variable in self.volt_fields.items()}
@@ -710,34 +729,37 @@ class Flasher(tk.Tk):
 
     def _flash_voltronic(self) -> None:
         try:
-            if self.inverter_type.get()!="voltronic":
-                raise ValueError("Deye n'a pas encore de binaire validé. Flash volontairement bloqué.")
+            family=self.inverter_type.get()
+            if family not in ("voltronic","deye"):
+                raise ValueError("Famille d'onduleur inconnue.")
             from vpn_usb import check_precompiled_image
             port=self._assert_ready()
             mode=self.volt_mode.get()
-            values=self._voltronic_values() if mode=="factory" else None
+            values=(self._deye_values() if family=="deye" else self._voltronic_values()) if mode=="factory" else None
             image=(Path(self.volt_image.get().strip())
                    if self.volt_image.get().strip()
+                   else self._bundled_deye_image(mode) if family=="deye"
                    else self._bundled_voltronic_image(mode))
             check_precompiled_image(image,mode,chip="esp32s3")
-            if not messagebox.askyesno("Flash Voltronic S3",
+            if not messagebox.askyesno(f"Flash {family.upper()} S3",
                 "Vérifie la puce ESP32-S3 N16R8 et le port COM.\n"
                 "FACTORY : CARTE VIERGE uniquement ; peut remplacer les partitions.\n"
                 "APP-ONLY conserve Wi-Fi/code sans réassociation USB.\n"
                  "Jamais sur un ESP32 JK ou VPN déjà associé. Continuer ?"):
                 return
             self._run_async(
-                lambda:self._do_voltronic(port,image,mode,values),
+                lambda:self._do_voltronic(port,image,mode,values,family=family),
                 mode="voltronic")
         except Exception as exc:
-            messagebox.showerror("Voltronic S3",str(exc))
+            messagebox.showerror("Onduleur S3",str(exc))
 
     def _do_voltronic(self,port:str,image:Path,mode:str,
-                      values:dict[str,str]|None)->None:
+                      values:dict[str,str]|None,family:str="voltronic")->None:
         from vpn_usb import flash_precompiled
         from voltronic_usb import provision_voltronic
+        from deye_usb import provision_deye
         ensure_esptool_console_streams()
-        self._progress_stage("Écriture du firmware Voltronic S3…")
+        self._progress_stage(f"Écriture du firmware {family} S3…")
         with monitor_esptool_progress(self._flash_percent):
             flash_precompiled(port,image,mode,self._log,chip="esp32s3")
         if mode=="update":
@@ -747,8 +769,9 @@ class Flasher(tk.Tk):
         if values is None:
             raise ValueError("Configuration USB requise pour FACTORY.")
         self._progress_step(80,"Firmware S3 chargé, configuration USB…")
-        provision_voltronic(port,values,self._log)
-        self._progress_step(98,"Voltronic S3 : confirmation USB reçue.")
+        if family=="deye":provision_deye(port,values,self._log)
+        else:provision_voltronic(port,values,self._log)
+        self._progress_step(98,f"{family.upper()} S3 : confirmation USB reçue.")
 
     @staticmethod
     def _bundled_voltronic_ota_folder()->Path:
@@ -785,16 +808,18 @@ class Flasher(tk.Tk):
     def _configure_voltronic_only(self)->None:
         try:
             from voltronic_usb import provision_voltronic
+            from deye_usb import provision_deye
+            family=self.inverter_type.get()
             port=self._assert_ready()
-            values=self._voltronic_values()
-            if not messagebox.askyesno("Reconfiguration USB Voltronic S3",
+            values=self._deye_values() if family=="deye" else self._voltronic_values()
+            if not messagebox.askyesno("Reconfiguration USB Onduleur S3",
                 "Redémarre le S3 et maintiens BOOT 3 secondes "
                 "dans les 9 premières secondes, sans flasher. Continuer ?"):
                 return
-            self._run_async(lambda:provision_voltronic(port,values,self._log),
-                            mode="config")
+            fn=provision_deye if family=="deye" else provision_voltronic
+            self._run_async(lambda:fn(port,values,self._log),mode="config")
         except Exception as exc:
-            messagebox.showerror("Configuration Voltronic S3",str(exc))
+            messagebox.showerror("Configuration Onduleur S3",str(exc))
 
     def _assert_ready(self) -> str:
         if self.busy:
