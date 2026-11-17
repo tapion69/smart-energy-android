@@ -1127,56 +1127,225 @@ class MainActivity : Activity() {
                 else "Onduleur $slot : aucun équipement associé",
                 12f,false,subdued)
             add(panel,feedback,6)
-            add(panel,action("Tester Voltronic / mémoriser Deye · Onduleur $slot") {
+            add(panel,action("Tester et associer ESP32 Onduleur $slot") {
                 val host=ip.text.toString().trim()
-                val kind=when {
-                    deye.isChecked -> "deye"
-                    sun.isChecked -> "sunspec"
-                    else -> "voltronic"
-                }
                 val tcpPort=port.text.toString().trim().toIntOrNull()
-                val slave=unit.text.toString().trim().toIntOrNull()
                 val typedCode=code.text.toString()
                 val secret=if(typedCode.isNotBlank())typedCode else auxiliaryCode(codeKey)
-                if(!SunSpecReadOnly.isPrivateIPv4(host) ||
-                    tcpPort==null || tcpPort !in 1..65535 ||
-                    (kind=="voltronic" && secret.length !in 8..32) ||
-                    (kind!="voltronic" && (slave==null || slave !in 0..247))) {
-                    feedback.text="Vérifie IP privée, port, code lecteur ou adresse esclave."
-                } else if(kind!="voltronic") {
-                    prefs.edit().putString("deye_${slot}_dongle_ip",host)
-                        .putInt("deye_${slot}_port",tcpPort)
-                        .putInt("deye_${slot}_unit",slave!!)
-                        .putString("deye_${slot}_type",kind)
-                        .apply()
-                    feedback.text="Paramètres ${kind.uppercase()} sauvegardés. "+
-                        "L'envoi à l'ESP32 Onduleur attend son firmware compatible."
-                } else {
-                    feedback.text="Onduleur $slot : test réseau en lecture seule…"
-                    inverterWorker.execute {
-                        val result=try {
-                            val summary=if(kind=="voltronic") {
-                                val wifi=voltronicWifiNetwork()
-                                    ?: throw IllegalStateException("Wi-Fi local requis")
-                                val found=VoltronicReadOnlyClient.probe(host,secret,tcpPort,wifi)
-                                if(typedCode.isNotBlank())saveAuxiliaryCode(codeKey,secret)
-                                "Voltronic détecté : "+found.optString("version","version inconnue")
-                            } else throw IllegalStateException("ESP Onduleur non compatible")
-                            prefs.edit().putString(prefix+"ip",host)
-                                .putString(prefix+"type",kind)
-                                .putInt(prefix+"port",tcpPort)
-                                .putInt(prefix+"unit",slave ?: 1)
-                                .putBoolean(prefix+"validated",true).apply()
-                            "Onduleur $slot enregistré. $summary"
-                        }catch(ex:Exception) {
-                            "Onduleur $slot non enregistré : "+
-                                (ex.message?.take(130) ?: ex.javaClass.simpleName)+
-                                (if(kind=="deye")" · Deye sans SunSpec requiert un protocole dédié."
-                                 else "")
+                val remote=voltronicVpnRoute()
+                val wifi=voltronicWifiNetwork()
+                when {
+                    sun.isChecked -> feedback.text="SunSpec générique : firmware ESP non validé."
+                    deye.isChecked -> {
+                        if(remote==null &&
+                            (!SunSpecReadOnly.isPrivateIPv4(host) ||
+                             secret.length !in 8..32 || wifi==null)) {
+                            feedback.text="Deye : lecteur ESP32 local IP/code requis ou VPN déjà actif."
+                        }else{
+                            feedback.text="ESP32 Deye : identification en cours…"
+                            inverterWorker.execute {
+                                val result=try {
+                                    val info=DeyeReaderClient.get(slot,"info",host,secret,remote,wifi)
+                                    val config=DeyeReaderClient.get(slot,"device-config",host,secret,remote,wifi)
+                                    if(typedCode.isNotBlank())saveAuxiliaryCode(codeKey,secret)
+                                    prefs.edit()
+                                        .putString("deye_${slot}_esp_ip",host)
+                                        .putString("deye_${slot}_type","deye")
+                                        .putBoolean("deye_${slot}_validated",true)
+                                        .putString("deye_${slot}_dongle_ip",config.optString("dongle_ip"))
+                                        .putInt("deye_${slot}_port",config.optInt("dongle_port",8899))
+                                        .putInt("deye_${slot}_unit",config.optInt("modbus_id",1))
+                                        .putString("deye_${slot}_dongle_serial",
+                                            config.optString("dongle_serial"))
+                                        .putString("deye_${slot}_inverter_serial",
+                                            config.optString("inverter_serial")).apply()
+                                    runOnUiThread {
+                                        dongleIp.setText(config.optString("dongle_ip"))
+                                        donglePort.setText(config.optInt("dongle_port",8899).toString())
+                                        unit.setText(config.optInt("modbus_id",1).toString())
+                                        dongleSerial.setText(config.optString("dongle_serial"))
+                                        inverterSerial.setText(config.optString("inverter_serial"))
+                                    }
+                                    "ESP32 Deye reconnu · "+info.optString("version")+
+                                        (if(remote!=null)" · VPN" else " · Wi-Fi local")+
+                                        ". Configuration lue depuis sa NVS."
+                                }catch(ex:Exception) {
+                                    "ESP32 Deye non associé : "+(ex.message?.take(140)?:"erreur")
+                                }
+                                runOnUiThread{feedback.text=result}
+                            }
                         }
+                    }
+                    tcpPort==null || tcpPort !in 1..65535 ||
+                        !SunSpecReadOnly.isPrivateIPv4(host) ||
+                        secret.length !in 8..32 -> {
+                        feedback.text="Voltronic : vérifier IP ESP32, port HTTP et code."
+                    }
+                    else -> {
+                        feedback.text="Voltronic : test du lecteur RS232…"
+                        inverterWorker.execute {
+                            val result=try{
+                                val local=wifi?:throw IllegalStateException("Wi-Fi local requis")
+                                val found=VoltronicReadOnlyClient.probe(host,secret,tcpPort,local)
+                                if(typedCode.isNotBlank())saveAuxiliaryCode(codeKey,secret)
+                                prefs.edit().putString(prefix+"ip",host)
+                                    .putString(prefix+"type","voltronic")
+                                    .putInt(prefix+"port",tcpPort)
+                                    .putBoolean(prefix+"validated",true).apply()
+                                "Voltronic détecté : "+found.optString("version","version inconnue")
+                            }catch(ex:Exception){
+                                "Onduleur Voltronic non enregistré : "+(ex.message?:"erreur")
+                            }
+                            runOnUiThread{feedback.text=result;voltronicFleet.changed()}
+                        }
+                    }
+                }
+            },8)
+            add(deyeSection,action("Appliquer les paramètres de la clé sur l'ESP32 Deye") {
+                val host=ip.text.toString().trim()
+                val secret=if(code.text.isNotBlank())code.text.toString()
+                    else auxiliaryCode(codeKey)
+                val dIp=dongleIp.text.toString().trim()
+                val dPort=donglePort.text.toString().trim().toIntOrNull()
+                val slave=unit.text.toString().trim().toIntOrNull()
+                val sn=dongleSerial.text.toString().trim()
+                val invSn=inverterSerial.text.toString().trim()
+                if(dPort==null || slave==null ||
+                    !SunSpecReadOnly.isPrivateIPv4(dIp) ||
+                    dPort !in 1..65535 || slave !in 1..247 ||
+                    !sn.matches(Regex("[0-9]{1,10}")) ||
+                    !invSn.matches(Regex("[0-9]{1,32}"))) {
+                    feedback.text="Deye : vérifier IP de la clé, port, ID et numéros de série."
+                }else{
+                    AlertDialog.Builder(this)
+                        .setTitle("Configuration de la clé Wi-Fi Deye")
+                        .setMessage("Envoyer ces paramètres au lecteur ESP32 Onduleur $slot ? "+
+                            "La connexion ESP32 et le VPN ne seront pas modifiés. "+
+                            "La nouvelle configuration sera relue depuis la NVS.")
+                        .setNegativeButton("Annuler",null)
+                        .setPositiveButton("Enregistrer sur ESP32") {_,_->
+                            feedback.text="Deye : enregistrement ESP32…"
+                            val remote=voltronicVpnRoute()
+                            val wifi=voltronicWifiNetwork()
+                            inverterWorker.execute {
+                                val msg=try{
+                                    DeyeReaderClient.saveConfig(slot,host,secret,remote,wifi,
+                                        dIp,dPort,slave,sn,invSn)
+                                    val confirmed=DeyeReaderClient.get(slot,"device-config",
+                                        host,secret,remote,wifi)
+                                    require(confirmed.optString("dongle_ip")==dIp &&
+                                        confirmed.optString("dongle_serial")==sn &&
+                                        confirmed.optInt("dongle_port")==dPort &&
+                                        confirmed.optInt("modbus_id")==slave){
+                                        "La relecture NVS ne correspond pas aux paramètres envoyés"
+                                    }
+                                    prefs.edit().putString("deye_${slot}_dongle_ip",dIp)
+                                        .putInt("deye_${slot}_port",dPort)
+                                        .putInt("deye_${slot}_unit",slave)
+                                        .putString("deye_${slot}_dongle_serial",sn)
+                                        .putString("deye_${slot}_inverter_serial",invSn)
+                                        .apply()
+                                    "Clé Deye : configuration enregistrée et relue sur ESP32."
+                                }catch(ex:Exception){
+                                    "Échec configuration Deye : "+(ex.message?.take(140)?:"erreur")
+                                }
+                                runOnUiThread{feedback.text=msg}
+                            }
+                        }.show()
+                }
+            },8)
+            add(deyeSection,action("Lire mesures et paramètres Deye") {
+                val host=ip.text.toString().trim()
+                val secret=if(code.text.isNotBlank())code.text.toString()
+                    else auxiliaryCode(codeKey)
+                val remote=voltronicVpnRoute()
+                val wifi=voltronicWifiNetwork()
+                feedback.text="Deye : lecture des mesures et paramètres…"
+                inverterWorker.execute {
+                    val output=try{
+                        val details=DeyeReaderClient.get(slot,"details",host,secret,remote,wifi)
+                        val measurements=details.optJSONArray("measurements")?:JSONArray()
+                        val params=details.optJSONArray("parameters")?:JSONArray()
+                        val lines=StringBuilder()
+                        lines.append("Type onduleur : 0x")
+                            .append(details.optInt("device_type").toString(16))
+                        lines.append("\n\nMesures :\n")
+                        for(idx in 0 until measurements.length()){
+                            val item=measurements.optJSONObject(idx)?:continue
+                            if(!item.isNull("value"))
+                                lines.append(item.optString("key")).append(" = ")
+                                    .append(item.opt("value")).append("\n")
+                        }
+                        lines.append("\nParamètres (lecture seule) :\n")
+                        for(idx in 0 until params.length()){
+                            val item=params.optJSONObject(idx)?:continue
+                            if(!item.isNull("value"))
+                                lines.append(item.optString("key")).append(" = ")
+                                    .append(item.opt("value")).append("\n")
+                        }
+                        if(measurements.length()==0)
+                            lines.append("\nAucun modèle Deye confirmé par registre 0.")
+                        lines.toString()
+                    }catch(ex:Exception){
+                        "Lecture Deye impossible : "+(ex.message?:"erreur")
+                    }
+                    runOnUiThread {
+                        feedback.text="Deye : réponse du lecteur reçue."
+                        AlertDialog.Builder(this)
+                            .setTitle("Deye · mesures et paramètres")
+                            .setMessage(output.take(13000))
+                            .setPositiveButton("Fermer",null).show()
+                    }
+                }
+            },8)
+            add(deyeSection,action("Vérifier les mises à jour OTA Deye") {
+                val host=ip.text.toString().trim()
+                val secret=if(code.text.isNotBlank())code.text.toString()
+                    else auxiliaryCode(codeKey)
+                val remote=voltronicVpnRoute()
+                val wifi=voltronicWifiNetwork()
+                feedback.text="Deye : vérification de la version et des mises à jour…"
+                inverterWorker.execute {
+                    try{
+                        val info=DeyeReaderClient.get(slot,"info",host,secret,remote,wifi)
+                        val ready=DeyeReaderClient.get(slot,"ota/status",host,secret,remote,wifi)
+                        require(ready.optBoolean("ota_supported")) {
+                            "ESP32 Deye sans partition OTA disponible"
+                        }
+                        val feed=SmartEnergyUpdateFeed.parseDeye(
+                            SmartEnergyUpdateFeed.fetchPublicManifest(
+                                SmartEnergyUpdateFeed.DEYE_MANIFEST),
+                            info.optString("version"))
                         runOnUiThread {
-                            feedback.text=result
-                            voltronicFleet.changed()
+                            if(feed==null){
+                                feedback.text="Deye : aucune nouvelle mise à jour publiée."
+                            }else if(!feed.compatible){
+                                feedback.text="Deye : image non compatible avec l'ESP32-S3."
+                            }else{
+                                AlertDialog.Builder(this)
+                                    .setTitle("OTA Deye · "+feed.version)
+                                    .setMessage("Le lecteur ESP32 téléchargera le firmware "+
+                                        "directement sur le Wi-Fi de la maison, même "+
+                                        "si tu es en 4G. Aucun binaire ne passe par VPN. "+
+                                        "Lancer l'installation ?")
+                                    .setNegativeButton("Annuler",null)
+                                    .setPositiveButton("Installer") {_,_->
+                                        inverterWorker.execute{
+                                            val msg=try{
+                                                DeyeReaderClient.requestOta(slot,host,secret,
+                                                    remote,wifi)
+                                                "Commande OTA Deye acceptée par l'ESP32."
+                                            }catch(ex:Exception){
+                                                "OTA Deye : "+(ex.message?:"erreur")
+                                            }
+                                            runOnUiThread{feedback.text=msg}
+                                        }
+                                    }.show()
+                            }
+                        }
+                    }catch(ex:Exception){
+                        runOnUiThread {
+                            feedback.text="Deye OTA : "+(ex.message?.take(140)?:"erreur")
                         }
                     }
                 }
