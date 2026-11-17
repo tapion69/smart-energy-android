@@ -2,9 +2,10 @@ package fr.smartenergy.android
 
 import org.json.JSONObject
 
-/** Read-only capability negotiation. Never guesses that a device is writable.
- * The VPN /health read_only=true flag is for default telemetry and MUST NOT
- * override the separate explicit remote_parameter_writes_opt_in flag. */
+/** Capability negotiation for authenticated, explicitly confirmed edits.
+ * VPN health read_only=true describes default telemetry, not semantic SETs.
+ * Current VPN exposes remote_parameter_writes_supported; old USB-gated
+ * gateways remain locked if their legacy opt-in was not enabled. */
 internal object VoltronicWriteAccessPolicy {
     data class Decision(val editable:Boolean, val reason:String)
 
@@ -35,17 +36,24 @@ internal object VoltronicWriteAccessPolicy {
             return Decision(false,"Réponse /health VPN absente ou identité invalide. "+
                 "Aucune commande envoyée.")
         val vpnVersion=gatewayHealth.optString("version","inconnue").take(48)
-        if(!gatewayHealth.has("remote_parameter_writes_opt_in"))
-            return Decision(false,"Passerelle VPN ($vpnVersion) : l'autorisation "+
-                "remote_parameter_writes_opt_in n'est pas publiée. "+
-                "Firmware VPN trop ancien ou incompatible. Aucune commande envoyée.")
+        // Latest firmware removes the second USB unlock. Readers still
+        // verify old/current values and acknowledge a confirmed change.
+        if(gatewayHealth.has("remote_parameter_writes_supported")) {
+            if(!gatewayHealth.optBoolean("remote_parameter_writes_supported",false))
+                return Decision(false,"VPN ($vpnVersion) : la passerelle n'annonce "+
+                    "pas la prise en charge des modifications confirmées. "+
+                    "Aucune commande envoyée.")
+            if(!gatewayHealth.optBoolean("remote_write_confirmation_required",false))
+                return Decision(false,"VPN ($vpnVersion) : la confirmation "+
+                    "obligatoire n'est pas annoncée. Aucune commande envoyée.")
+            return Decision(true,"")
+        }
+        // Older firmware still enforces its stored physical USB opt-in.
         if(!gatewayHealth.optBoolean("remote_parameter_writes_opt_in",false))
-            return Decision(false,"Passerelle VPN ($vpnVersion) : les écritures distantes "+
-                "sont désactivées dans sa configuration NVS "+
-                "(remote_parameter_writes_opt_in=false). "+
-                "Le firmware Voltronic supporte les écritures ; "+
-                "c'est l'autorisation du VPN qui bloque. "+
-                "Aucune commande envoyée.")
+            return Decision(false,"Passerelle VPN ($vpnVersion) : ancien firmware "+
+                "avec autorisation USB désactivée. Installe le firmware VPN "+
+                "0.3.12 (ou plus récent) en APP-ONLY pour supprimer cette "+
+                "activation supplémentaire. Aucune commande envoyée.")
         return Decision(true,"")
     }
 }
