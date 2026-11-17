@@ -2387,7 +2387,7 @@ class MainActivity : Activity() {
      */
     private fun gatewayDiscoveryGet(path:String,host:String,token:String):JSONObject {
         require(path=="/api/v1/discovery" ||
-            Regex("^/api/v1/(jk|voltronic)/[1-3]/(info|telemetry)$").matches(path)) {
+            Regex("^/api/v1/(jk|voltronic|deye)/[1-3]/(info|telemetry)$").matches(path)) {
             "Route de lecture VPN non autorisée"
         }
         require(vpnConnected() && allowedTailnetIp(host) && validGatewayToken(token)) {
@@ -2443,11 +2443,13 @@ class MainActivity : Activity() {
                     val devices=inventory.optJSONArray("devices") ?: JSONArray()
                     for(index in 0 until devices.length()){
                         val item=devices.optJSONObject(index) ?: continue
-                        val family=item.optString("family")
+                        val oldFamily=item.optString("family")
+                        val family=if(oldFamily=="voltronic" &&
+                            item.optString("device_type")=="deye")"deye" else oldFamily
                         val name=item.optString("name")
                         val identity=item.optString("device_id")
                         val slot=item.optInt("slot")
-                        if(family !in setOf("jk","voltronic") || slot !in 1..3 ||
+                        if(family !in setOf("jk","voltronic","deye") || slot !in 1..3 ||
                             !item.optBoolean("verified") || name.length !in 1..32 ||
                             identity.length !in 6..47)continue
                         discovered.add(RemoteReader(family,name,identity,slot))
@@ -2460,7 +2462,8 @@ class MainActivity : Activity() {
                         throw ex
                 }
                 for(family in listOf("jk","voltronic"))for(slot in 1..3){
-                    if(discovered.any{it.family==family && it.vpnSlot==slot})continue
+                    if(discovered.any{(it.family==family || (family=="voltronic" &&
+                        it.family=="deye")) && it.vpnSlot==slot})continue
                     try {
                         val info=gatewayDiscoveryGet(
                             "/api/v1/$family/$slot/info",host,token)
@@ -2493,7 +2496,8 @@ class MainActivity : Activity() {
                         AlertDialog.Builder(this)
                             .setTitle("Équipements détectés via VPN")
                             .setItems(entries.map {
-                                it.name+" — "+(if(it.family=="jk")"JK" else "Onduleur")+
+                                it.name+" — "+(if(it.family=="jk")"JK"
+                                    else if(it.family=="deye")"Deye" else "Onduleur")+
                                     " (VPN "+it.vpnSlot+")"
                             }.toTypedArray()) { _,index ->
                                 promptRemoteReader(entries[index],host,token)
@@ -2596,6 +2600,44 @@ class MainActivity : Activity() {
                             }
                         }catch(ex:Exception) {
                             state("Association JK VPN refusée : "+(ex.message ?: "erreur réseau"))
+                        }
+                    }
+                }else if(reader.family=="deye"){
+                    state("Vérification du lecteur Deye par le VPN…")
+                    io.execute {
+                        try{
+                            val info=gatewayDiscoveryGet(
+                                "/api/v1/deye/${reader.vpnSlot}/info",host,token)
+                            require(info.optString("product")=="smart-energy-deye-s3" &&
+                                info.optString("device_id")==reader.deviceId){
+                                "Identité du lecteur Deye non confirmée"
+                            }
+                            runOnUiThread{
+                                val slot=reader.vpnSlot
+                                val prefix=if(slot==1)"inverter_probe_" else "inverter_${slot}_"
+                                if(voltronicFleet.configured(slot)){
+                                    state("Emplacement $slot déjà occupé par un Voltronic. "+
+                                        "Libère l'association précédente avant de poursuivre.")
+                                    return@runOnUiThread
+                                }
+                                saveAuxiliaryCode(
+                                    if(slot==1)"premium_voltronic_code_cipher"
+                                    else "premium_voltronic_${slot}_code_cipher",code)
+                                prefs.edit()
+                                    .putString("deye_${slot}_type","deye")
+                                    .putBoolean("deye_${slot}_validated",true)
+                                    .putString("deye_${slot}_esp_ip","")
+                                    .putString("inverter_${slot}_name",reader.name)
+                                    .putString("remote_gateway_ip",host)
+                                    .putBoolean("remote_gateway_enabled",true)
+                                    .putString("connection_preference","gateway").apply()
+                                saveGatewayToken(token)
+                                state("ESP32 Deye $slot associé via VPN : "+reader.name+
+                                    ". Ouvre la configuration Deye pour lire sa clé.")
+                            }
+                        }catch(ex:Exception){
+                            state("Association Deye VPN impossible : "+
+                                (ex.message?:"erreur"))
                         }
                     }
                 }else{
