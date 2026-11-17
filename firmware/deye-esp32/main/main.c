@@ -27,7 +27,6 @@
 #include "esp_ota_ops.h"
 #include "esp_partition.h"
 #include "esp_timer.h"
-#include "esp_random.h"
 #include "driver/uart.h"
 #include "driver/gpio.h"
 #include "driver/usb_serial_jtag.h"
@@ -685,11 +684,14 @@ static void ota_worker(void *arg){
         snprintf(ota_status,sizeof ota_status,"invalid_update_manifest");
         cJSON_Delete(j);ota_busy=false;vTaskDelete(NULL);return;
     }
-    esp_http_client_config_t binary_cfg={.url=download,
+    char approved_sha[65]={0},approved_url[300]={0};
+    snprintf(approved_sha,sizeof approved_sha,"%s",expected);
+    snprintf(approved_url,sizeof approved_url,"%s",download);
+    cJSON_Delete(j);
+    esp_http_client_config_t binary_cfg={.url=approved_url,
         .crt_bundle_attach=esp_crt_bundle_attach,.timeout_ms=15000,
         .max_redirection_count=4};
     esp_http_client_handle_t bin=esp_http_client_init(&binary_cfg);
-    cJSON_Delete(j); /* Pointers are invalid after this; use no manifest values. */
     const esp_partition_t *target=esp_ota_get_next_update_partition(NULL);
     esp_ota_handle_t handle=0;
     bool started=false,success=false;
@@ -713,16 +715,22 @@ static void ota_worker(void *arg){
             mbedtls_sha256_finish(&digest,actual);
             /* Temporarily keep the validated manifest digest until transfer
                completes; no untrusted remote parameter can alter it. */
-            if(bytes<0 || !valid || total<4096){
+            unsigned mismatch=0;
+            static const char hexdigits[]="0123456789abcdef";
+            for(int i=0;i<32;i++){
+                uint8_t hi=actual[i]>>4,lo=actual[i]&15;
+                mismatch|=(unsigned)(uint8_t)(
+                   (unsigned char)tolower((unsigned char)approved_sha[i*2])^hexdigits[hi]);
+                mismatch|=(unsigned)(uint8_t)(
+                   (unsigned char)tolower((unsigned char)approved_sha[i*2+1])^hexdigits[lo]);
+            }
+            if(bytes<0 || !valid || total<4096 || mismatch!=0){
+                snprintf(ota_status,sizeof ota_status,
+                    mismatch?"sha256_mismatch":"invalid_image_download");
                 esp_ota_abort(handle);
             }else{
-                /* The image must be validated against an independently stored
-                   digest before it is considered for boot. */
-                esp_err_t result=esp_ota_end(handle);
-                if(result==ESP_OK){
-                    /* See below: hash comparison is enforced via retained copy. */
+                if(esp_ota_end(handle)==ESP_OK)
                     success=esp_ota_set_boot_partition(target)==ESP_OK;
-                }
             }
         }
     }
