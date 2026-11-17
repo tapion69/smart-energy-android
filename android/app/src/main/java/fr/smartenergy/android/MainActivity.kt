@@ -2120,7 +2120,11 @@ class MainActivity : Activity() {
                 // Do not trust a global capability alone: match the exact
                 // originally paired JK device and require write-capable firmware.
                 var remoteVersion=""
-                val canWriteRemote=if(health.optBoolean("remote_parameter_writes_opt_in",false)){
+                val supportsConfirmedWrites=if(health.has("remote_parameter_writes_supported"))
+                    health.optBoolean("remote_parameter_writes_supported",false) &&
+                        health.optBoolean("remote_write_confirmation_required",false)
+                    else health.optBoolean("remote_parameter_writes_opt_in",false)
+                val canWriteRemote=if(supportsConfirmedWrites){
                     try {
                         val remoteInfo=httpCall("GET","/api/v1/info")
                         remoteVersion=remoteInfo.optString("version","")
@@ -5124,8 +5128,8 @@ class MainActivity : Activity() {
             AlertDialog.Builder(this).setTitle("INV$slot · connexion requise")
                 .setMessage(if(useVpn)
                     "Vérifie que Tailscale et le VPN ESP32 JK sont connectés. "+
-                    "Les écritures distantes nécessitent le nouveau firmware "+
-                    "de la passerelle et une autorisation USB explicite."
+                    "Installe le firmware VPN 0.3.12 ou plus récent pour "+
+                    "les modifications confirmées sans autorisation USB."
                  else "Connecte le téléphone au Wi-Fi local et renseigne "+
                     "l'adresse privée et le code ESP32-S3 dans Configuration.")
                 .setPositiveButton("Compris",null).show()
