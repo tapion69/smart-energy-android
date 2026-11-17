@@ -443,7 +443,13 @@ static void polling_loop(void *ignored){
                 state.device_type=identify;
             }
             xSemaphoreGive(state_mutex);
-            if(deye_is_3phase(identify)){
+            if(deye_is_unmapped_hv(identify)){
+                /* HV 0x0600/0x0601: register definitions are model dependent.
+                   Keep identity/health but never mislabel LV registers. */
+                xSemaphoreTake(state_mutex,portMAX_DELAY);
+                state.online=false;
+                xSemaphoreGive(state_mutex);
+            }else if(deye_is_3phase(identify)){
                 const uint16_t ranges[][2]={{500,1},{514,16},{586,15},
                     {625,12},{653,21},{672,8}};
                 for(size_t i=0;i<sizeof ranges/sizeof ranges[0];i++){
@@ -464,7 +470,8 @@ static void polling_loop(void *ignored){
                 query_registers(249,24);query_registers(273,7);
             }
             xSemaphoreTake(state_mutex,portMAX_DELAY);
-            state.online=state.valid[deye_is_3phase(identify)?588:184];
+            state.online=!deye_is_unmapped_hv(identify) &&
+                state.valid[deye_is_3phase(identify)?588:184];
             xSemaphoreGive(state_mutex);
         }else{
             xSemaphoreTake(state_mutex,portMAX_DELAY);
@@ -508,6 +515,8 @@ static esp_err_t api_info(httpd_req_t *r){
     xSemaphoreTake(state_mutex,portMAX_DELAY);
     cJSON_AddNumberToObject(j,"device_type",state.device_type);
     cJSON_AddBoolToObject(j,"inverter_online",state.online);
+    cJSON_AddBoolToObject(j,"register_map_supported",
+        !deye_is_unmapped_hv(state.device_type) && state.device_type!=0);
     xSemaphoreGive(state_mutex);
     return json_reply(r,j);
 }
@@ -520,6 +529,8 @@ static esp_err_t api_telemetry(httpd_req_t *r){
     cJSON_AddBoolToObject(j,"available",fresh);
     cJSON_AddNumberToObject(j,"age_ms",state.last_ok_ms?age:0);
     cJSON_AddNumberToObject(j,"device_type",state.device_type);
+    cJSON_AddBoolToObject(j,"register_map_supported",
+        !deye_is_unmapped_hv(state.device_type) && state.device_type!=0);
     cJSON_AddNumberToObject(j,"polls_ok",state.successes);
     cJSON_AddNumberToObject(j,"polls_failed",state.failures);
     xSemaphoreGive(state_mutex);
