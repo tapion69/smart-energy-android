@@ -23,6 +23,8 @@ jobs:
             firmware/vpn-gateway/tests/test_policy.c \
             -o /tmp/se-gateway-policy
           /tmp/se-gateway-policy
+      - name: Confirm VPN writes need only the authenticated APK confirmation
+        run: python firmware/vpn-gateway/tests/test_confirmed_write_policy.py
       - name: Verify ESP32-S3 CH343 and native USB provisioning sources
         run: python firmware/vpn-gateway/tests/test_s3_provisioning_sources.py
       - name: Verify Voltronic-only USB addition preserves NVS
