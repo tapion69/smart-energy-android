@@ -673,12 +673,17 @@ class Flasher(tk.Tk):
     def _show_inverter_type(self)->None:
         if not hasattr(self,"deye_frame"):return
         if self.inverter_type.get()=="deye":
+            # The very first Deye installation must include dual-OTA partitions.
+            # Never silently apply Deye APP-ONLY to a blank S3.
+            self.volt_mode.set("factory")
             self.deye_frame.grid()
             self.inverter_warning.configure(text="Deye : ESP32 → Wi-Fi → clé Solarman. "
                 "Ne pas flasher sur un ESP VPN, JK ou Voltronic en service.")
             if self.volt_fields["display_name"].get()=="Onduleur Voltronic":
                 self.volt_fields["display_name"].set("Onduleur Deye")
         else:
+            # Preserve working Voltronic readers by preferring APP-ONLY.
+            self.volt_mode.set("update")
             self.deye_frame.grid_remove()
             self.inverter_warning.configure(text="Voltronic : RS232 avec MAX3232 ; "
                 "jamais directement sur les GPIO 3,3 V.")
