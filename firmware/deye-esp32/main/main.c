@@ -84,13 +84,13 @@ static const deye_reg_t single_parameters[]={
     {"grid_charge_current_a",231,0,1,0},
     {"energy_management",243,0,1,0},
     {"limit_max_grid_export_w",245,0,1,0},
-    {"time_of_use_enabled",248,0,1,0},
-    {"time_of_use_soc_1",267,0,1,0},
-    {"time_of_use_soc_2",268,0,1,0},
-    {"time_of_use_soc_3",269,0,1,0},
-    {"time_of_use_soc_4",270,0,1,0},
-    {"time_of_use_soc_5",271,0,1,0},
-    {"time_of_use_soc_6",272,0,1,0}
+    {"time_of_use_flags",248,0,1,0},
+    {"time_of_use_soc_1",268,0,1,0},
+    {"time_of_use_soc_2",269,0,1,0},
+    {"time_of_use_soc_3",270,0,1,0},
+    {"time_of_use_soc_4",271,0,1,0},
+    {"time_of_use_soc_5",272,0,1,0},
+    {"time_of_use_soc_6",273,0,1,0}
 };
 static const deye_reg_t three_parameters[]={
     {"inverter_onoff",80,0,1,0},{"battery_capacity_ah",102,0,1,0},
