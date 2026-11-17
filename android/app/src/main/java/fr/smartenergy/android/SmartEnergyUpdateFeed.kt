@@ -16,6 +16,8 @@ internal object SmartEnergyUpdateFeed {
 
     const val JK_MANIFEST =
         "https://raw.githubusercontent.com/tapion69/smart-energy-android/main/updates/jk-esp32.json"
+    const val DEYE_MANIFEST =
+        "https://raw.githubusercontent.com/tapion69/smart-energy-android/main/updates/deye.json"
 
     data class AndroidRelease(
         val version:String,val versionCode:Long,val downloadUrl:String,
@@ -116,9 +118,25 @@ internal object SmartEnergyUpdateFeed {
             !hash.matches(Regex("[a-fA-F0-9]{64}")))return null
         return FirmwareRelease(version,url,hash.lowercase(),compatible)
     }
+    fun parseDeye(text:String,currentVersion:String):FirmwareRelease? {
+        val j=JSONObject(text)
+        if(j.optInt("schemaVersion")!=1 ||
+            j.optString("product")!="smart-energy-deye-s3" ||
+            !j.optBoolean("available"))return null
+        val version=j.optString("version")
+        if(!newerFirmware(version,currentVersion))return null
+        val url=j.optString("url")
+        val sha=j.optString("sha256")
+        val board=j.optString("board")
+        if(!officialFirmwareUrl(url) ||
+            !sha.matches(Regex("[a-fA-F0-9]{64}")))return null
+        return FirmwareRelease(version,url,sha.lowercase(),board=="esp32s3-n16r8")
+    }
+
     /** Fail closed: bounded HTTPS, no redirects to arbitrary providers. */
     fun fetchPublicManifest(url:String):String {
-        require(url==ANDROID_MANIFEST || url==VOLTRONIC_MANIFEST || url==JK_MANIFEST)
+        require(url==ANDROID_MANIFEST || url==VOLTRONIC_MANIFEST ||
+            url==JK_MANIFEST || url==DEYE_MANIFEST)
         val conn=URL(url).openConnection() as HttpURLConnection
         return try {
             conn.requestMethod="GET"
