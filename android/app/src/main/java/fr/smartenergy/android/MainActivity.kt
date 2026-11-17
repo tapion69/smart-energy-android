@@ -5167,11 +5167,12 @@ class MainActivity : Activity() {
                         val item=settings[index]
                         if(!item.editable) {
                             AlertDialog.Builder(this)
-                                .setTitle("INV$slot · lecture seule")
+                                .setTitle("INV$slot · écriture non disponible")
                                 .setMessage("${item.label} : ${item.value} ${item.unit}\n\n"+
-                                    "La valeur est disponible en lecture, mais l'écriture n'est "+
-                                    "pas autorisée sur ce firmware ou sur le VPN. "+
-                                    "Aucune commande envoyée.")
+                                    (item.blockedReason.ifBlank {
+                                        "Écriture non autorisée pour ce lecteur. "+
+                                        "Aucune commande envoyée."
+                                    }))
                                 .setPositiveButton("OK",null).show()
                         }else proposeVoltronicChange(slot,host,port,code,network,route,
                             item)
