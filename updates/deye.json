@@ -1,0 +1,10 @@
+{
+  "schemaVersion": 1,
+  "product": "smart-energy-deye-s3",
+  "board": "esp32s3-n16r8",
+  "available": false,
+  "version": "",
+  "url": "",
+  "sha256": "",
+  "notes": "No Deye OTA release yet; first firmware provisioned by USB, future updates fetched by reader over home Wi-Fi."
+}
