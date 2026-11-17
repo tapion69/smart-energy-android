@@ -1367,6 +1367,10 @@ class MainActivity : Activity() {
                             .remove(prefix+"validated")
                             .remove("inverter_${slot}_name")
                             .remove("deye_${slot}_dongle_ip")
+                            .remove("deye_${slot}_esp_ip")
+                            .remove("deye_${slot}_validated")
+                            .remove("deye_${slot}_dongle_serial")
+                            .remove("deye_${slot}_inverter_serial")
                             .remove("deye_${slot}_port")
                             .remove("deye_${slot}_unit")
                             .remove("deye_${slot}_type")
@@ -1374,6 +1378,10 @@ class MainActivity : Activity() {
                         ip.setText("")
                         port.setText("18081")
                         code.text.clear()
+                        dongleIp.setText("")
+                        donglePort.setText("8899")
+                        dongleSerial.setText("")
+                        inverterSerial.setText("")
                         unit.setText("1")
                         vol.isChecked=true
                         feedback.text="Onduleur $slot : emplacement libre"
