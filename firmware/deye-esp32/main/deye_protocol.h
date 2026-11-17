@@ -148,4 +148,9 @@ static const deye_reg_t deye_three_readings[]={
 static inline bool deye_type_valid(uint16_t code){
     return code==0x0300||code==0x0500||code==0x0600||code==0x0601;
 }
-static inline bool deye_is_3phase(uint16_t code){return code!=0x0300 && deye_type_valid(code);}
+/* The map at 500..679 is documented for 3P LOW-VOLTAGE 0x0500.
+ * HV 0x0600/0x0601 must not be decoded using these same addresses. */
+static inline bool deye_is_3phase(uint16_t code){return code==0x0500;}
+static inline bool deye_is_unmapped_hv(uint16_t code){
+    return code==0x0600||code==0x0601;
+}
