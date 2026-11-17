@@ -10,7 +10,7 @@ import java.net.URL
  * only S3-firmware-allowlisted commands can ever be proposed for writing. */
 internal object VoltronicParameterEditor {
     data class Setting(val key:String,val label:String,val value:Double,val unit:String,
-                       val editable:Boolean=true)
+                       val editable:Boolean=true,val blockedReason:String="")
     private data class Spec(val key:String,val label:String,val source:String,
                             val unit:String)
     private val specifications = listOf(
@@ -62,16 +62,19 @@ internal object VoltronicParameterEditor {
         route:VoltronicVpnRoute?=null,slot:Int=1
     ):List<Setting> {
         if(route==null)validateLocal(host,code,port,network)
-        val remoteWriteAllowed=route==null ||
-            try { VoltronicVpnReadOnlyClient.remoteWritesEnabled(route) }
-            catch(_:Exception) { false }
         val info=if(route!=null)VoltronicVpnReadOnlyClient.info(slot,route)
                  else VoltronicReadOnlyClient.probe(host,code,port,network)
-        val editSupported=info.optBoolean("parameter_edit_supported",false) &&
-            info.optString("parameter_edit_protocol")=="verified-write-v1"
-        // Older or USB-locked gateways may still provide valid native
-        // parameter reads. Never offer a write unless both sides advertise it.
-        val canEdit=editSupported && remoteWriteAllowed
+        // Read /health only over the selected VPN. A timeout must never
+        // masquerade as a confirmed "USB opt-in disabled" state.
+        var gatewayStatus:JSONObject?=null
+        var gatewayError:String?=null
+        if(route!=null){
+            try{gatewayStatus=VoltronicVpnReadOnlyClient.remoteWriteStatus(route)}
+            catch(ex:Exception){gatewayError=ex.message?:ex.javaClass.simpleName}
+        }
+        val gate=VoltronicWriteAccessPolicy.decide(info,gatewayStatus,
+            gatewayError,viaVpn=route!=null)
+        val canEdit=gate.editable
         val details=if(route!=null)VoltronicVpnReadOnlyClient.read(slot,true,route)
                     else VoltronicReadOnlyClient.details(host,code,port,network)
         val native=details.optJSONObject("parameters")
@@ -83,7 +86,8 @@ internal object VoltronicParameterEditor {
             if(age !in 0L..300000L)return@mapNotNull null
             val value=obj.optDouble(spec.key,Double.NaN)
             if(!value.isFinite())null else Setting(
-                spec.key,spec.label,value,spec.unit,editable=canEdit)
+                spec.key,spec.label,value,spec.unit,editable=canEdit,
+                blockedReason=if(canEdit)"" else gate.reason)
         }
         // Diagnostic raw QPIRI / QDOP remains visible in the Inverter
         // details panel, NOT in this edit picker. Unknown positions are
