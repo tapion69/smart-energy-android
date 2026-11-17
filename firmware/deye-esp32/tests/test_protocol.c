@@ -44,7 +44,9 @@ int main(void) {
     make_reply(packet,&len,true);
     assert(deye_v5_parse_fc03(packet,len,0x6a3c6eb2,0xbb,1,2,words));
     assert(deye_type_valid(0x0300));
-    assert(deye_is_3phase(0x0500));assert(deye_is_3phase(0x0601));
+    assert(deye_is_3phase(0x0500));
+    assert(deye_is_unmapped_hv(0x0601));
+    assert(!deye_is_3phase(0x0601));
     assert(!deye_type_valid(0x1234));
     puts("Deye Solarman V5 FC03 parser and framing tests OK");
 }
