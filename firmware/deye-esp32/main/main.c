@@ -402,13 +402,20 @@ static bool read_fc03(uint16_t start,uint16_t count,uint16_t *words){
         uint8_t seq=++sequence_number;
         size_t txlen=deye_v5_make_fc03(tx,sizeof tx,logger,
             seq,cfg.modbus_id,start,count);
-        if(txlen && send(sock,tx,txlen,0)==(int)txlen &&
-           receive_exact(sock,rx,11)){
-            size_t payload=deye_u16le(rx+1);
-            if(payload>=19 && payload<=DEYE_V5_RX_MAX-13 &&
-               receive_exact(sock,rx+11,payload+2))
+        if(txlen && send(sock,tx,txlen,0)==(int)txlen) {
+            /* Solar loggers may send a stale/unsolicited V5 heartbeat before
+               our FC03 response. Skip up to three correctly framed packets,
+               but accept ONLY the exact sequence/serial/slave + RTU CRC. */
+            for(int attempt=0;attempt<4 && !success;attempt++){
+                if(!receive_exact(sock,rx,11))break;
+                size_t payload=deye_u16le(rx+1);
+                if(rx[0]!=0xa5 || payload<3 ||
+                   payload>DEYE_V5_RX_MAX-13)break;
+                if(!receive_exact(sock,rx+11,payload+2))break;
+                if(payload<19)continue;
                 success=deye_v5_parse_fc03(rx,11+payload+2,
                     logger,seq,cfg.modbus_id,count,words);
+            }
         }
     }
     close(sock);
