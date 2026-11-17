@@ -1,4 +1,4 @@
-# Contrat ESP32 Onduleur Deye ↔ passerelle VPN (0.3.11-dev)
+# Contrat ESP32 Onduleur Deye ↔ passerelle VPN (0.3.12-dev)
 
 Objectif : préparer **avant intervention à distance** toutes les routes de communication Deye, notamment les écritures futures, sans casser JK/Voltronic. Ce document est un **contrat d'API** ; il ne signifie pas que le firmware ESP32 Deye est déjà développé.
 
@@ -41,7 +41,7 @@ L'APK envoie `X-Gateway-Token` sur le VPN, `X-Remote-Write-Confirmed: yes` sur l
   `{"action":"check_and_install","confirmed":true}`.
   L'ESP32 doit vérifier une version **autorisée et compatible**, télécharger le firmware sur son Wi-Fi domestique, en vérifier origine/intégrité, l'installer sur partition OTA inactive et rendre compte de l'état. Pas de binaire ni d'URL arbitraire via VPN.
 
-**Important :** le firmware VPN applique le `remote_writes_enabled` existant aux futures écritures Deye, **comme JK et Voltronic**. Si l'option est déjà active sur la passerelle, aucun nouveau bouton physique n'est nécessaire pour les commandes Deye ; si elle est désactivée, ce firmware ne fournit pas de bascule distante. Les permissions et codes sont conservés par une mise à jour **APP-ONLY** compatible.
+**Important (VPN 0.3.12+) :** aucune activation physique USB supplémentaire n'est requise pour une écriture distante. Le VPN exige toujours une connexion Tailnet autorisée, le token passerelle, `X-Remote-Write-Confirmed: yes`, un JSON `confirmed: true` et une route sémantique autorisée. Le lecteur cible vérifie lui-même la valeur et sa relecture. Le champ NVS historique `remote_writes_enabled` est conservé pour les mises à jour APP-ONLY, mais ne bloque plus ces commandes. **Les écritures électriques Deye restent désactivées côté lecteur tant que les registres ne sont pas validés.**
 
 ## Déploiement / limitation
 
