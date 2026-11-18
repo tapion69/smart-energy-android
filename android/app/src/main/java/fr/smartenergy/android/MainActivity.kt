@@ -1488,6 +1488,29 @@ class MainActivity : Activity() {
         add(jkUpdates,action("Vérifier les MAJ des ESP JK") {
             checkJkFirmwareUpdates()
         },7)
+        val vpnUpdates=section(updatesPage,
+            "Firmware ESP32 VPN / Tailscale · OTA",true)
+        add(vpnUpdates,label(
+            "Mettre à jour la passerelle VPN ESP32-S3 sans PC, via une "+
+            "commande Tailscale sécurisée. La passerelle télécharge elle-même "+
+            "le firmware officiel sur son Wi-Fi, vérifie l'empreinte SHA-256 "+
+            "et redémarre avec contrôle du retour VPN. "+
+            "ESP32 classique 4 Mo et S3 à partition unique : migration USB "+
+            "obligatoire, aucune OTA risquée.",
+            12f,color=subdued))
+        add(vpnUpdates,action("Vérifier les MAJ du firmware VPN") {
+            checkVpnGatewayFirmwareUpdates()
+        },8)
+        val deyeUpdates=section(updatesPage,
+            "Firmware ESP32 Deye · OTA",false)
+        add(deyeUpdates,label(
+            "Deye possède déjà sa vérification OTA avec SHA-256. "+
+            "La commande distante passe par la passerelle VPN et "+
+            "le lecteur télécharge le firmware sur le Wi-Fi de la maison.",
+            12f,color=subdued))
+        add(deyeUpdates,action("Ouvrir la configuration Deye · OTA") {
+            navigateNative?.invoke(2)
+        },6)
         updateFeedback=label("Aucune vérification effectuée.",13f,false,subdued)
         add(updatesPage,updateFeedback,8)
         add(updatesPage,action("Voir les publications Smart Energy sur GitHub") {
@@ -4847,6 +4870,106 @@ class MainActivity : Activity() {
 
     /** No flash/OTA here: JK currently advertises ota=false.
      * Read each saved reader independently without touching BLE or JK settings. */
+    private fun vpnGatewayOtaRoute():VoltronicVpnRoute?=try {
+        if(!vpnConnected())null else {
+            val gateway=prefs.getString("remote_gateway_ip","")?:""
+            val token=storedGatewayToken()
+            val vpn=connectivity.allNetworks.firstOrNull { network ->
+                connectivity.getNetworkCapabilities(network)?.hasTransport(
+                    NetworkCapabilities.TRANSPORT_VPN)==true
+            }
+            if(vpn==null || !VoltronicVpnReadOnlyClient.isTailnetIpv4(gateway) ||
+                token.length !in 20..128)null
+            else VoltronicVpnRoute(gateway,token,vpn)
+        }
+    }catch(_:Exception){null}
+
+    private fun checkVpnGatewayFirmwareUpdates() {
+        val route=vpnGatewayOtaRoute()
+        if(route==null) {
+            updateFeedback.text="Pour vérifier le firmware VPN : active "+
+                "Tailscale et associe l'ESP VPN dans Configuration. "+
+                "L'OTA ne nécessite pas de changer le mode du dashboard."
+            return
+        }
+        updateFeedback.text="Passerelle VPN : lecture de la version et du partitionnement…"
+        settingsWorker.execute {
+            try {
+                val state=VpnGatewayOtaClient.status(route)
+                val version=state.optString("version","")
+                val target=state.optString("target","")
+                val dual=state.optString("partition_scheme")=="dual_ota" &&
+                    state.optBoolean("ota_supported")
+                val pending=state.optBoolean("rollback_pending")
+                if(target!="esp32s3-n16r8" || !dual || pending ||
+                    !state.optBoolean("flash_ready")) {
+                    val info=when {
+                        target!="esp32s3-n16r8" ->
+                            "ESP32 VPN classique : migration matérielle vers un S3 "+
+                            "OTA-compatible requise, aucune mise à jour distante."
+                        pending ->
+                            "Rollback en attente : vérifier le démarrage VPN avant "+
+                            "une autre mise à jour."
+                        else ->
+                            "Partition OTA absente : migration USB sécurisée préalable "+
+                            "sur le VPN S3, sans effacer les paramètres ni Tailscale."
+                    }
+                    runOnUiThread {if(!isFinishing)
+                        updateFeedback.text="VPN $version : $info"}
+                    return@execute
+                }
+                val feed=SmartEnergyUpdateFeed.parseVpn(
+                    SmartEnergyUpdateFeed.fetchPublicManifest(
+                        SmartEnergyUpdateFeed.VPN_MANIFEST),version)
+                if(feed==null || !feed.compatible) {
+                    runOnUiThread {if(!isFinishing)
+                        updateFeedback.text="VPN $version : aucune nouvelle version OTA "+
+                            "officielle disponible."}
+                    return@execute
+                }
+                runOnUiThread {
+                    if(isFinishing)return@runOnUiThread
+                    AlertDialog.Builder(this)
+                        .setTitle("Mise à jour de la passerelle VPN S3")
+                        .setMessage("Version installée : $version\n"+
+                            "Version proposée : ${feed.version}\n\n"+
+                            "L'ESP32 téléchargera seul l'image officielle, vérifiera "+
+                            "son SHA-256 puis redémarrera. Tailscale sera coupé "+
+                            "pendant le redémarrage. Ne coupe pas l'alimentation. "+
+                            "En cas d'échec, ne relance pas la mise à jour "+
+                            "sans diagnostic. Confirmer ?")
+                        .setNegativeButton("Annuler",null)
+                        .setPositiveButton("Confirmer l'OTA VPN") { _,_ ->
+                            updateFeedback.text="VPN : commande OTA confirmée…"
+                            settingsWorker.execute {
+                                val result=try {
+                                    VpnGatewayOtaClient.requestConfirmed(route)
+                                    if(VpnGatewayOtaClient.verifyAfterReboot(route,
+                                            feed.version)) {
+                                        "VPN : firmware ${feed.version} confirmé "+
+                                        "après reconnexion Tailscale."
+                                    }else{
+                                        "VPN : commande acceptée, mais nouvelle version "+
+                                        "pas confirmée. Vérifie OTA/status et "+
+                                        "n'envoie pas une deuxième commande."
+                                    }
+                                }catch(ex:Exception) {
+                                    "VPN : mise à jour ou vérification non confirmée ("+
+                                    (ex.message?:ex.javaClass.simpleName).take(150)+
+                                    "). Aucun nouvel essai automatique."
+                                }
+                                runOnUiThread {if(!isFinishing)updateFeedback.text=result}
+                            }
+                        }.show()
+                }
+            }catch(ex:Exception){
+                runOnUiThread {if(!isFinishing)
+                    updateFeedback.text="OTA VPN : vérification impossible ("+
+                        (ex.message?:ex.javaClass.simpleName).take(140)+")."}
+            }
+        }
+    }
+
     private fun checkJkFirmwareUpdates() {
         val wifi=voltronicWifiNetwork()
         if(wifi==null || selectedRoute()==JkTransportPolicy.Route.GATEWAY_VPN) {
