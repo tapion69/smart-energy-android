@@ -40,6 +40,9 @@ static const ble_uuid128_t CHALLENGE_UUID=BLE_UUID128_INIT(
 static const ble_uuid128_t CONFIG_UUID=BLE_UUID128_INIT(
     0x01,0x00,0x45,0x44,0x4f,0x4e,0x12,0x9d,
     0x58,0x4e,0x62,0x3a,0x03,0x00,0xe7,0xb5);
+static const ble_uuid128_t STATUS_UUID=BLE_UUID128_INIT(
+    0x01,0x00,0x45,0x44,0x4f,0x4e,0x12,0x9d,
+    0x58,0x4e,0x62,0x3a,0x04,0x00,0xe7,0xb5);
 static uint8_t challenge[16];
 static char secret[129];
 static volatile bool accepted=false;
@@ -176,6 +179,12 @@ static int gatt_access(uint16_t conn_handle,uint16_t attr_handle,
         return os_mbuf_append(ctxt->om,challenge,sizeof(challenge))==0?
             0:BLE_ATT_ERR_INSUFFICIENT_RES;
     }
+    if(ctxt->op==BLE_GATT_ACCESS_OP_READ_CHR &&
+       ble_uuid_cmp(ctxt->chr->uuid,&STATUS_UUID.u)==0){
+        const char *status=accepted?"OK":"WAIT";
+        return os_mbuf_append(ctxt->om,status,strlen(status))==0?
+            0:BLE_ATT_ERR_INSUFFICIENT_RES;
+    }
     if(ctxt->op!=BLE_GATT_ACCESS_OP_WRITE_CHR ||
        ble_uuid_cmp(ctxt->chr->uuid,&CONFIG_UUID.u)!=0 ||
        accepted)return BLE_ATT_ERR_WRITE_NOT_PERMITTED;
@@ -217,6 +226,7 @@ static int gatt_access(uint16_t conn_handle,uint16_t attr_handle,
 static const struct ble_gatt_chr_def characteristics[]={
     {.uuid=&CHALLENGE_UUID.u,.access_cb=gatt_access,.flags=BLE_GATT_CHR_F_READ},
     {.uuid=&CONFIG_UUID.u,.access_cb=gatt_access,.flags=BLE_GATT_CHR_F_WRITE},
+    {.uuid=&STATUS_UUID.u,.access_cb=gatt_access,.flags=BLE_GATT_CHR_F_READ},
     {0}
 };
 static const struct ble_gatt_svc_def services[]={
