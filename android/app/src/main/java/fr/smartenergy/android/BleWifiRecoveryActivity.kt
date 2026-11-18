@@ -292,6 +292,7 @@ class BleWifiRecoveryActivity : Activity() {
                 note("Confirmation de l'ESP32 indisponible : ne considère pas le Wi-Fi modifié.")
         }
     }
+    @Suppress("DEPRECATION")
     private fun writeEncrypted(g:BluetoothGatt,challenge:ByteArray) {
         if(challenge.size!=16){note("Défi BLE invalide.");return}
         try {
@@ -324,9 +325,7 @@ class BleWifiRecoveryActivity : Activity() {
                 if(rc!=BluetoothGatt.GATT_SUCCESS)
                     throw IllegalStateException("GATT write "+rc)
             } else {
-                @Suppress("DEPRECATION")
                 change.value=packet
-                @Suppress("DEPRECATION")
                 if(!g.writeCharacteristic(change))throw IllegalStateException("GATT write failed")
             }
         }catch(ex:Exception) {
