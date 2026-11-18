@@ -40,7 +40,7 @@ check('incomplete two inverter site', [{slot:1},{slot:2}],
 assert(html.includes('id="mGridInfo"'), 'Modern source label must be visible');
 assert(html.includes("txt('mGridInfo',gridInfo)"), 'Modern source label must be updated');
 // Check the complete inline JS for syntax errors without running its DOM code.
-for (const match of html.matchAll(/<script(?:\\s[^>]*)?>([\\s\\S]*?)<\\/script>/g)) {
+for (const match of html.matchAll(/<script(?:\s[^>]*)?>([\s\S]*?)<\/script>/g)) {
   new vm.Script(match[1]);
 }
 console.log('Energy dashboard grid regressions: PASS (7 cases)');
