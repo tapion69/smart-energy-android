@@ -2,7 +2,7 @@ name: Build development prototypes
 
 on:
   push:
-    branches: [main, dev, 'fix/jk-discovery-pairing-20261116', 'fix/voltronic-grid-sum-0360-20261118']
+    branches: [main, dev, 'fix/jk-discovery-pairing-20261116', 'fix/voltronic-grid-sum-0360-20261118', 'perf/vpn-progressive-voltronic-20261118']
     paths:
       - 'android/**'
       - 'firmware/jk-esp32/**'
@@ -65,6 +65,8 @@ jobs:
           echo "configured=true" >> "$GITHUB_OUTPUT"
       - name: Validate Voltronic multi-inverter grid aggregation
         run: node tools/tests/test_energy_grid.js
+      - name: Validate progressive VPN display behavior
+        run: python3 tools/tests/test_vpn_progressive.py
       # Debug Android binaries use temporary keys on fresh GitHub runners.
       # Execute tests but NEVER distribute such APKs as upgrades.
       - name: Test Android code (debug tests are NOT distributed)
