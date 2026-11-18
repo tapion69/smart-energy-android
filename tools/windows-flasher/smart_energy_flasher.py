@@ -358,6 +358,9 @@ class Flasher(tk.Tk):
                    command=self._flash_voltronic).pack(side="right", padx=5)
         ttk.Button(voltronic.actions, text="Configurer S3 sans reflasher",
                    command=self._configure_voltronic_only).pack(side="left", padx=5)
+        ttk.Button(voltronic.actions,
+                   text="Préparer OTA Voltronic (USB + sauvegarde NVS)",
+                   command=self._migrate_voltronic_to_ota).pack(side="left", padx=5)
         # Mouse wheel scrolls the tab body only when the pointer is over it.
         # Leave native scrolling elsewhere (logs, combobox popups) unchanged.
         self.bind_all("<MouseWheel>", self._scroll_active_tab, add="+")
@@ -785,28 +788,48 @@ class Flasher(tk.Tk):
         return folder
 
     def _migrate_voltronic_to_ota(self)->None:
+        """Explicit one-time USB partition migration; never plain APP-ONLY."""
         try:
-            from voltronic_ota_migration import flash_voltronic_ota_migration
+            from voltronic_ota_migration import (
+                flash_voltronic_ota_migration,validate_migration_images)
+            if self.inverter_type.get()!="voltronic":
+                raise ValueError("Cette migration est réservée au lecteur Voltronic ESP32-S3.")
             port=self._assert_ready()
             folder=self._bundled_voltronic_ota_folder()
-            if not messagebox.askyesno("Migration OTA EXPÉRIMENTALE",
-                "Cette opération est réservée à une carte ESP32-S3 de TEST !\n\n"
-                "Elle remplace le bootloader et le partitionnement, mais n'écrit "
-                "aucun octet sur la zone NVS. L'app doit être préparée pour OTA.\n"
-                "Une erreur de flash peut nécessiter une récupération par USB.\n"
-                "Confirmer la première étape ?"):
+            validate_migration_images(folder)
+            if not messagebox.askyesno("Préparer OTA Voltronic · USB",
+                "Ton firmware 0.3.7-test-ha-bridge peut fonctionner mais avoir "+
+                "une seule partition d'application. Une APP-ONLY NE crée pas "+
+                "de partitions OTA.\\n\\nCette opération USB crée les "+
+                "partitions OTA en conservant l'adresse NVS. Elle demande "+
+                "une sauvegarde privée et vérifie l'identité Voltronic "+
+                "sur le vrai ESP32-S3. Le processus peut nécessiter une "+
+                "récupération USB si une écriture échoue.\\n\\nContinuer ?"):
                 return
-            if not messagebox.askyesno("Dernière confirmation : carte S3 de TEST",
-                f"Le programme écrira séparément trois images sur {port} :\n"
-                "0x0000 bootloader, 0x8000 partitions, 0x10000 application.\n"
-                "Aucun erase_flash. Ne pas utiliser sur la passerelle JK/VPN.\n"
-                "Es-tu certain que le S3 est une carte de test ?"):
+            from datetime import datetime
+            backup_name=("SmartEnergy-VOLTRONIC-NVS-PRIVE-"+port+"-"+
+                datetime.now().strftime("%Y%m%d-%H%M%S")+".bin")
+            chosen=filedialog.asksaveasfilename(
+                title="Sauvegarde NVS PRIVÉE obligatoire · Wi-Fi et code Voltronic",
+                defaultextension=".bin",filetypes=[("NVS privée",".bin")],
+                initialdir=str(Path.home()/"Documents"),
+                initialfile=backup_name)
+            if not chosen:return
+            backup=Path(chosen)
+            if backup.exists():
+                raise ValueError("La sauvegarde choisie existe déjà. Choisis un nouveau nom.")
+            if not messagebox.askyesno("Dernière confirmation · S3 Voltronic",
+                f"Sur le port {port} : lecture partitions, sauvegarde NVS privée, "+
+                "puis flash séparé du bootloader 0x0, table OTA 0x8000, "+
+                "application 0x10000. Aucun erase_flash. "+
+                "Cette opération ne concerne ni JK, ni Deye, ni VPN.\\n\\n"+
+                "Lancer la vérification et la migration ?"):
                 return
             self._run_async(
-                lambda:flash_voltronic_ota_migration(port,folder,self._log),
+                lambda:flash_voltronic_ota_migration(port,folder,backup,self._log),
                 mode="migration-ota")
         except Exception as ex:
-            messagebox.showerror("Migration OTA",str(ex))
+            messagebox.showerror("Migration OTA Voltronic",str(ex))
 
     def _configure_voltronic_only(self)->None:
         try:
