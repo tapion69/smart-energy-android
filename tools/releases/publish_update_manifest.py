@@ -14,8 +14,9 @@ import sys
 REPO="tapion69/smart-energy-android"
 AND_NAME="SmartEnergy-Android.apk"
 FW_NAME="smart-energy-voltronic-S3-OTA.bin"
+VPN_FW_NAME="SmartEnergy-VPN-S3-OTA.bin"
 VERSION_RE=re.compile(r"^[0-9]+\.[0-9]+\.[0-9]+(?:-[A-Za-z0-9.]+)?$")
-TAG_RE=re.compile(r"^(android|voltronic)-v(.+)$")
+TAG_RE=re.compile(r"^(android|voltronic|vpn-gateway)-v(.+)$")
 
 def digest(path):
     h=hashlib.sha256()
@@ -25,14 +26,14 @@ def digest(path):
 
 def manifest(tag,filename,size,expected_version="",version_code=0):
     match=TAG_RE.fullmatch(tag)
-    if not match:raise ValueError("Release tag must be android-vX or voltronic-vX")
+    if not match:raise ValueError("Release tag must be android-vX, voltronic-vX or vpn-gateway-vX")
     product,version=match.groups()
     if not VERSION_RE.fullmatch(version) or version!=expected_version:
         raise ValueError("Release tag must match the actual binary version")
     path=Path(filename)
     if not path.is_file() or not 20000<=path.stat().st_size<=size:
         raise ValueError("Binary size invalid")
-    if path.name!=(AND_NAME if product=="android" else FW_NAME):
+    if path.name!=({"android":AND_NAME,"voltronic":FW_NAME,"vpn-gateway":VPN_FW_NAME}[product]):
         raise ValueError("Unexpected asset name")
     url=f"https://github.com/{REPO}/releases/download/{tag}/{path.name}"
     sha=digest(path)
@@ -53,13 +54,24 @@ def manifest(tag,filename,size,expected_version="",version_code=0):
         if len(header)<14 or header[0]!=0xe9 or int.from_bytes(
                 header[12:14],"little")!=9:
             raise ValueError("Firmware is not an ESP32-S3 image")
-        result={
-            "schemaVersion":1,"product":"smart-voltronic-esp32","available":True,
-            "version":version,"hardwareTargets":["esp32s3-n16r8"],
-            "downloadUrl":url,"sha256":sha,
-            "releaseNotesUrl":f"https://github.com/{REPO}/releases/tag/{tag}"
-        }
-        target="updates/voltronic-esp32.json"
+        if product=="voltronic":
+            result={
+                "schemaVersion":1,"product":"smart-voltronic-esp32","available":True,
+                "version":version,"hardwareTargets":["esp32s3-n16r8"],
+                "downloadUrl":url,"sha256":sha,
+                "releaseNotesUrl":f"https://github.com/{REPO}/releases/tag/{tag}"
+            }
+            target="updates/voltronic-esp32.json"
+        else:
+            # Only the ESP32-S3 N16R8 gateway has two OTA partitions.
+            # The classic ESP32 / single-app migration path is USB-only.
+            result={
+                "schemaVersion":1,"product":"smart-energy-vpn-gateway","available":True,
+                "version":version,"target":"esp32s3-n16r8",
+                "downloadUrl":url,"sha256":sha,
+                "releaseNotesUrl":f"https://github.com/{REPO}/releases/tag/{tag}"
+            }
+            target="updates/vpn-gateway.json"
     return target,result
 
 def main():
