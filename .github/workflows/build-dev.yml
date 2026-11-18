@@ -2,7 +2,7 @@ name: Build development prototypes
 
 on:
   push:
-    branches: [main, dev, 'fix/jk-discovery-pairing-20261116', 'fix/voltronic-grid-sum-0360-20261118', 'perf/vpn-progressive-voltronic-20261118', 'feature/ble-wifi-recovery-universal-20261118', 'feature/vpn-s3-ota-app-20261118']
+    branches: [main, dev, 'fix/jk-discovery-pairing-20261116', 'fix/voltronic-grid-sum-0360-20261118', 'perf/vpn-progressive-voltronic-20261118', 'feature/ble-wifi-recovery-universal-20261118', 'feature/vpn-s3-ota-app-20261118', 'fix/jk-voltronic-ota-migration-20261118']
     paths:
       - 'android/**'
       - 'firmware/jk-esp32/**'
@@ -140,8 +140,8 @@ jobs:
           retention-days: 30
 
   publish-android-fix:
-    name: Publish verified signed 0.3.63 and enable in-app upgrades
-    if: github.ref == 'refs/heads/feature/vpn-s3-ota-app-20261118'
+    name: Publish verified signed 0.3.64 and enable in-app upgrades
+    if: github.ref == 'refs/heads/fix/jk-voltronic-ota-migration-20261118'
     needs: [android]
     runs-on: ubuntu-latest
     permissions:
@@ -178,8 +178,8 @@ jobs:
           AAPT=$(find "$ANDROID_HOME/build-tools" -type f -name aapt | sort -V | tail -n 1)
           "$AAPT" dump badging "$APK" | head -n 1 | tee /tmp/smart-energy-package
           grep -q "name='fr.smartenergy.android'" /tmp/smart-energy-package
-          grep -q "versionCode='77'" /tmp/smart-energy-package
-          grep -q "versionName='0.3.63-dev'" /tmp/smart-energy-package
+          grep -q "versionCode='78'" /tmp/smart-energy-package
+          grep -q "versionName='0.3.64-dev'" /tmp/smart-energy-package
           sha256sum "$APK"
       - name: Publish signed release and update canonical manifest
         shell: bash
@@ -187,7 +187,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          TAG=android-v0.3.63-dev
+          TAG=android-v0.3.64-dev
           APK=release-files/SmartEnergy-Android.apk
           HASH=$(sha256sum "$APK" | awk '{print $1}')
           # Never overwrite an existing release or replace newer updates.
@@ -201,13 +201,13 @@ jobs:
           import base64,json
           r=json.load(open('/tmp/manifest-response.json'))
           current=json.loads(base64.b64decode(r['content']))
-          if current.get('versionCode') != 76:
+          if current.get('versionCode') != 77:
               raise SystemExit('Official manifest changed; refusing to overwrite')
           PY
           gh release create "$TAG" "$APK" \
             --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" \
-            --title "Smart Energy Android 0.3.63 (VPN S3 firmware OTA control and update diagnostics)" \
-            --notes "Based on signed 0.3.62: add authenticated VPN S3 firmware OTA preflight and confirmed small-command update via Tailscale, plus Deye OTA navigation. Gateway downloads the official image itself over Wi-Fi. Classic 4 MB or single-app S3 require USB migration. VPN OTA firmware publication stays disabled until physical tests."
+            --title "Smart Energy Android 0.3.64 (JK OTA confirmation and Voltronic migration guidance)" \
+            --notes "Based on signed 0.3.63: fix JK OTA version verification with dev-suffix, expose explicit Voltronic USB dual-OTA migration instructions in-app. Existing dashboards and device configurations unchanged. Use compatible flasher migration with NVS backup before Voltronic OTA; no automatic device flash."
           export HASH
           python - <<'PY'
           import base64,json,os
@@ -216,15 +216,15 @@ jobs:
             'schemaVersion':1,
             'product':'smart-energy-android',
             'available':True,
-            'versionName':'0.3.63-dev',
-            'versionCode':77,
-            'downloadUrl':'https://github.com/tapion69/smart-energy-android/releases/download/android-v0.3.63-dev/SmartEnergy-Android.apk',
+            'versionName':'0.3.64-dev',
+            'versionCode':78,
+            'downloadUrl':'https://github.com/tapion69/smart-energy-android/releases/download/android-v0.3.64-dev/SmartEnergy-Android.apk',
             'sha256':os.environ['HASH'],
-            'releaseNotesUrl':'https://github.com/tapion69/smart-energy-android/releases/tag/android-v0.3.63-dev',
+            'releaseNotesUrl':'https://github.com/tapion69/smart-energy-android/releases/tag/android-v0.3.64-dev',
             'minimumSupportedVersionCode':1,
           }
           payload={
-            'message':'Publish verified Smart Energy Android 0.3.63 signed update',
+            'message':'Publish verified Smart Energy Android 0.3.64 signed update',
             'content':base64.b64encode((json.dumps(m,indent=2,ensure_ascii=False)+'\n').encode()).decode(),
             'sha':r['sha'],
             'branch':'main',
@@ -233,7 +233,7 @@ jobs:
           PY
           gh api --method PUT "repos/$GITHUB_REPOSITORY/contents/updates/android.json" \
             --input /tmp/android-update-request.json
-          echo "Official 0.3.63 manifest published after APK verification."
+          echo "Official 0.3.64 manifest published after APK verification."
   migration-backup-policy:
     name: Validate legacy backup excludes private credentials
     runs-on: ubuntu-latest
