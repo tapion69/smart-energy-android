@@ -9,6 +9,11 @@ on:
       - '.github/workflows/build-dev.yml'
   workflow_dispatch:
 
+# Keep Android trial builds isolated from official signed updates.
+concurrency:
+  group: smart-energy-ble-android-${{ github.ref }}
+  cancel-in-progress: true
+
 permissions:
   contents: read
   actions: read
