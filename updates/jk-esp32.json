@@ -1,11 +1,12 @@
 {
   "schemaVersion": 1,
   "product": "smart-jk-esp32",
-  "available": false,
-  "version": null,
-  "hardwareTargets": [],
-  "downloadUrl": null,
-  "sha256": null,
-  "signature": null,
-  "releaseNotesUrl": null
+  "available": true,
+  "version": "0.3.16",
+  "hardwareTargets": [
+    "esp32dev"
+  ],
+  "downloadUrl": "https://github.com/tapion69/smart-energy-android/releases/download/jk-v0.3.16/smart-jk-esp32-ota.bin",
+  "sha256": "529c4455afa0f7deb49542f2f421a52d1f556739645810bfb299025d3295892f",
+  "releaseNotesUrl": "https://github.com/tapion69/smart-energy-android/releases/tag/jk-v0.3.16"
 }
