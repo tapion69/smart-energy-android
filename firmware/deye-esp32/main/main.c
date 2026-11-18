@@ -276,9 +276,10 @@ static void wifi_events(void *arg,esp_event_base_t ev,int32_t code,void *data){
         xEventGroupClearBits(net_events,WIFI_CONNECTED);
         esp_wifi_connect();
     }
-    if(ev==IP_EVENT && code==IP_EVENT_STA_GOT_IP)
+    if(ev==IP_EVENT && code==IP_EVENT_STA_GOT_IP) {
         (void)se_ble_wifi_promote(DY_NAMESPACE,DY_CONFIG_KEY);
         xEventGroupSetBits(net_events,WIFI_CONNECTED);
+    }
 }
 static void start_wifi(void){
     net_events=xEventGroupCreate();
