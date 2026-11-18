@@ -183,7 +183,12 @@ internal object JkLocalOta {
                         it.readText().take(4096)
                     }).optString("version","")
                 }finally{c.disconnect()}
-                if(reported==wanted)return true
+                // ESP firmware reports a dev suffix; GitHub release uses X.Y.Z.
+                // Only compare numeric components after a real info response.
+                val reportedParts=SmartEnergyUpdateFeed.versionParts(reported)
+                val wantedParts=SmartEnergyUpdateFeed.versionParts(wanted)
+                if(reportedParts!=null && wantedParts!=null &&
+                   reportedParts==wantedParts)return true
             }catch(_:Exception){/* ESP restarts and reconnects */ }
         }
         return false
