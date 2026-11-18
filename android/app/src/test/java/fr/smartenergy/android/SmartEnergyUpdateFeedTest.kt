@@ -65,7 +65,7 @@ class SmartEnergyUpdateFeedTest {
         assertNull(SmartEnergyUpdateFeed.parseVpn(
             json.replace("\"available\":true","\"available\":false"),"0.3.13"))
         assertNull(SmartEnergyUpdateFeed.parseVpn(
-            json.replace("\"a\".repeat(64)","short"),"0.3.13"))
+            json.replace("a".repeat(64),"short"),"0.3.13"))
     }
 
     @Test fun noArbitraryFirmwareUrl() {
