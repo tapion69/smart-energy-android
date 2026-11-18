@@ -17,6 +17,7 @@ namespace se_ble_wifi_jk {
 static constexpr const char *SERVICE="b5e70001-3a62-4e58-9d12-4e4f44450001";
 static constexpr const char *CHALLENGE="b5e70002-3a62-4e58-9d12-4e4f44450001";
 static constexpr const char *CONFIG="b5e70003-3a62-4e58-9d12-4e4f44450001";
+static constexpr const char *STATUS="b5e70004-3a62-4e58-9d12-4e4f44450001";
 static constexpr const char *DOMAIN="smart-energy-wifi-ble-v1";
 static constexpr uint32_t NEXT_BOOT=0x5345424aU;
 RTC_NOINIT_ATTR static uint32_t nextBootMarker;
@@ -24,6 +25,7 @@ static uint8_t challenge[16];
 static String code;
 static Preferences *prefsStore=nullptr;
 static volatile bool accepted=false;
+static NimBLECharacteristic *stageStatus=nullptr;
 
 class WriteCallbacks : public NimBLECharacteristicCallbacks {
     void onWrite(NimBLECharacteristic *characteristic, NimBLEConnInfo& info) override {
@@ -60,6 +62,7 @@ class WriteCallbacks : public NimBLECharacteristicCallbacks {
                prefsStore->putString("bleSsid",ssid)==ssid.length() &&
                prefsStore->putString("blePass",pass)==pass.length()) {
                 accepted=true;
+                if(stageStatus)stageStatus->setValue("OK");
             }
         }
         memset(plain,0,sizeof(plain));
@@ -82,6 +85,8 @@ static void run(Preferences& prefs, const String& secret, const String& identity
     NimBLECharacteristic *change=service->createCharacteristic(
         CONFIG,NIMBLE_PROPERTY::WRITE,240);
     change->setCallbacks(&callbacks);
+    stageStatus=service->createCharacteristic(STATUS,NIMBLE_PROPERTY::READ,8);
+    stageStatus->setValue("WAIT");
     service->start();
     NimBLEAdvertising *adv=NimBLEDevice::getAdvertising();
     adv->addServiceUUID(SERVICE);
