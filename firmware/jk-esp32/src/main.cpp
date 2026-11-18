@@ -9,6 +9,7 @@
 #include <WiFiUdp.h>
 #include <mbedtls/md.h>
 #include <NimBLEDevice.h>
+#include "ble_wifi_recovery.h"
 #include "jk_reader.h"
 #include "jk_write.h"
 #include "setup_code_policy.h"
@@ -55,6 +56,8 @@ bool recoveryHoldTriggered = false;
 bool setupHoldTriggered = false;
 uint32_t wifiAttemptAt = 0;
 bool everConnected = false;
+static bool bleWiFiPending=false;
+static uint32_t bleWiFiStartedAt=0;
 // A reader that has already joined the home network during this boot must
 // retry as STA rather than disappearing into setup AP after a short outage.
 bool hasJoinedHomeWifi = false;
@@ -217,8 +220,15 @@ void connectHome() {
   everConnected = false;
   disconnectReason = 0;
   wifiIssue = "";
-  String ssid = prefs.getString("ssid", "");
-  String password = prefs.getString("wifiPass", "");
+  // A Bluetooth candidate overrides RAM only until the new AP connects.
+  String ssid = prefs.getString("bleSsid", "");
+  String password = prefs.getString("blePass", "");
+  bleWiFiPending = !ssid.isEmpty() && !password.isEmpty();
+  if(!bleWiFiPending) {
+    ssid=prefs.getString("ssid", "");
+    password=prefs.getString("wifiPass", "");
+  }
+  bleWiFiStartedAt=bleWiFiPending?millis():0;
   WiFi.mode(WIFI_STA);
   WiFi.setHostname(hostName.c_str());
   WiFi.setAutoReconnect(true);
@@ -928,6 +938,15 @@ void setup() {
     for (int i = 0; i < 12; ++i) setupCode += charset[esp_random() % (sizeof(charset) - 1)];
     prefs.putString("setupCode", setupCode);
   }
+  // GPIO0 6–9 seconds after power-up enters BLE maintenance on the NEXT
+  // software boot. No BMS BLE links are started while accepting Wi-Fi.
+  const bool bleRequested=esp_reset_reason()==ESP_RST_SW &&
+      se_ble_wifi_jk::nextBootMarker==se_ble_wifi_jk::NEXT_BOOT;
+  se_ble_wifi_jk::nextBootMarker=0;
+  if(bleRequested) {
+      se_ble_wifi_jk::run(prefs,setupCode,hostName);
+      return;
+  }
   NimBLEDevice::init("");
   jkreader::loadConfigured(prefs.getString("bmsList", "[]"));
   WiFi.onEvent(onWifiEvent);
@@ -972,6 +991,18 @@ void loop() {
     }
     hasJoinedHomeWifi = true;
     wifiAttemptAt = 0;
+    if(bleWiFiPending) {
+      const String ssid=prefs.getString("bleSsid","");
+      const String password=prefs.getString("blePass","");
+      // Only successful Wi-Fi association promotes the candidate.
+      if(!ssid.isEmpty() && !password.isEmpty() &&
+          prefs.putString("ssid",ssid)==ssid.length() &&
+          prefs.putString("wifiPass",password)==password.length()) {
+        prefs.remove("bleSsid");prefs.remove("blePass");
+        bleWiFiPending=false;bleWiFiStartedAt=0;
+        Serial.println("[BLE recovery] New Wi-Fi confirmed; former settings retained otherwise.");
+      }
+    }
     if ((uint32_t)(millis() - wifiLastDiagAt) >= 30000) {
       wifiLastDiagAt = millis();
       Serial.printf("[WiFi] Link quality: rssi=%d dBm, drops=%lu, free_heap=%u\n",
@@ -984,6 +1015,16 @@ void loop() {
       Serial.printf("Smart JK local: http://%s.local or %s\n",
                     hostName.c_str(), WiFi.localIP().toString().c_str());
     }
+  }
+  if(bleWiFiPending && bleWiFiStartedAt &&
+      (uint32_t)(millis()-bleWiFiStartedAt)>45000 &&
+      WiFi.status()!=WL_CONNECTED) {
+    // Old credentials were never overwritten: discard the candidate and
+    // reboot, preserving BMS associations and all other NVS keys.
+    prefs.remove("bleSsid");prefs.remove("blePass");
+    bleWiFiPending=false;
+    Serial.println("[BLE recovery] New Wi-Fi unavailable; rollback to former network.");
+    ESP.restart();
   }
   if (!setupMode && WiFi.status() != WL_CONNECTED) {
     if (!wifiAttemptAt) {
@@ -1041,6 +1082,11 @@ void loop() {
       physicalConfirmed=true;
       physicalConfirmedAt=millis();
       Serial.println("[Pairing] Second BOOT confirmation received for pending device.");
+    } else if (!physicalPairing && heldFor>=6000 &&
+               heldFor<SETUP_HOLD_MS) {
+      se_ble_wifi_jk::nextBootMarker=se_ble_wifi_jk::NEXT_BOOT;
+      Serial.println("[BLE recovery] 6-9s physical BOOT: restarting to offline Bluetooth service.");
+      ESP.restart();
     } else if (!physicalPairing && heldFor>=RECOVERY_HOLD_MS &&
                heldFor<SETUP_HOLD_MS) {
       wifiIssue="physical_pairing";
