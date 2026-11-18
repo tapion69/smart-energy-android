@@ -2,7 +2,7 @@ name: Build development prototypes
 
 on:
   push:
-    branches: [main, dev, 'fix/jk-discovery-pairing-20261116', 'fix/voltronic-grid-sum-0360-20261118', 'perf/vpn-progressive-voltronic-20261118', 'feature/ble-wifi-recovery-universal-20261118']
+    branches: [main, dev, 'fix/jk-discovery-pairing-20261116', 'fix/voltronic-grid-sum-0360-20261118', 'perf/vpn-progressive-voltronic-20261118', 'feature/ble-wifi-recovery-universal-20261118', 'feature/vpn-s3-ota-app-20261118']
     paths:
       - 'android/**'
       - 'firmware/jk-esp32/**'
@@ -74,6 +74,8 @@ jobs:
         run: python3 tools/tests/test_vpn_progressive.py
       - name: Validate isolated Bluetooth recovery implementation
         run: python3 tools/tests/test_ble_wifi_recovery.py
+      - name: Validate OTA VPN layout and authenticated command
+        run: python3 firmware/vpn-gateway/tests/test_vpn_s3_ota_sources.py
       # Debug Android binaries use temporary keys on fresh GitHub runners.
       # Execute tests but NEVER distribute such APKs as upgrades.
       - name: Test Android code (debug tests are NOT distributed)
@@ -139,7 +141,7 @@ jobs:
 
   publish-android-fix:
     name: Publish verified signed 0.3.62 and enable in-app upgrades
-    if: github.ref == 'refs/heads/feature/ble-wifi-recovery-universal-20261118'
+    if: github.ref == 'refs/heads/never-publish-unvalidated-vpn-ota'
     needs: [android]
     runs-on: ubuntu-latest
     permissions:
