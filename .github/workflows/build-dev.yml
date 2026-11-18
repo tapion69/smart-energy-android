@@ -131,8 +131,8 @@ jobs:
           retention-days: 30
 
   publish-android-fix:
-    name: Publish verified signed 0.3.60 and enable in-app upgrades
-    if: github.ref == 'refs/heads/fix/voltronic-grid-sum-0360-20261118'
+    name: Publish verified signed 0.3.61 and enable in-app upgrades
+    if: github.ref == 'refs/heads/perf/vpn-progressive-voltronic-20261118'
     needs: [android]
     runs-on: ubuntu-latest
     permissions:
@@ -169,8 +169,8 @@ jobs:
           AAPT=$(find "$ANDROID_HOME/build-tools" -type f -name aapt | sort -V | tail -n 1)
           "$AAPT" dump badging "$APK" | head -n 1 | tee /tmp/smart-energy-package
           grep -q "name='fr.smartenergy.android'" /tmp/smart-energy-package
-          grep -q "versionCode='74'" /tmp/smart-energy-package
-          grep -q "versionName='0.3.60-dev'" /tmp/smart-energy-package
+          grep -q "versionCode='75'" /tmp/smart-energy-package
+          grep -q "versionName='0.3.61-dev'" /tmp/smart-energy-package
           sha256sum "$APK"
       - name: Publish signed release and update canonical manifest
         shell: bash
@@ -178,7 +178,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          TAG=android-v0.3.60-dev
+          TAG=android-v0.3.61-dev
           APK=release-files/SmartEnergy-Android.apk
           HASH=$(sha256sum "$APK" | awk '{print $1}')
           # Never overwrite an existing release or replace newer updates.
@@ -192,13 +192,13 @@ jobs:
           import base64,json
           r=json.load(open('/tmp/manifest-response.json'))
           current=json.loads(base64.b64decode(r['content']))
-          if current.get('versionCode') != 73:
+          if current.get('versionCode') != 74:
               raise SystemExit('Official manifest changed; refusing to overwrite')
           PY
           gh release create "$TAG" "$APK" \
             --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" \
-            --title "Smart Energy Android 0.3.60 (Voltronic multi-inverter grid power display)" \
-            --notes "Signed update based on 0.3.59: sum available Voltronic native grid import readings across 1-3 inverters, including installations with an MPPT-only inverter lacking grid measurements. Keep JK, Deye/SunSpec, VPN and device configuration unchanged."
+            --title "Smart Energy Android 0.3.61 (faster VPN inverter display and latency diagnostics)" \
+            --notes "Based on 0.3.60 signed build: progressively display fresh Voltronic inverter readings without waiting for other readers over VPN and show per-inverter HTTP response time in Diagnostics. No ESP32 firmware changes, JK dashboards and configuration unchanged."
           export HASH
           python - <<'PY'
           import base64,json,os
@@ -207,15 +207,15 @@ jobs:
             'schemaVersion':1,
             'product':'smart-energy-android',
             'available':True,
-            'versionName':'0.3.60-dev',
-            'versionCode':74,
-            'downloadUrl':'https://github.com/tapion69/smart-energy-android/releases/download/android-v0.3.60-dev/SmartEnergy-Android.apk',
+            'versionName':'0.3.61-dev',
+            'versionCode':75,
+            'downloadUrl':'https://github.com/tapion69/smart-energy-android/releases/download/android-v0.3.61-dev/SmartEnergy-Android.apk',
             'sha256':os.environ['HASH'],
-            'releaseNotesUrl':'https://github.com/tapion69/smart-energy-android/releases/tag/android-v0.3.60-dev',
+            'releaseNotesUrl':'https://github.com/tapion69/smart-energy-android/releases/tag/android-v0.3.61-dev',
             'minimumSupportedVersionCode':1,
           }
           payload={
-            'message':'Publish verified Smart Energy Android 0.3.60 signed update',
+            'message':'Publish verified Smart Energy Android 0.3.61 signed update',
             'content':base64.b64encode((json.dumps(m,indent=2,ensure_ascii=False)+'\n').encode()).decode(),
             'sha':r['sha'],
             'branch':'main',
@@ -224,7 +224,7 @@ jobs:
           PY
           gh api --method PUT "repos/$GITHUB_REPOSITORY/contents/updates/android.json" \
             --input /tmp/android-update-request.json
-          echo "Official 0.3.60 manifest published after APK verification."
+          echo "Official 0.3.61 manifest published after APK verification."
   migration-backup-policy:
     name: Validate legacy backup excludes private credentials
     runs-on: ubuntu-latest
