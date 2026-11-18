@@ -856,6 +856,18 @@ class MainActivity : Activity() {
         add(quick,label("Compatible avec ESP JK et ESP Voltronic récents. "+
             "Deye sera disponible lorsque son firmware sera validé. "+
             "Conserve le menu expert pour les anciens lecteurs.",12f,color=subdued))
+        val bluetoothRecovery=section(advanced,
+            "Récupération Wi-Fi Bluetooth · sans Internet",false)
+        add(bluetoothRecovery,label(
+            "Si la box est remplacée et que les ESP32 ne rejoignent plus le Wi-Fi, "+
+            "utilise le téléphone à proximité. Maintiens BOOT 6–9 secondes "+
+            "sur un ESP pour autoriser temporairement sa récupération BLE. "+
+            "Le lecteur JK peut être éloigné de ses BMS pendant cette opération.",
+            12f,color=subdued))
+        add(bluetoothRecovery,action("Changer le Wi-Fi d'un ESP32 par Bluetooth") {
+            startActivity(Intent(this,BleWifiRecoveryActivity::class.java))
+        },8)
+
         // All JK settings live in one group with one ESP 1/2/3 selector.
         // Existing pairings, per-reader preferences and BMS registry are preserved.
         val jkConfiguration=section(advanced,"Expert · Batteries JK · ESP 1 / ESP 2 / ESP 3",false)
