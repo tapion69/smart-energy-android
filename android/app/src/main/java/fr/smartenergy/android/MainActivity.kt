@@ -5121,7 +5121,9 @@ class MainActivity : Activity() {
                 "INV$slot · firmware $version · partitions $scheme · "+
                     (if(pending)"rollback en attente : aucune OTA autorisée"
                      else if(ready)"OTA possible après publication officielle et SHA-256"
-                     else "migration USB nécessaire : OTA refusée sans écriture")
+                     else "partition unique : dans le flasher Windows, utilise "+
+                         "« Préparer OTA Voltronic (USB + sauvegarde NVS) ». "+
+                         "Le flash APP-ONLY ne crée pas de partition OTA.")
             }catch(ex:Exception) {
                 "INV$slot : contrôle OTA inaccessible ("+
                     ex.javaClass.simpleName.take(50)+"). Aucune écriture effectuée."
@@ -5164,7 +5166,10 @@ class MainActivity : Activity() {
                     status.optString("partition_scheme")!="dual_ota") {
                     runOnUiThread {
                         updateFeedback.text="INV$slot · firmware $version : "+
-                            "OTA indisponible (partitionnement à migrer en USB)."
+                            "OTA impossible avec la table actuelle. "+
+                            "Ouvre le nouveau flasher Windows → Onduleurs → "+
+                            "« Préparer OTA Voltronic (USB + sauvegarde NVS) ». "+
+                            "APP-ONLY ne change jamais le partitionnement."
                     }
                     return@execute
                 }
