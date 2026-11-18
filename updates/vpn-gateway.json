@@ -1,0 +1,10 @@
+{
+  "schemaVersion": 1,
+  "product": "smart-energy-vpn-gateway",
+  "available": false,
+  "version": "",
+  "target": "esp32s3-n16r8",
+  "downloadUrl": "",
+  "sha256": "",
+  "notes": "No VPN S3 OTA release published. Classic ESP32 and legacy single-app S3 require USB migration; enable only after physical Wi-Fi/Tailnet/rollback validation."
+}
