@@ -30,14 +30,14 @@ class MigrationTests(unittest.TestCase):
         original=(row("nvs",1,2,0x9000,0x6000)+
                   row("phy_init",1,1,0xf000,0x1000)+
                   row("factory",0,0,0x10000,0x300000)+
-                  b"\\xff"*32)
+                  b"\xff"*32)
         check_installed_voltronic_layout(original)
         with self.assertRaises(ValueError):
             check_installed_voltronic_layout(original.replace(
                 row("nvs",1,2,0x9000,0x6000),row("nvs",1,2,0xA000,0x5000)))
         with self.assertRaises(ValueError):
             check_installed_voltronic_layout(original.replace(
-                b"\\xff"*32,row("ota_1",0,0x11,0x410000,0x200000)+b"\\xff"*32))
+                b"\xff"*32,row("ota_1",0,0x11,0x410000,0x200000)+b"\xff"*32))
         with self.assertRaises(ValueError):
             check_installed_voltronic_layout(original.replace(
                 row("factory",0,0,0x10000,0x300000),
