@@ -48,6 +48,26 @@ class SmartEnergyUpdateFeedTest {
         assertEquals("0.3.9",SmartEnergyUpdateFeed.parseJk(release,"0.3.8-dev")?.version)
         assertNull(SmartEnergyUpdateFeed.parseJk(release,"0.3.9-dev"))
     }
+    @Test fun vpnS3OtaIsPinnedToOfficialTargetAndReleaseAsset() {
+        val version="0.3.14"
+        val url="https://github.com/tapion69/smart-energy-android/releases/"+
+            "download/vpn-gateway-v$version/SmartEnergy-VPN-S3-OTA.bin"
+        val json="""{"schemaVersion":1,"product":"smart-energy-vpn-gateway",
+            "available":true,"version":"$version","target":"esp32s3-n16r8",
+            "downloadUrl":"$url","sha256":"${"a".repeat(64)}"}"""
+        assertEquals(version,SmartEnergyUpdateFeed.parseVpn(json,
+            "0.3.13-dev-vpn-s3-ota")?.version)
+        assertNull(SmartEnergyUpdateFeed.parseVpn(json,"0.3.14-dev"))
+        assertNull(SmartEnergyUpdateFeed.parseVpn(
+            json.replace("esp32s3-n16r8","esp32-classic"),"0.3.13"))
+        assertNull(SmartEnergyUpdateFeed.parseVpn(
+            json.replace("SmartEnergy-VPN-S3-OTA.bin","foreign.bin"),"0.3.13"))
+        assertNull(SmartEnergyUpdateFeed.parseVpn(
+            json.replace("\"available\":true","\"available\":false"),"0.3.13"))
+        assertNull(SmartEnergyUpdateFeed.parseVpn(
+            json.replace("\"a\".repeat(64)","short"),"0.3.13"))
+    }
+
     @Test fun noArbitraryFirmwareUrl() {
         val json="""{"schemaVersion":1,"product":"smart-voltronic-esp32","available":true,
         "version":"1.1.0","hardwareTargets":["esp32s3-n16r8"],
