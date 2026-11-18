@@ -32,6 +32,8 @@
 #include "driver/usb_serial_jtag.h"
 #include "nvs_flash.h"
 #include "nvs.h"
+#include "se_ble_wifi.h"
+
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/semphr.h"
@@ -221,17 +223,24 @@ static void usb_init(void){
     err=usb_serial_jtag_driver_install(&native);
     usb_native_ready=err==ESP_OK || err==ESP_ERR_INVALID_STATE;
 }
-static bool boot_force_provision(void){
-    gpio_config_t g={.pin_bit_mask=1ULL<<GPIO_NUM_0,.mode=GPIO_MODE_INPUT,
-        .pull_up_en=GPIO_PULLUP_ENABLE,.intr_type=GPIO_INTR_DISABLE};
-    gpio_config(&g);
+/* BOOT after boot: 3-5.9 s => legacy USB; >=6 s => offline BLE rescue.
+ * Await RELEASE to distinguish modes, never start Wi-Fi during BLE recovery.
+ * Do not press BOOT while powering on (GPIO0 is a strapping pin). */
+static int boot_force_provision(void) {
+    gpio_config_t pin={.pin_bit_mask=1ULL<<GPIO_NUM_0,
+        .mode=GPIO_MODE_INPUT,.pull_up_en=GPIO_PULLUP_ENABLE,
+        .intr_type=GPIO_INTR_DISABLE};
+    if(gpio_config(&pin)!=ESP_OK)return 0;
     int held=0;
-    for(int i=0;i<90;i++){
-        if(!gpio_get_level(GPIO_NUM_0)){if(++held>=30)return true;}
-        else held=0;
+    for(int i=0;i<90;i++) {
+        bool pressed=gpio_get_level(GPIO_NUM_0)==0;
+        if(pressed)held++;
+        else if(held>0){
+            return held>=60?2:held>=30?1:0;
+        }
         vTaskDelay(pdMS_TO_TICKS(100));
     }
-    return false;
+    return held>=60?2:held>=30?1:0;
 }
 static void usb_provision(void){
     usb_msg(0,"SEDEYE_READY_V1");usb_msg(1,"SEDEYE_READY_V1");
@@ -268,6 +277,7 @@ static void wifi_events(void *arg,esp_event_base_t ev,int32_t code,void *data){
         esp_wifi_connect();
     }
     if(ev==IP_EVENT && code==IP_EVENT_STA_GOT_IP)
+        (void)se_ble_wifi_promote(DY_NAMESPACE,DY_CONFIG_KEY);
         xEventGroupSetBits(net_events,WIFI_CONNECTED);
 }
 static void start_wifi(void){
@@ -812,11 +822,20 @@ void app_main(void){
         return;
     }
     usb_init();
-    if(!cfg_load() || boot_force_provision()){
+    const bool configured=cfg_load();
+    const int rescue=configured?boot_force_provision():0;
+    if(!configured || rescue==1){
         ESP_LOGW(TAG,"USB configuration required; no secrets logged");
         usb_provision();
         return;
     }
+    if(rescue==2){
+        se_ble_wifi_recovery(cfg.display_name,cfg.read_code);
+        return;
+    }
+    se_ble_wifi_override(cfg.wifi_ssid,sizeof(cfg.wifi_ssid),
+                         cfg.wifi_password,sizeof(cfg.wifi_password));
+    se_ble_wifi_guard_start();
     uint8_t mac[6]={0};esp_read_mac(mac,ESP_MAC_WIFI_STA);
     snprintf(device_id,sizeof device_id,"se-deye-%02x%02x%02x%02x%02x%02x",
         mac[0],mac[1],mac[2],mac[3],mac[4],mac[5]);
