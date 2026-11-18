@@ -1,7 +1,7 @@
 name: Smart Energy ESP32 VPN Gateway (experimental)
 on:
   push:
-    branches: [dev, 'feature/universal-reader-discovery-20261116', 'feature/names-only-signed-android-20261116', 'fix/jk-discovery-pairing-20261116', 'feature/ble-wifi-recovery-universal-20261118', 'feature/vpn-s3-ota-app-20261118']
+    branches: [dev, 'feature/universal-reader-discovery-20261116', 'feature/names-only-signed-android-20261116', 'fix/jk-discovery-pairing-20261116', 'feature/ble-wifi-recovery-universal-20261118', 'feature/vpn-s3-ota-app-20261118', 'fix/jk-voltronic-ota-migration-20261118']
     paths:
       - 'firmware/vpn-gateway/**'
       - 'firmware/voltronic-esp32/**'
@@ -199,6 +199,99 @@ jobs:
             firmware/jk-esp32/dist/smart-jk-esp32-app-only.bin
           if-no-files-found: error
           retention-days: 30
+
+  publish-jk-ota-0316:
+    name: Publish opt-in JK 0.3.16 OTA after signed APK
+    if: github.ref == 'refs/heads/fix/jk-voltronic-ota-migration-20261118'
+    needs: [policy, jk]
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: SmartEnergy-JK-ESP32-USB-PRECOMPILED
+          path: verified-jk
+      - name: Verify JK firmware version, chip, and signed APK floor
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          BIN=verified-jk/smart-jk-esp32-app-only.bin
+          test -s "$BIN"
+          grep -Fq 'static const char *VERSION = "0.3.16-dev-ota-recovery";' firmware/jk-esp32/src/main.cpp
+          strings "$BIN" | grep -Fq '0.3.16-dev-ota-recovery'
+          python - <<'PY'
+          from pathlib import Path
+          b=Path("verified-jk/smart-jk-esp32-app-only.bin").read_bytes()
+          if not (16384<=len(b)<=0x140000 and b[0]==0xe9 and b[12:14]==b'\x00\x00'):
+              raise SystemExit("JK OTA binary invalid or wrong ESP32 chip")
+          print("Valid classic ESP32 JK OTA image: %d bytes" % len(b))
+          PY
+          gh api "repos/$GITHUB_REPOSITORY/contents/updates/android.json?ref=main" >/tmp/official-apk-feed.json
+          python - <<'PY'
+          import base64,json
+          raw=json.load(open("/tmp/official-apk-feed.json"))
+          feed=json.loads(base64.b64decode(raw["content"]))
+          if feed.get("versionCode",0)<78:
+              raise SystemExit("Signed Android 0.3.64 not yet published; refusing JK OTA feed")
+          PY
+      - name: Publish reviewed JK firmware and exact SHA-256 manifest
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          TAG=jk-v0.3.16
+          SRC=verified-jk/smart-jk-esp32-app-only.bin
+          DEST=smart-jk-esp32-ota.bin
+          cp "$SRC" "$DEST"
+          HASH=$(sha256sum "$DEST" | cut -d' ' -f1)
+          export TAG HASH
+          gh api "repos/$GITHUB_REPOSITORY/contents/updates/jk-esp32.json?ref=main" > /tmp/jk-feed-before.json
+          python - <<'PY'
+          import json,base64
+          raw=json.load(open("/tmp/jk-feed-before.json"))
+          feed=json.loads(base64.b64decode(raw["content"]))
+          if feed.get("available",False) and feed.get("version")!="0.3.16":
+              raise SystemExit("A different JK OTA release is published: manual review required")
+          PY
+          if gh release view "$TAG" -R "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "Release already exists; existing GitHub asset must match manifest"
+          else
+            gh release create "$TAG" "$DEST" \
+              -R "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" \
+              --title "Smart Energy JK 0.3.16 · optional OTA" \
+              --notes "Experimental opt-in JK 0.3.16: same BMS/BLE manager as 0.3.15 with OTA release-version bump. Eligible dual_ota readers may install over local Wi-Fi through signed Android 0.3.64 after explicit user confirmation and SHA-256 validation. First test on one non-critical JK reader. Never automatically flash."
+          fi
+          python - <<'PY'
+          import os,json,base64
+          raw=json.load(open("/tmp/jk-feed-before.json"))
+          feed=json.loads(base64.b64decode(raw["content"]))
+          if feed.get("available") and feed.get("version")=="0.3.16":
+              if feed.get("sha256")!=os.environ["HASH"]:
+                  raise SystemExit("Existing JK release digest mismatch")
+              print("Existing JK manifest digest verified")
+              raise SystemExit(0)
+          tag=os.environ["TAG"]
+          m={
+            "schemaVersion":1,"product":"smart-jk-esp32","available":True,
+            "version":"0.3.16","hardwareTargets":["esp32dev"],
+            "downloadUrl":"https://github.com/tapion69/smart-energy-android/releases/download/"+tag+"/smart-jk-esp32-ota.bin",
+            "sha256":os.environ["HASH"],
+            "releaseNotesUrl":"https://github.com/tapion69/smart-energy-android/releases/tag/"+tag
+          }
+          p={"message":"chore(jk): enable user-confirmed 0.3.16 SHA256 OTA",
+             "content":base64.b64encode((json.dumps(m,indent=2)+"\n").encode()).decode(),
+             "sha":raw["sha"],"branch":"main"}
+          open("/tmp/jk-publish.json","w").write(json.dumps(p))
+          PY
+          gh api --method PUT "repos/$GITHUB_REPOSITORY/contents/updates/jk-esp32.json" \
+            --input /tmp/jk-publish.json
+          echo "Official JK OTA 0.3.16 available for local confirmed update"
 
   voltronic-s3:
     name: Compile Voltronic ESP32-S3 read-only image for Windows bundle
