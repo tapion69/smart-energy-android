@@ -134,9 +134,9 @@ class VoltronicFleet(
         val previous=Array(3){ JSONObject(states[it].toString()) }
         busy=true
         worker.execute {
-            val results=Array(3){ previous[it] }
             var needsShortRetry=false
             for(c in configs) {
+                val requestStartedAt=SystemClock.elapsedRealtime()
                 val prior=previous[c.slot-1]
                 val next=when {
                     c.kind!="voltronic" -> JSONObject().put("configured",true)
@@ -201,15 +201,22 @@ class VoltronicFleet(
                                 else "ESP32 HTTP inaccessible · dernière mesure conservée")
                     }
                 }
-                results[c.slot-1]=next
+                // Each inverter publishes immediately, without waiting for the
+                // other (potentially slow) VPN relays. No extra HTTP requests.
+                if(c.kind=="voltronic")next.put("httpRoundTripMs",
+                    (SystemClock.elapsedRealtime()-requestStartedAt).coerceAtLeast(0L))
+                val slotIndex=c.slot-1
+                mainHandler.post {
+                    states[slotIndex]=next
+                    updated()
+                }
             }
             mainHandler.post {
-                for(i in results.indices)states[i]=results[i]
                 busy=false
                 // Short bounded retry on next 2.5s UI tick after 1-2 misses.
                 if(needsShortRetry)
                     lastPoll=SystemClock.elapsedRealtime()-6000L
-                updated()
+                // Slot-specific callbacks above have already published results.
             }
         }
     }
