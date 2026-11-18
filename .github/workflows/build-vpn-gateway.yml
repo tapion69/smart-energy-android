@@ -1,7 +1,7 @@
 name: Smart Energy ESP32 VPN Gateway (experimental)
 on:
   push:
-    branches: [dev, 'feature/universal-reader-discovery-20261116', 'feature/names-only-signed-android-20261116', 'fix/jk-discovery-pairing-20261116', 'feature/ble-wifi-recovery-universal-20261118']
+    branches: [dev, 'feature/universal-reader-discovery-20261116', 'feature/names-only-signed-android-20261116', 'fix/jk-discovery-pairing-20261116', 'feature/ble-wifi-recovery-universal-20261118', 'feature/vpn-s3-ota-app-20261118']
     paths:
       - 'firmware/vpn-gateway/**'
       - 'firmware/voltronic-esp32/**'
@@ -113,6 +113,10 @@ jobs:
           grep -q '^CONFIG_IDF_TARGET_ESP32S3=y' firmware/vpn-gateway/sdkconfig
           grep -q '^CONFIG_ESPTOOLPY_FLASHSIZE_16MB=y' firmware/vpn-gateway/sdkconfig
           grep -q '^CONFIG_SPIRAM_MODE_OCT=y' firmware/vpn-gateway/sdkconfig
+          grep -q '^CONFIG_PARTITION_TABLE_CUSTOM=y' firmware/vpn-gateway/sdkconfig
+          grep -q '^CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE=y' firmware/vpn-gateway/sdkconfig
+          test -s firmware/vpn-gateway/partitions_s3_ota.csv
+          python firmware/vpn-gateway/tests/test_vpn_s3_ota_sources.py
       - name: Package S3 factory (bootloader at 0x0) and app-only (0x10000)
         run: |
           set -euo pipefail
@@ -120,6 +124,15 @@ jobs:
           mkdir -p firmware/vpn-gateway/dist-s3
           cp firmware/vpn-gateway/build/smart_energy_vpn_gateway.bin \
             firmware/vpn-gateway/dist-s3/smart-energy-vpn-USB-APP-ESP32S3-N16R8-0x10000.bin
+            firmware/vpn-gateway/dist-s3/SmartEnergy-VPN-S3-OTA.bin
+            firmware/vpn-gateway/dist-s3/vpn-s3-ota-bootloader.bin
+            firmware/vpn-gateway/dist-s3/vpn-s3-ota-partition-table.bin
+          cp firmware/vpn-gateway/build/smart_energy_vpn_gateway.bin \
+            firmware/vpn-gateway/dist-s3/SmartEnergy-VPN-S3-OTA.bin
+          cp firmware/vpn-gateway/build/bootloader/bootloader.bin \
+            firmware/vpn-gateway/dist-s3/vpn-s3-ota-bootloader.bin
+          cp firmware/vpn-gateway/build/partition_table/partition-table.bin \
+            firmware/vpn-gateway/dist-s3/vpn-s3-ota-partition-table.bin
           python -m esptool --chip esp32s3 merge_bin \
             --flash_mode dio --flash_freq 40m --flash_size 16MB \
             -o firmware/vpn-gateway/dist-s3/smart-energy-vpn-USB-FACTORY-ESP32S3-N16R8-0x0.bin \
