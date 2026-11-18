@@ -27,12 +27,16 @@ print("USB provisioning architecture: ESP32 classic + S3 native and CH343 UART0 
 assert 'RTC_NOINIT_ATTR static uint32_t usb_maintenance_request' in source
 assert 'SE_USB_MAINT_MAGIC' in source
 assert 'consecutive_low>=35' in source
-assert 'if(armed)' in source
+assert 'consecutive_low>=60' in source # long hold is BLE, short hold remains USB
 assert 'usb_maintenance_request=SE_USB_MAINT_MAGIC' in source
 assert 'esp_restart()' in source
 assert 'esp_reset_reason()==ESP_RST_SW' in source
 assert 'usb_maintenance_request=0' in source
-assert 'runtime_physical_request || physical_reconfigure_requested()' in source
+assert 'runtime_physical_request?1:physical_reconfigure_requested()' in source
+assert 'runtime_ble_request?2:' in source
+assert 'se_ble_wifi_recovery(current.gateway_name' in source
+assert 'se_ble_wifi_override(current.wifi_ssid' in source
+assert 'se_ble_wifi_guard_start()' in source
 assert 'se_vpn_start_physical_maintenance_monitor(void)' in source
 assert 'usb_maintenance_watch_task' in source
 main=(Path(__file__).resolve().parents[1] / "main" / "main.c").read_text()
