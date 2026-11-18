@@ -88,7 +88,8 @@ internal object VpnGatewayOtaClient {
             Thread.sleep(2500)
             try {
                 val state=status(route)
-                if(state.optString("version")==version &&
+                if(SmartEnergyUpdateFeed.versionParts(state.optString("version",""))==
+                    SmartEnergyUpdateFeed.versionParts(version) &&
                    !state.optBoolean("rollback_pending") &&
                    !state.optBoolean("in_progress"))return true
             }catch(_:Exception) {
