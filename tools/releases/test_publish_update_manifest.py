@@ -35,6 +35,28 @@ class TestReleaseManifest(unittest.TestCase):
             data[12:14]=(0).to_bytes(2,"little");target.write_bytes(data)
             with self.assertRaises(ValueError):
                 mod.manifest("voltronic-v0.3.3",target,200000,"0.3.3")
+    def test_vpn_s3_ota_release_target_and_exact_image_name(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            asset=pathlib.Path(tmp)/mod.VPN_FW_NAME
+            image=bytearray(26000)
+            image[0]=0xe9
+            image[12:14]=(9).to_bytes(2,"little")
+            asset.write_bytes(image)
+            target,manifest=mod.manifest("vpn-gateway-v0.3.14",
+                asset,2*1024*1024,"0.3.14")
+            self.assertEqual(target,"updates/vpn-gateway.json")
+            self.assertEqual(manifest["target"],"esp32s3-n16r8")
+            self.assertEqual(manifest["product"],"smart-energy-vpn-gateway")
+            self.assertTrue(manifest["downloadUrl"].endswith(mod.VPN_FW_NAME))
+            with self.assertRaises(ValueError):
+                mod.manifest("vpn-gateway-v0.3.14",
+                    asset,2*1024*1024,"0.3.15")
+            image[12:14]=(0).to_bytes(2,"little")
+            asset.write_bytes(image)
+            with self.assertRaises(ValueError):
+                mod.manifest("vpn-gateway-v0.3.14",
+                    asset,2*1024*1024,"0.3.14")
+
     def test_no_asset_replacement(self):
         with tempfile.TemporaryDirectory() as tmp:
             target=pathlib.Path(tmp)/"unknown.apk";target.write_bytes(b"x"*21000)
