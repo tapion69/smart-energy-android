@@ -13,3 +13,9 @@ CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y
 CONFIG_USB_SERIAL_JTAG_ENABLED=y
 # S3 with 8 MB PSRAM can fit the full current tailnet (17 peers).
 CONFIG_ML_MAX_PEERS=32
+
+# VPN S3 N16R8 receives two 2MB OTA slots; classic ESP32 remains single app.
+# Legacy deployed S3 must undergo verified USB partition migration first.
+CONFIG_PARTITION_TABLE_CUSTOM=y
+CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions_s3_ota.csv"
+CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE=y
