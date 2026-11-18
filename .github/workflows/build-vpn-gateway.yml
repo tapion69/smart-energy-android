@@ -124,9 +124,6 @@ jobs:
           mkdir -p firmware/vpn-gateway/dist-s3
           cp firmware/vpn-gateway/build/smart_energy_vpn_gateway.bin \
             firmware/vpn-gateway/dist-s3/smart-energy-vpn-USB-APP-ESP32S3-N16R8-0x10000.bin
-            firmware/vpn-gateway/dist-s3/SmartEnergy-VPN-S3-OTA.bin
-            firmware/vpn-gateway/dist-s3/vpn-s3-ota-bootloader.bin
-            firmware/vpn-gateway/dist-s3/vpn-s3-ota-partition-table.bin
           cp firmware/vpn-gateway/build/smart_energy_vpn_gateway.bin \
             firmware/vpn-gateway/dist-s3/SmartEnergy-VPN-S3-OTA.bin
           cp firmware/vpn-gateway/build/bootloader/bootloader.bin \
@@ -147,6 +144,16 @@ jobs:
           path: |
             firmware/vpn-gateway/dist-s3/smart-energy-vpn-USB-FACTORY-ESP32S3-N16R8-0x0.bin
             firmware/vpn-gateway/dist-s3/smart-energy-vpn-USB-APP-ESP32S3-N16R8-0x10000.bin
+          if-no-files-found: error
+          retention-days: 30
+      - name: Upload S3 OTA candidate + guarded USB migration components
+        uses: actions/upload-artifact@v4
+        with:
+          name: SmartEnergy-VPN-S3-OTA-CANDIDATE
+          path: |
+            firmware/vpn-gateway/dist-s3/SmartEnergy-VPN-S3-OTA.bin
+            firmware/vpn-gateway/dist-s3/vpn-s3-ota-bootloader.bin
+            firmware/vpn-gateway/dist-s3/vpn-s3-ota-partition-table.bin
           if-no-files-found: error
           retention-days: 30
 
