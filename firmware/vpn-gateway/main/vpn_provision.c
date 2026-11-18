@@ -1,4 +1,5 @@
 #include "vpn_provision.h"
+#include "se_ble_wifi.h"
 #include "gateway_policy.h"
 #include <string.h>
 #include <stdio.h>
@@ -11,9 +12,7 @@
 #include "driver/gpio.h"
 #include "esp_log.h"
 #include "esp_system.h"
-#if CONFIG_IDF_TARGET_ESP32S3
 #include "esp_attr.h"
-#endif
 #include "nvs.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -25,30 +24,29 @@
 #define CFG_KEY "json"
 #define LINE_MAX 1600
 static const char *TAG="SE-VPN-USB";
-#if CONFIG_IDF_TARGET_ESP32S3
-/*
- * A physical hold/release on BOOT while running requests a ONE-TIME,
- * local-only USB maintenance boot. The marker is RTC memory (NOT NVS);
- * a cold boot, brownout or a normal reset cannot accidentally arm it.
- * Only esp_restart() performed after GPIO0 has been released consumes it.
+/* OFFLINE maintenance: 3.5–5.9s BOOT => legacy USB, >=6s => BLE.
+ * Release first, then reboot with a one-shot RTC marker (never saved to NVS).
+ * Classic and S3 both support physical recovery; no Internet is required.
  */
 #define SE_USB_MAINT_MAGIC 0x53455635UL
+#define SE_BLE_MAINT_MAGIC 0x5345424CUL
 RTC_NOINIT_ATTR static uint32_t usb_maintenance_request;
+RTC_NOINIT_ATTR static uint32_t ble_maintenance_request;
 static void usb_maintenance_watch_task(void *unused) {
     (void)unused;
     int consecutive_low=0;
-    bool armed=false;
     for(;;) {
         const bool held=gpio_get_level(GPIO_NUM_0)==0;
         if(held) {
-            if(consecutive_low<40)++consecutive_low;
-            if(consecutive_low>=35)armed=true; // 3.5s; debounce margin
+            if(consecutive_low<120)++consecutive_low;
         }else {
-            if(armed) {
-                /* RELEASE is mandatory. Never reset with BOOT held,
-                 * which could enter the ESP32-S3 ROM download mode. */
-                ESP_LOGW(TAG, "Physical BOOT hold/release: entering offline USB maintenance");
+            if(consecutive_low>=60) {
+                ble_maintenance_request=SE_BLE_MAINT_MAGIC;
+                ESP_LOGW(TAG,"Physical BOOT accepted: offline Bluetooth Wi-Fi recovery");
+                esp_restart();
+            }else if(consecutive_low>=35){
                 usb_maintenance_request=SE_USB_MAINT_MAGIC;
+                ESP_LOGW(TAG,"Physical BOOT accepted: offline USB maintenance");
                 esp_restart();
             }
             consecutive_low=0;
@@ -56,7 +54,6 @@ static void usb_maintenance_watch_task(void *unused) {
         vTaskDelay(pdMS_TO_TICKS(100));
     }
 }
-#endif
 
 static se_vpn_config_t current;
 static char line_buffer[LINE_MAX];
@@ -503,58 +500,55 @@ static bool start_offline_usb_task(void) {
     }
     return true;
 }
-static bool physical_reconfigure_requested(void) {
-    // BOOT must be pressed AFTER reset, never while power is applied, or the
-    // ESP32 would enter ROM bootloader mode. Allow a short supervised window.
-    gpio_config_t cfg={
-        .pin_bit_mask=1ULL<<GPIO_NUM_0,
-        .mode=GPIO_MODE_INPUT,
-        .pull_up_en=GPIO_PULLUP_ENABLE,
-        .pull_down_en=GPIO_PULLDOWN_DISABLE,
-        .intr_type=GPIO_INTR_DISABLE
-    };
-    if(gpio_config(&cfg)!=ESP_OK)return false;
+static int physical_reconfigure_requested(void) {
+    gpio_config_t pin={.pin_bit_mask=1ULL<<GPIO_NUM_0,
+        .mode=GPIO_MODE_INPUT,.pull_up_en=GPIO_PULLUP_ENABLE,
+        .pull_down_en=GPIO_PULLDOWN_DISABLE,.intr_type=GPIO_INTR_DISABLE};
+    if(gpio_config(&pin)!=ESP_OK)return 0;
     int held=0;
     puts("SEVPN_BOOT_WINDOW_9S");
-    for(int step=0;step<90;++step) {
-        if(gpio_get_level(GPIO_NUM_0)==0) {
-            if(++held>=30)return true;
-        } else held=0;
+    for(int step=0;step<90;step++) {
+        if(gpio_get_level(GPIO_NUM_0)==0)held++;
+        else if(held>0)return held>=60?2:held>=30?1:0;
         vTaskDelay(pdMS_TO_TICKS(100));
     }
-    return false;
+    return held>=60?2:held>=30?1:0;
 }
 const se_vpn_config_t *se_vpn_provision_or_load(void) {
-#if CONFIG_IDF_TARGET_ESP32S3
-    const bool runtime_physical_request=
-        esp_reset_reason()==ESP_RST_SW &&
+    const bool software_reboot=esp_reset_reason()==ESP_RST_SW;
+    const bool runtime_physical_request=software_reboot &&
         usb_maintenance_request==SE_USB_MAINT_MAGIC;
-    // Consume before any provisioning work; never turn a later reboot into
-    // another maintenance request, and never persist a marker in NVS.
+    const bool runtime_ble_request=software_reboot &&
+        ble_maintenance_request==SE_BLE_MAINT_MAGIC;
     usb_maintenance_request=0;
-#else
-    const bool runtime_physical_request=false;
-#endif
+    ble_maintenance_request=0;
     if(!load_config(&current)) {
-        // No network startup when first provisioning; the dedicated USB task
-        // handles validated configuration before rebooting into normal mode.
+        // Factory-new board: existing USB provisioning remains unchanged.
         (void)start_offline_usb_task();
         return NULL;
     }
-    if(runtime_physical_request || physical_reconfigure_requested()) {
+    const int boot_mode=runtime_ble_request?2:
+        runtime_physical_request?1:physical_reconfigure_requested();
+    if(boot_mode==2){
+        se_ble_wifi_recovery(current.gateway_name[0]?current.gateway_name:"VPN",
+                             current.gateway_token);
+        return NULL;
+    }
+    if(boot_mode==1){
         ESP_LOGW(TAG,"Physical BOOT authorization: offline USB provisioning mode");
         (void)start_offline_usb_task();
         return NULL;
     }
+    se_ble_wifi_override(current.wifi_ssid,sizeof(current.wifi_ssid),
+                         current.wifi_password,sizeof(current.wifi_password));
+    se_ble_wifi_guard_start();
     return &current;
 }
 
 void se_vpn_start_physical_maintenance_monitor(void) {
-#if CONFIG_IDF_TARGET_ESP32S3
-    // GPIO0 is configured as a pulled-up input by the initial 9s check.
-    // Monitoring is independent of Wi-Fi and VPN connection state.
-    if(xTaskCreate(usb_maintenance_watch_task,"se-usb-boot",3072,
+    // Both classic and S3 monitor a physical press after the Wi-Fi boots.
+    // GPIO0 is already configured by the boot-time maintenance window.
+    if(xTaskCreate(usb_maintenance_watch_task,"se-physical-boot",3072,
                    NULL,5,NULL)!=pdPASS)
-        ESP_LOGE(TAG,"Failed to start physical USB BOOT monitor");
-#endif
+        ESP_LOGE(TAG,"Failed to start physical BOOT maintenance monitor");
 }
