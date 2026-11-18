@@ -31,6 +31,8 @@
 #include "driver/usb_serial_jtag.h"
 #include "nvs_flash.h"
 #include "nvs.h"
+#include "se_ble_wifi.h"
+
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/semphr.h"
@@ -229,20 +231,24 @@ static void usb_begin(void) {
     if(!native_ready)
         ESP_LOGE(TAG,"Native USB init failed %s",esp_err_to_name(err));
 }
-static bool boot_reprovision(void) {
-    gpio_config_t b={
-        .pin_bit_mask=(1ULL<<GPIO_NUM_0),.mode=GPIO_MODE_INPUT,
-        .pull_up_en=GPIO_PULLUP_ENABLE,.intr_type=GPIO_INTR_DISABLE
-    };
-    if(gpio_config(&b)!=ESP_OK)return false;
+/* BOOT after boot: 3-5.9 s => legacy USB; >=6 s => offline BLE rescue.
+ * Await RELEASE to distinguish modes, never start Wi-Fi during BLE recovery.
+ * Do not press BOOT while powering on (GPIO0 is a strapping pin). */
+static int boot_reprovision(void) {
+    gpio_config_t pin={.pin_bit_mask=1ULL<<GPIO_NUM_0,
+        .mode=GPIO_MODE_INPUT,.pull_up_en=GPIO_PULLUP_ENABLE,
+        .intr_type=GPIO_INTR_DISABLE};
+    if(gpio_config(&pin)!=ESP_OK)return 0;
     int held=0;
-    for(int i=0;i<90;i++){
-        if(gpio_get_level(GPIO_NUM_0)==0) {
-            if(++held>=30)return true;
-        } else held=0;
+    for(int i=0;i<90;i++) {
+        bool pressed=gpio_get_level(GPIO_NUM_0)==0;
+        if(pressed)held++;
+        else if(held>0){
+            return held>=60?2:held>=30?1:0;
+        }
         vTaskDelay(pdMS_TO_TICKS(100));
     }
-    return false;
+    return held>=60?2:held>=30?1:0;
 }
 static void usb_provision(void) {
     usb_message(VUSB_BRIDGE,"SEVOLT_READY_V1");
@@ -308,6 +314,9 @@ static void wifi_handler(void *arg,esp_event_base_t base,int32_t id,void *data){
         portENTER_CRITICAL(&net_diag_lock);
         net_diag.wifi_got_ip++;
         portEXIT_CRITICAL(&net_diag_lock);
+        if(!se_ble_wifi_promote(VT_NVS_NS,VT_NVS_KEY)) {
+            // No candidate is normal; any failed promotion is handled by guard.
+        }
         xEventGroupSetBits(wifi_events,WIFI_OK);
     }
 }
@@ -1501,10 +1510,21 @@ void app_main(void){
     edit_completed=xSemaphoreCreateBinary();
     ESP_ERROR_CHECK(state_lock&&edit_lock&&edit_completed?ESP_OK:ESP_ERR_NO_MEM);
     usb_begin();
-    if(!load_config() || boot_reprovision()){
+    const bool configured=load_config();
+    const int rescue=configured?boot_reprovision():0;
+    if(!configured || rescue==1){
         ESP_LOGW(TAG,"USB provisioning required — no Wi-Fi or inverter writes");
         usb_provision();return;
     }
+    if(rescue==2){
+        se_ble_wifi_recovery(cfg.display_name,cfg.read_code);
+        return;
+    }
+    // Pending candidate only overrides RAM. Stored Wi-Fi remains intact until
+    // successful association; failed join rolls back automatically.
+    se_ble_wifi_override(cfg.wifi_ssid,sizeof(cfg.wifi_ssid),
+                         cfg.wifi_password,sizeof(cfg.wifi_password));
+    se_ble_wifi_guard_start();
     wifi_start();
     setup_mdns_discovery();
     xTaskCreate(discovery_broadcast_task,"se-discover",4096,NULL,2,NULL);
