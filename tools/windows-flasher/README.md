@@ -31,3 +31,7 @@ Le destinataire connecte ses ESP à l'alimentation et au Wi-Fi connu. Dans l'app
 
 La compilation Windows tout-en-un est générée par [GitHub Actions](https://github.com/tapion69/smart-energy-android/actions/workflows/build-vpn-gateway.yml).
 La conception technique de la découverte figure dans [UNIVERSAL-READER-DISCOVERY-DEV.md](../../docs/UNIVERSAL-READER-DISCOVERY-DEV.md).
+
+## Récupération Bluetooth lors d'un changement de box (branche BLE de test)
+
+Le flasher de cette branche doit être **recompilé avec les nouveaux binaires** avant que cette fonction soit disponible. Le firmware JK utilise son BLE exclusivement pour la maintenance pendant cette opération ; on peut éloigner le lecteur des batteries. Les firmwares VPN, Voltronic et Deye ouvrent un service BLE chiffré uniquement après un appui BOOT physique. Dans Smart Energy Android 0.3.62-dev, ouvrir « Configuration et associations → Récupération Wi-Fi Bluetooth ». Enregistrer le Wi-Fi avec le code de l'appareil (token pour VPN) ; les autres paramètres NVS sont conservés. Voir [documentation BLE](../../docs/BLE-WIFI-RECOVERY.md). Ne pas reflasher un ESP client fonctionnel avant validation physique sur un module de réserve.
