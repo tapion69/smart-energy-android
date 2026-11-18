@@ -8,7 +8,7 @@ on:
   workflow_dispatch:
     inputs:
       release_tag:
-        description: 'Existing published release tag: android-vX.Y.Z or voltronic-vX.Y.Z'
+        description: 'Existing release: android-vX.Y.Z, voltronic-vX.Y.Z or vpn-gateway-vX.Y.Z'
         required: true
         type: string
 
@@ -30,7 +30,7 @@ jobs:
           SELECTED_TAG: ${{ github.event_name == 'release' && github.event.release.tag_name || inputs.release_tag }}
         run: |
           set -euo pipefail
-          if [[ ! "$SELECTED_TAG" =~ ^(android|voltronic)-v[0-9]+\.[0-9]+\.[0-9]+(-[A-Za-z0-9.]+)?$ ]]; then
+          if [[ ! "$SELECTED_TAG" =~ ^(android|voltronic|vpn-gateway)-v[0-9]+\.[0-9]+\.[0-9]+(-[A-Za-z0-9.]+)?$ ]]; then
             echo "::error::Unexpected release tag"
             exit 1
           fi
@@ -82,6 +82,13 @@ jobs:
             python tools/releases/publish_update_manifest.py \
               --tag "$RELEASE_TAG" --asset "$FILE" --version "$VERSION" \
               --version-code "$APK_CODE"
+          elif [[ "$RELEASE_TAG" == vpn-gateway-* ]]; then
+            gh release download "$RELEASE_TAG" -R "${{ github.repository }}" \
+              --pattern 'SmartEnergy-VPN-S3-OTA.bin' --dir /tmp/smart-energy-release
+            FILE=/tmp/smart-energy-release/SmartEnergy-VPN-S3-OTA.bin
+            test -s "$FILE"
+            python tools/releases/publish_update_manifest.py \
+              --tag "$RELEASE_TAG" --asset "$FILE" --version "$VERSION"
           else
             gh release download "$RELEASE_TAG" -R "${{ github.repository }}" \
               --pattern 'smart-energy-voltronic-S3-OTA.bin' --dir /tmp/smart-energy-release
@@ -96,7 +103,7 @@ jobs:
           set -euo pipefail
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add updates/android.json updates/voltronic-esp32.json
+          git add updates/android.json updates/voltronic-esp32.json updates/vpn-gateway.json
           if git diff --cached --quiet; then
             echo "Manifest already up to date"
             exit 0
