@@ -2,7 +2,7 @@ name: Build development prototypes
 
 on:
   push:
-    branches: [main, dev, 'fix/jk-discovery-pairing-20261116', 'fix/voltronic-grid-sum-0360-20261118', 'perf/vpn-progressive-voltronic-20261118']
+    branches: [main, dev, 'fix/jk-discovery-pairing-20261116', 'fix/voltronic-grid-sum-0360-20261118', 'perf/vpn-progressive-voltronic-20261118', 'feature/ble-wifi-recovery-universal-20261118']
     paths:
       - 'android/**'
       - 'firmware/jk-esp32/**'
@@ -67,6 +67,8 @@ jobs:
         run: node tools/tests/test_energy_grid.js
       - name: Validate progressive VPN display behavior
         run: python3 tools/tests/test_vpn_progressive.py
+      - name: Validate isolated Bluetooth recovery implementation
+        run: python3 tools/tests/test_ble_wifi_recovery.py
       # Debug Android binaries use temporary keys on fresh GitHub runners.
       # Execute tests but NEVER distribute such APKs as upgrades.
       - name: Test Android code (debug tests are NOT distributed)
@@ -132,7 +134,7 @@ jobs:
 
   publish-android-fix:
     name: Publish verified signed 0.3.61 and enable in-app upgrades
-    if: github.ref == 'refs/heads/perf/vpn-progressive-voltronic-20261118'
+    if: github.ref == 'refs/heads/never-auto-publish-ble-rescue'
     needs: [android]
     runs-on: ubuntu-latest
     permissions:
