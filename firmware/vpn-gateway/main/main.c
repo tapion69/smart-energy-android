@@ -39,10 +39,11 @@
 #include "gateway_write_policy.h"
 #include "vpn_provision.h"
 #include "se_ble_wifi.h"
+#include "vpn_ota.h"
 #include "cJSON.h"
 #include <math.h>
 
-#define GATEWAY_VERSION "0.3.12-dev-confirmed-writes"
+#define GATEWAY_VERSION "0.3.13-dev-vpn-s3-ota"
 #define GATEWAY_PORT 18767
 #define MAX_JSON_BYTES 32768
 
@@ -247,6 +248,58 @@ static esp_err_t health_handler(httpd_req_t *req) {
     httpd_resp_set_type(req,"application/json");
     httpd_resp_set_hdr(req,"Cache-Control","no-store");
     return httpd_resp_sendstr(req,body);
+}
+
+/* The OTA commands affect THIS gateway only, never an arbitrary reader.
+ * Explicit manual confirmation in the APK + tailnet destination + gateway
+ * token; the ESP32-S3 downloads from the pinned official GitHub release.
+ * The classic ESP32 and S3 without dual OTA always refuse the request.
+ */
+static esp_err_t vpn_ota_status_handler(httpd_req_t *req) {
+    if(!request_is_private_vpn(req))
+        return deny(req,"403 Forbidden","{\"error\":\"vpn_only\"}");
+    if(!authorized(req))
+        return deny(req,"401 Unauthorized","{\"error\":\"invalid_gateway_token\"}");
+    char json[480]={0};
+    se_vpn_ota_status_json(json,sizeof json,GATEWAY_VERSION);
+    httpd_resp_set_type(req,"application/json");
+    httpd_resp_set_hdr(req,"Cache-Control","no-store");
+    return httpd_resp_sendstr(req,json);
+}
+static esp_err_t vpn_ota_request_handler(httpd_req_t *req) {
+    if(!request_is_private_vpn(req))
+        return deny(req,"403 Forbidden","{\"error\":\"vpn_only\"}");
+    if(!authorized(req))
+        return deny(req,"401 Unauthorized","{\"error\":\"invalid_gateway_token\"}");
+    char confirm[12]={0};
+    if(httpd_req_get_hdr_value_str(req,"X-OTA-Confirmed",confirm,
+                                   sizeof confirm)!=ESP_OK ||
+       strcmp(confirm,"yes")!=0)
+        return deny(req,"403 Forbidden","{\"error\":\"confirmation_required\"}");
+    if(req->content_len<2 || req->content_len>128)
+        return deny(req,"400 Bad Request","{\"error\":\"bad_request\"}");
+    char body[129]={0};
+    int used=0;
+    while(used<req->content_len) {
+        int n=httpd_req_recv(req,body+used,req->content_len-used);
+        if(n<=0)return deny(req,"400 Bad Request","{\"error\":\"incomplete_body\"}");
+        used+=n;
+    }
+    cJSON *j=cJSON_ParseWithLength(body,(size_t)used);
+    const cJSON *confirmed=j?cJSON_GetObjectItemCaseSensitive(j,"confirmed"):NULL;
+    const cJSON *action=j?cJSON_GetObjectItemCaseSensitive(j,"action"):NULL;
+    const bool valid=cJSON_IsTrue(confirmed) && cJSON_IsString(action) &&
+        !strcmp(action->valuestring,"check_and_install");
+    cJSON_Delete(j);
+    if(!valid)
+        return deny(req,"403 Forbidden","{\"error\":\"confirmation_required\"}");
+    if(!se_vpn_ota_start(GATEWAY_VERSION))
+        return deny(req,"409 Conflict","{\"error\":\"ota_unavailable_or_busy\"}");
+    httpd_resp_set_type(req,"application/json");
+    httpd_resp_set_hdr(req,"Cache-Control","no-store");
+    return httpd_resp_sendstr(req,
+        "{\"product\":\"smart-energy-vpn-gateway\","
+        "\"accepted\":true,\"operation\":\"check_and_install\"}");
 }
 
 /* Private LAN auto-discovery. Beacons NEVER contain credentials.
@@ -921,6 +974,8 @@ static void start_private_http(void) {
     ESP_ERROR_CHECK(httpd_start(&http_server, &cfg));
     const httpd_uri_t uris[] = {
         {.uri="/api/v1/health", .method=HTTP_GET, .handler=health_handler},
+        {.uri="/api/v1/vpn/ota/status",.method=HTTP_GET,.handler=vpn_ota_status_handler},
+        {.uri="/api/v1/vpn/ota/request",.method=HTTP_POST,.handler=vpn_ota_request_handler},
         {.uri="/api/v1/discovery",.method=HTTP_GET,.handler=discovery_inventory},
         {.uri="/api/v1/jk/1/info",.method=HTTP_GET,.handler=relay_read},
         {.uri="/api/v1/jk/2/info",.method=HTTP_GET,.handler=relay_read},
@@ -1019,6 +1074,7 @@ void app_main(void) {
         ESP_LOGE(TAG, "WiFi unavailable after 60 s: last_reason=%u (%s), retries=%u. Verify AP security, 2.4 GHz association and saved credentials.",
                  (unsigned)wifi_last_disconnect_reason,
                  wifi_failure_hint(wifi_last_disconnect_reason), wifi_retry_count);
+        se_vpn_ota_failed_start_rollback();
         return;
     }
     xTaskCreate(discovery_listener,"se-lan-discovery",8192,NULL,3,NULL);
@@ -1056,9 +1112,11 @@ void app_main(void) {
     }
     if (!tailtiny_is_connected(vpn)) {
         ESP_LOGE(TAG, "Tailnet connection timed out. Check auth key and Internet.");
+        se_vpn_ota_failed_start_rollback();
         return;
     }
     start_private_http();
+    se_vpn_ota_confirm_after_tailnet_ready();
     while (true) {
         if (!wifi_ready) {
             ESP_LOGW(TAG, "WiFi disconnected; waiting for local WiFi recovery");
