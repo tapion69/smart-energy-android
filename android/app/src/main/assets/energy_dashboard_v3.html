@@ -29,7 +29,7 @@ button{font:inherit;cursor:pointer}
 .photoVal{position:absolute;z-index:2;min-width:90px;padding:8px;background:#051e30e9;border:1px solid #7ac6d1;border-radius:9px;box-shadow:0 5px 19px #0009}
 .photoVal .cap{display:block;color:#b2d5e5;font-size:10px}.photoVal strong{display:block;font-size:18px;white-space:nowrap}.photoVal .day{font-size:10px;display:block;margin-top:3px;color:#e1f4f5}
 .photoVal.pv{left:28%;top:13%;border-color:#e2b85e}.photoVal.pv strong{color:#ffe080}
-.photoVal.home{right:3%;top:37%;left:auto}.photoVal.grid{left:3%;bottom:5%;border-color:#659bdc}.photoVal.bat{right:3%;bottom:5%;border-color:#45ca96}.photoVal.bat strong{color:#94ffc3}
+.photoVal.home{right:3%;top:37%;left:auto}.photoVal.grid{left:3%;bottom:5%;border-color:#659bdc}.photoVal.grid .day{max-width:140px;line-height:1.25;color:#aac8db}.photoVal.bat{right:3%;bottom:5%;border-color:#45ca96}.photoVal.bat strong{color:#94ffc3}
 .photoVal.inv{left:33%;right:auto;top:50%;font-size:10px}.photoVal.inv strong{font-size:14px}
 .hero-lines{position:absolute;inset:0;width:100%;height:100%;pointer-events:none;filter:drop-shadow(0 0 4px #000);opacity:.9}
 .hero-lines path{fill:none;stroke-width:3;stroke-dasharray:none;animation:none;opacity:.13;transition:opacity .2s}
@@ -149,7 +149,7 @@ button{font:inherit;cursor:pointer}
 <div class="photoVal pv"><span class="cap">☀ Solaire</span><strong id="mPv">— W</strong><span class="day" id="mPvDay">Jour : —</span></div>
 <div class="photoVal home"><span class="cap">⌂ Maison</span><strong id="mLoad">— W</strong><span class="inline-detail" id="mLoadDay">Jour : —</span></div>
 <div class="photoVal inv"><span class="cap">⚡ Onduleurs</span><strong id="mInv">—</strong><span class="inline-detail" id="mInverterStats">—</span></div>
-<div class="photoVal grid"><span class="cap">♧ Réseau</span><strong id="mGrid">— W</strong></div>
+<div class="photoVal grid"><span class="cap">♧ Réseau</span><strong id="mGrid">— W</strong><span class="day" id="mGridInfo"></span></div>
 <div class="photoVal bat"><span class="cap">▣ Batteries</span><strong id="mSoc">— %</strong><span class="inline-detail emphasis" id="mBatteryStats">—</span><span class="inline-detail" id="mBatteryVoltage">—</span><span class="inline-detail" id="mBatteryTemp">—</span></div>
 </section>
 
@@ -190,6 +190,22 @@ function n(x){return typeof x==='number'&&Number.isFinite(x)?x:null}
 function fmt(x,u,d){var v=n(x);return v==null?'—'+(u?' '+u:''):v.toLocaleString('fr-FR',{maximumFractionDigits:d||0})+(u?' '+u:'')}
 function sum(items,k){var valid=items.map(function(x){return n(x[k])}).filter(function(x){return x!==null});return valid.length?valid.reduce(function(a,b){return a+b},0):null}
 function fresh(){return (data.inverters||[]).filter(function(x){return x&&x.fresh===true})}
+// Each ESP32 reports a native grid reading for its own inverter.
+// In multi-inverter setups those values cannot yet be safely aggregated.
+// Show one measured source, clearly labelled; never infer import/export.
+function resolveGridReading(items,live){
+ var candidates=live.filter(function(v){return n(v.gridPowerW)!==null});
+ if(!candidates.length)return {power:null,verified:false,info:'Mesure indisponible'};
+ // Prefer a non-zero reading if another inverter only reports 0 W.
+ var chosen=candidates.find(function(v){return Math.abs(v.gridPowerW)>1})||candidates[0];
+ var multi=items.length>1,verified=!multi&&chosen.gridDirectionVerified===true;
+ return {
+  power:n(chosen.gridPowerW),
+  verified:verified,
+  info:multi?'INV'+chosen.slot+' uniquement · sens non vérifié':
+    verified?'Sens confirmé':'Puissance native · sens non validé'
+ };
+}
 function channels(items){var all=[];items.forEach(function(inv){(inv.pvChannels||[]).forEach(function(c){all.push({slot:inv.slot,index:c.index,voltageV:c.voltageV,currentA:c.currentA,powerW:c.powerW,derived:c.derived,powerSource:c.powerSource})})});return all}
 function appNav(destination){if(window.SmartEnergyApp&&window.SmartEnergyApp.navigate)window.SmartEnergyApp.navigate(destination)}
 function setPage(page){active=page;el('pageHome').style.display=page==='home'?'':'none';el('pageInverters').style.display=page==='inverters'?'':'none';el('navHome').classList.toggle('active',page==='home');el('navInv').classList.toggle('active',page==='inverters');if(page==='inverters')renderInverters()}
@@ -504,13 +520,9 @@ function render(){
    tempValues.reduce(function(x,y){return x+y},0)/tempValues.length:null;
  var outputCurrent=live.length&&live.every(function(v){return n(v.outputCurrentEstimateA)!==null})?
    sum(live,'outputCurrentEstimateA'):null;
- var grid=null,gridInfo='Sens non vérifié',gridVerified=false;
- if(live.length===1){
-  grid=n(live[0].gridPowerW);
-  gridVerified=live[0].gridDirectionVerified===true;
-  gridInfo=grid===null?'Mesure indisponible':
-           gridVerified?'Sens confirmé':'Puissance native · sens non validé'
- }else if(live.length>1)gridInfo='Multi-onduleurs : pas de total réseau validé';
+ var gridReading=resolveGridReading(items,live),
+     grid=gridReading.power,gridInfo=gridReading.info,
+     gridVerified=gridReading.verified;
  var stale=items.length>0&&live.length===0,
      reachable=items.some(function(v){return v.transportReachable===true}),
      unstable=items.some(function(v){return v.transientHttpError===true});
@@ -544,7 +556,7 @@ function render(){
  batteryWire.classList.toggle('discharging',flowsEnabled&&n(bpower)!==null&&bpower< -5);
  var direction=n(bpower)===null?'Sens non mesuré':
    bpower>5?'Charge → batterie':bpower< -5?'Décharge → onduleur':'Batterie au repos';
- txt('mPv',fmt(p,'W'));txt('mLoad',fmt(l,'W'));txt('mGrid',fmt(grid,'W'));
+ txt('mPv',fmt(p,'W'));txt('mLoad',fmt(l,'W'));txt('mGrid',fmt(grid,'W'));txt('mGridInfo',gridInfo);
  txt('mSoc',fmt(soc,'%'));txt('mInv',live.length+' / '+items.length+' INV');
  txt('mPvDay','PV jour UTC : '+fmt(pvDay,'kWh',2));
  txt('mLoadDay','Jour UTC : '+fmt(loadDay,'kWh',2));
