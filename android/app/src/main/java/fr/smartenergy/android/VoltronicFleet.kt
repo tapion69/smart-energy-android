@@ -26,6 +26,9 @@ class VoltronicFleet(
     private val updated:()->Unit
 ) {
     private val mainHandler=Handler(Looper.getMainLooper())
+    // Merge near-simultaneous reader results into a single WebView render.
+    // A slow second inverter must still never delay the first for seconds.
+    private val partialRender=Runnable { updated() }
     private val states=Array(3){ JSONObject().put("configured",false) }
     // Values returned by the inverter over GET /details; no custom integrations.
     private val nativeDetails=arrayOfNulls<JSONObject>(3)
@@ -208,7 +211,8 @@ class VoltronicFleet(
                 val slotIndex=c.slot-1
                 mainHandler.post {
                     states[slotIndex]=next
-                    updated()
+                    mainHandler.removeCallbacks(partialRender)
+                    mainHandler.postDelayed(partialRender,120L)
                 }
             }
             mainHandler.post {
