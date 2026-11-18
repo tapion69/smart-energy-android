@@ -38,6 +38,7 @@
 #include "gateway_policy.h"
 #include "gateway_write_policy.h"
 #include "vpn_provision.h"
+#include "se_ble_wifi.h"
 #include "cJSON.h"
 #include <math.h>
 
@@ -100,6 +101,7 @@ static void on_wifi_event(void *arg, esp_event_base_t base,
         wifi_ready = true;
         wifi_last_disconnect_reason = 0;
         wifi_retry_count = 0;
+        (void)se_ble_wifi_promote("se_vpn_cfg","json");
         xEventGroupSetBits(wifi_events, WIFI_READY);
         ESP_LOGI(TAG, "Home WiFi connected");
     }
