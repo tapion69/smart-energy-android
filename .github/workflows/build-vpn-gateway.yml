@@ -252,6 +252,32 @@ jobs:
           HASH=$(sha256sum "$DEST" | cut -d' ' -f1)
           export TAG HASH
           gh api "repos/$GITHUB_REPOSITORY/contents/updates/jk-esp32.json?ref=main" > /tmp/jk-feed-before.json
+          # A repeat build is NOT byte-identical (toolchain timestamps/metadata).
+          # Never replace a published release, compare the published artifact
+          # against the canonical manifest, then exit successfully.
+          if gh release view "$TAG" -R "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            mkdir -p /tmp/existing-jk-ota
+            gh release download "$TAG" -R "$GITHUB_REPOSITORY" \
+              --pattern "$DEST" --dir /tmp/existing-jk-ota
+            test -s "/tmp/existing-jk-ota/$DEST"
+            CHECKED_SHA=$(sha256sum "/tmp/existing-jk-ota/$DEST" | cut -d' ' -f1)
+            export CHECKED_SHA
+            python - <<'PY'
+          import os,json,base64
+          raw=json.load(open("/tmp/jk-feed-before.json"))
+          feed=json.loads(base64.b64decode(raw["content"]))
+          expected_url="https://github.com/tapion69/smart-energy-android/releases/download/jk-v0.3.16/smart-jk-esp32-ota.bin"
+          if not (feed.get("available") is True and
+                  feed.get("product")=="smart-jk-esp32" and
+                  feed.get("version")=="0.3.16" and
+                  feed.get("downloadUrl")==expected_url and
+                  feed.get("sha256")==os.environ["CHECKED_SHA"]):
+              raise SystemExit("Existing JK release/manifest SHA256 mismatch; manual review required")
+          print("Existing JK OTA release verified. No replacement or duplicate publication.")
+          PY
+            exit 0
+          fi
+
           python - <<'PY'
           import json,base64
           raw=json.load(open("/tmp/jk-feed-before.json"))
