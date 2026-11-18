@@ -7,6 +7,8 @@ validated GitHub CI build and match the expected OTA partition layout.
 from pathlib import Path
 from typing import Callable
 import struct
+import tempfile
+import hashlib
 
 EXPECTED = {
     "nvs": (0x01,0x02,0x9000,0x6000),
@@ -57,19 +59,82 @@ def validate_migration_images(directory:Path) -> tuple[Path,Path,Path]:
         raise ValueError("Les images ne doivent pas écraser NVS")
     return boot,table,app
 
-def flash_voltronic_ota_migration(port:str,directory:Path,
-                                   log:Callable[[str],None])->None:
+def check_installed_voltronic_layout(raw:bytes) -> None:
+    """Require installed classic SINGLE_APP_LARGE, exact NVS and Voltronic NVS.
+    Unknown, already-OTA or incompatible partition layouts must not be altered.
+    """
+    parts=parse_partition_table(raw)
+    nvs=parts.get("nvs")
+    factory=parts.get("factory")
+    if nvs!=(0x01,0x02,0x9000,0x6000):
+        raise ValueError("NVS non reconnue à 0x9000/0x6000 : migration USB interdite")
+    if not factory or factory[0:3]!=(0x00,0x00,0x10000) or factory[3]<0x200000:
+        raise ValueError("Ancien firmware non compatible avec notre migration Voltronic")
+    if "ota_0" in parts or "ota_1" in parts:
+        raise ValueError("Une table OTA est déjà présente : ne pas réécrire les partitions")
+    for name,(_ty,_sub,start,size) in parts.items():
+        if name!="nvs" and start<0xf000 and start+size>0x9000:
+            raise ValueError("Une autre partition recouvre la NVS : migration interdite")
+
+
+def flash_voltronic_ota_migration(
+    port:str,directory:Path,backup:Path,log:Callable[[str],None]
+)->None:
+    """One controlled USB migration; never write without full private NVS backup.
+
+    A false negative is safer than silently erasing Wi-Fi, Tailscale identity,
+    inverter setup code or another device's flash.
+    """
     boot,table,app=validate_migration_images(directory)
     if not port.startswith("COM") or not port[3:].isdigit():
         raise ValueError("Port COM invalide")
-    log("Migration OTA : flash séparé aux offsets 0x0, 0x8000 et 0x10000 ; NVS ignorée.")
+    if not isinstance(backup,Path) or backup.suffix.lower()!=".bin":
+        raise ValueError("Choisir un fichier de sauvegarde NVS local .bin")
+    if backup.exists():
+        raise ValueError("Ce fichier de sauvegarde existe déjà : nouveau nom requis")
+    backup.parent.mkdir(parents=True,exist_ok=True)
     from esptool import main as esptool_main
-    esptool_main([
-        "--chip","esp32s3","--port",port,"--baud","460800",
-        "write_flash","--flash_mode","dio","--flash_freq","40m",
-        "--flash_size","16MB",
-        "0x0",str(boot),
-        "0x8000",str(table),
-        "0x10000",str(app)
-    ])
-    log("Bootloader, table dual-OTA et application écrits sans effacement de NVS.")
+    base=["--chip","esp32s3","--port",port,"--baud","115200"]
+    with tempfile.TemporaryDirectory(prefix="se-voltronic-ota-") as temp:
+        tempdir=Path(temp)
+        original_table=tempdir/"original-partitions.bin"
+        original_nvs=tempdir/"original-nvs.bin"
+        check_nvs=tempdir/"nvs-after.bin"
+        final_table=tempdir/"partitions-after.bin"
+        log("Lecture USB des partitions Voltronic avant toute écriture…")
+        esptool_main(base+["--after","no_reset","read_flash",
+                     "0x8000","0x1000",str(original_table)])
+        if not original_table.exists() or original_table.stat().st_size!=0x1000:
+            raise ValueError("Lecture de la table de partitions incomplète")
+        check_installed_voltronic_layout(original_table.read_bytes())
+        log("Partitionnement single-app confirmé. Sauvegarde NVS privée…")
+        esptool_main(base+["--before","no_reset","--after","no_reset",
+                     "read_flash","0x9000","0x6000",str(original_nvs)])
+        if not original_nvs.is_file() or original_nvs.stat().st_size!=0x6000:
+            raise ValueError("Lecture NVS incomplète : aucune écriture autorisée")
+        protected=original_nvs.read_bytes()
+        # Verify identity from actual NVS keys: no accidental Deye or VPN flash.
+        if b"se_volt" not in protected or b"usb_config" not in protected:
+            raise ValueError("Identité NVS Voltronic non reconnue : aucun flash")
+        with backup.open("xb") as output:
+            output.write(protected)
+        if hashlib.sha256(backup.read_bytes()).digest()!=hashlib.sha256(protected).digest():
+            backup.unlink(missing_ok=True)
+            raise ValueError("La sauvegarde NVS n'a pas pu être vérifiée")
+        log("Sauvegarde privée NVS vérifiée sur le PC (ne jamais la partager).")
+        # Read-based guard is finished; esptool writes boot+table+APP separately.
+        # ESP-IDF's App-only USB mode can never migrate the partition table.
+        esptool_main(["--chip","esp32s3","--port",port,"--baud","460800",
+            "write_flash","--flash_mode","dio","--flash_freq","40m",
+            "--flash_size","16MB",
+            "0x0",str(boot),"0x8000",str(table),"0x10000",str(app)])
+        log("Images écrites. Relecture des partitions et de la NVS…")
+        esptool_main(base+["--after","no_reset","read_flash",
+                     "0x8000","0x1000",str(final_table)])
+        if not final_table.is_file() or parse_partition_table(final_table.read_bytes())!=EXPECTED:
+            raise ValueError("Table OTA non confirmée : conserver la sauvegarde NVS")
+        esptool_main(base+["--before","no_reset","read_flash",
+                     "0x9000","0x6000",str(check_nvs)])
+        if not check_nvs.is_file() or check_nvs.read_bytes()!=protected:
+            raise ValueError("NVS modifiée lors du flash : restauration physique requise")
+    log("Migration OTA Voltronic terminée et vérifiée. Redémarrer le S3 et relire /api/v1/ota/status.")
