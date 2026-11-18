@@ -9,7 +9,7 @@ root=Path(__file__).resolve().parents[1]
 code=(root/"main"/"main.c").read_text()
 handler=code.split("static esp_err_t relay_parameter_control(httpd_req_t *req) {",1)[1].split("\nstatic ",1)[0]
 health=code.split("static esp_err_t health_handler(httpd_req_t *req) {",1)[1].split("\nstatic ",1)[0]
-assert 'GATEWAY_VERSION "0.3.12-dev-confirmed-writes"' in code
+assert 'GATEWAY_VERSION "0.3.13-dev-vpn-s3-ota"' in code
 assert "remote_parameter_writes_supported" in health
 assert "remote_write_confirmation_required" in health
 assert "remote_parameter_writes_opt_in" in health  # old APK compatibility
