@@ -18,6 +18,8 @@ internal object SmartEnergyUpdateFeed {
         "https://raw.githubusercontent.com/tapion69/smart-energy-android/main/updates/jk-esp32.json"
     const val DEYE_MANIFEST =
         "https://raw.githubusercontent.com/tapion69/smart-energy-android/main/updates/deye.json"
+    const val VPN_MANIFEST =
+        "https://raw.githubusercontent.com/tapion69/smart-energy-android/main/updates/vpn-gateway.json"
 
     data class AndroidRelease(
         val version:String,val versionCode:Long,val downloadUrl:String,
@@ -133,10 +135,32 @@ internal object SmartEnergyUpdateFeed {
         return FirmwareRelease(version,url,sha.lowercase(),board=="esp32s3-n16r8")
     }
 
+    /** Only an officially published S3 gateway asset may be considered.
+     * Classic ESP32 VPN and legacy single-app S3 images can never be updated
+     * by this protocol. The ESP itself performs the same manifest validation.
+     */
+    fun parseVpn(text:String,currentVersion:String):FirmwareRelease? {
+        val json=JSONObject(text)
+        if(json.optInt("schemaVersion")!=1 ||
+            json.optString("product")!="smart-energy-vpn-gateway" ||
+            !json.optBoolean("available"))return null
+        val version=json.optString("version","")
+        if(!version.matches(Regex("[0-9]{1,3}\\.[0-9]{1,3}\\.[0-9]{1,3}")) ||
+            !newerFirmware(version,currentVersion))return null
+        if(json.optString("target")!="esp32s3-n16r8")return null
+        val url=json.optString("downloadUrl","")
+        val exact="https://github.com/tapion69/smart-energy-android/releases/"+
+            "download/vpn-gateway-v$version/SmartEnergy-VPN-S3-OTA.bin"
+        val hash=json.optString("sha256","")
+        if(url!=exact || !officialFirmwareUrl(url) ||
+            !hash.matches(Regex("[a-fA-F0-9]{64}")))return null
+        return FirmwareRelease(version,url,hash.lowercase(),true)
+    }
+
     /** Fail closed: bounded HTTPS, no redirects to arbitrary providers. */
     fun fetchPublicManifest(url:String):String {
         require(url==ANDROID_MANIFEST || url==VOLTRONIC_MANIFEST ||
-            url==JK_MANIFEST || url==DEYE_MANIFEST)
+            url==JK_MANIFEST || url==DEYE_MANIFEST || url==VPN_MANIFEST)
         val conn=URL(url).openConnection() as HttpURLConnection
         return try {
             conn.requestMethod="GET"
