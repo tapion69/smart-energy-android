@@ -11,6 +11,11 @@ on:
       - '.github/workflows/build-vpn-gateway.yml'
   workflow_dispatch:
 
+# Avoid wasting runners on obsolete intermediate BLE patches.
+concurrency:
+  group: smart-energy-ble-firmware-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   policy:
     name: VPN routing and security policy tests
