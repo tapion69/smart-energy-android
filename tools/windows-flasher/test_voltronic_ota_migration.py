@@ -4,7 +4,7 @@ import tempfile
 from pathlib import Path
 from voltronic_ota_migration import (
     EXPECTED,BOOT,PARTITION,APP,parse_partition_table,
-    validate_migration_images
+    validate_migration_images,check_installed_voltronic_layout
 )
 
 class MigrationTests(unittest.TestCase):
@@ -21,6 +21,28 @@ class MigrationTests(unittest.TestCase):
         self.assertEqual(parse_partition_table(self.make_table()),EXPECTED)
         self.assertEqual(EXPECTED["nvs"][2:],(0x9000,0x6000))
         self.assertEqual(EXPECTED["ota_1"][2],0x410000)
+    def test_installed_single_app_is_required_for_usb_migration(self):
+        def row(name,kind,sub,offset,size):
+            entry=bytearray(32)
+            struct.pack_into("<HBBII",entry,0,0x50aa,kind,sub,offset,size)
+            entry[12:12+len(name)]=name.encode("ascii")
+            return bytes(entry)
+        original=(row("nvs",1,2,0x9000,0x6000)+
+                  row("phy_init",1,1,0xf000,0x1000)+
+                  row("factory",0,0,0x10000,0x300000)+
+                  b"\\xff"*32)
+        check_installed_voltronic_layout(original)
+        with self.assertRaises(ValueError):
+            check_installed_voltronic_layout(original.replace(
+                row("nvs",1,2,0x9000,0x6000),row("nvs",1,2,0xA000,0x5000)))
+        with self.assertRaises(ValueError):
+            check_installed_voltronic_layout(original.replace(
+                b"\\xff"*32,row("ota_1",0,0x11,0x410000,0x200000)+b"\\xff"*32))
+        with self.assertRaises(ValueError):
+            check_installed_voltronic_layout(original.replace(
+                row("factory",0,0,0x10000,0x300000),
+                row("factory",0,0,0x10000,0x100000)))
+
     def test_no_merged_image_or_wrong_chip(self):
         with tempfile.TemporaryDirectory() as d:
             folder=Path(d)
