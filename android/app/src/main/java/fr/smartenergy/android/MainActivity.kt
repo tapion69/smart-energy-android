@@ -5050,20 +5050,23 @@ class MainActivity : Activity() {
                 updateFeedback.text=summary
                 if(available.isNotEmpty()) {
                     val choices=available.map {
-                        "ESP${it.first.slot} → ${it.second.version}"
+                        "ESP${it.first.slot}  →  ${it.second.version}  ·  Sélectionner"
                     }.toTypedArray()
+                    // AlertDialog.Builder.setMessage() and setItems() are mutually
+                    // exclusive list-content modes: setMessage hides the selectable
+                    // reader rows, leaving only "Plus tard" visible.
                     AlertDialog.Builder(this)
-                        .setTitle("Mise à jour OTA JK disponible")
-                        .setMessage("Choisis un lecteur. Vérification SHA-256 et confirmation "+
-                            "avant le flash. Conserve son alimentation, et ses paramètres "+
-                            "Wi-Fi, BLE et association en NVS.")
+                        .setTitle("OTA JK disponible · Choisis un ESP")
                         .setItems(choices) { _,which ->
                             val (reader,release)=available[which]
                             AlertDialog.Builder(this)
                                 .setTitle("CONFIRMER OTA JK · ESP${reader.slot}")
                                 .setMessage("Installer ${release.version} sur ESP${reader.slot} "+
                                     "depuis GitHub, exclusivement en Wi-Fi local ? "+
-                                    "Ne débranche pas l'ESP32 pendant l'opération.")
+                                    "L'image sera vérifiée par SHA-256 avant le flash. "+
+                                    "Ne débranche pas l'ESP32 et conserve son alimentation. "+
+                                    "Les paramètres Wi-Fi, BLE et les associations NVS "+
+                                    "doivent rester inchangés.")
                                 .setNegativeButton("Annuler",null)
                                 .setPositiveButton("Installer") { _,_ ->
                                     updateFeedback.text="ESP${reader.slot} : OTA JK en cours…"
