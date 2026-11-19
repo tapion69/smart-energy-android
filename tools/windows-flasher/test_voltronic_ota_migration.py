@@ -4,7 +4,8 @@ import tempfile
 from pathlib import Path
 from voltronic_ota_migration import (
     EXPECTED,BOOT,PARTITION,APP,parse_partition_table,
-    validate_migration_images,check_installed_voltronic_layout
+    validate_migration_images,check_installed_voltronic_layout,
+    describe_partition_table
 )
 
 class MigrationTests(unittest.TestCase):
@@ -32,6 +33,13 @@ class MigrationTests(unittest.TestCase):
                   row("factory",0,0,0x10000,0x300000)+
                   b"\xff"*32)
         check_installed_voltronic_layout(original)
+        # Stock ESP-IDF single_app_large can be 1.5 MB.
+        for old_size in (0x100000,0x180000,0x1e0000,0x200000):
+            variant=original.replace(row("factory",0,0,0x10000,0x300000),
+                                      row("factory",0,0,0x10000,old_size))
+            check_installed_voltronic_layout(variant)
+        self.assertIn("taille=0x180000",
+            describe_partition_table({"factory":(0,0,0x10000,0x180000)}))
         with self.assertRaises(ValueError):
             check_installed_voltronic_layout(original.replace(
                 row("nvs",1,2,0x9000,0x6000),row("nvs",1,2,0xA000,0x5000)))
@@ -41,7 +49,33 @@ class MigrationTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             check_installed_voltronic_layout(original.replace(
                 row("factory",0,0,0x10000,0x300000),
-                row("factory",0,0,0x10000,0x100000)))
+                row("factory",0,0,0x10000,0x80000)))
+
+    def test_reject_unknown_data_partitions_and_non_ota_safe_layout(self):
+        def row(name,kind,sub,offset,size):
+            entry=bytearray(32)
+            struct.pack_into("<HBBII",entry,0,0x50aa,kind,sub,offset,size)
+            entry[12:12+len(name)]=name.encode("ascii")
+            return bytes(entry)
+        base=(row("nvs",1,2,0x9000,0x6000)+
+              row("phy_init",1,1,0xf000,0x1000)+
+              row("factory",0,0,0x10000,0x180000))
+        with self.assertRaisesRegex(ValueError,"supplémentaires"):
+            check_installed_voltronic_layout(base+
+                row("storage",1,0x82,0x210000,0x10000)+b"\\xff"*32)
+        with self.assertRaisesRegex(ValueError,"ancienne configuration OTA"):
+            check_installed_voltronic_layout(base+
+                row("otadata",1,0,0x610000,0x2000)+b"\\xff"*32)
+        with self.assertRaisesRegex(ValueError,"PHY non reconnue"):
+            check_installed_voltronic_layout(
+                row("nvs",1,2,0x9000,0x6000)+
+                row("phy_init",1,1,0xe000,0x1000)+
+                row("factory",0,0,0x10000,0x180000)+b"\\xff"*32)
+        with self.assertRaisesRegex(ValueError,"Ancien partitionnement"):
+            check_installed_voltronic_layout(
+                row("nvs",1,2,0x9000,0x6000)+
+                row("phy_init",1,1,0xf000,0x1000)+
+                row("factory",0,0,0x20000,0x180000)+b"\\xff"*32)
 
     def test_no_merged_image_or_wrong_chip(self):
         with tempfile.TemporaryDirectory() as d:
