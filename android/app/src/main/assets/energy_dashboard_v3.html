@@ -228,12 +228,12 @@ function renderVpnVoltronicStatus(items){
   if(!inv||inv.fresh===true)return;
   var k=inv.lastHttpErrorKind||'';
   var m=k==='VPN_INV_NON_CONFIGURE_503'?
-   'non enregistré dans la passerelle VPN (503) : vérifier la confirmation NVS':
+   'cible non résolue par le VPN (503) : IP/code ou découverte par nom':
    k==='VPN_ESP_VOLTRONIC_INJOIGNABLE_502'?
    'passerelle VPN joignable, mais ESP32-S3 Voltronic inaccessible (502)':
    k==='VPN_TOKEN_INCORRECT_401'?'token VPN refusé (401)':
    k==='VPN_FIRMWARE_SANS_ROUTE_VOLTRONIC_404'?'firmware VPN trop ancien (404)':
-   k==='VPN_ACCES_REFUSE_403'?'accès hors VPN refusé (403)':'';
+   k==='VPN_ACCES_REFUSE_403'?'rejet de cette requête par le contrôle du tunnel VPN (403)':'';
   if(m)warnings.push('INV'+inv.slot+' : '+m);
  });
  var box=el('vpnVoltronicNote');
