@@ -62,20 +62,20 @@ class MigrationTests(unittest.TestCase):
               row("factory",0,0,0x10000,0x180000))
         with self.assertRaisesRegex(ValueError,"supplémentaires"):
             check_installed_voltronic_layout(base+
-                row("storage",1,0x82,0x210000,0x10000)+b"\\xff"*32)
+                row("storage",1,0x82,0x210000,0x10000)+b"\xff"*32)
         with self.assertRaisesRegex(ValueError,"ancienne configuration OTA"):
             check_installed_voltronic_layout(base+
-                row("otadata",1,0,0x610000,0x2000)+b"\\xff"*32)
+                row("otadata",1,0,0x610000,0x2000)+b"\xff"*32)
         with self.assertRaisesRegex(ValueError,"PHY non reconnue"):
             check_installed_voltronic_layout(
                 row("nvs",1,2,0x9000,0x6000)+
                 row("phy_init",1,1,0xe000,0x1000)+
-                row("factory",0,0,0x10000,0x180000)+b"\\xff"*32)
+                row("factory",0,0,0x10000,0x180000)+b"\xff"*32)
         with self.assertRaisesRegex(ValueError,"Ancien partitionnement"):
             check_installed_voltronic_layout(
                 row("nvs",1,2,0x9000,0x6000)+
                 row("phy_init",1,1,0xf000,0x1000)+
-                row("factory",0,0,0x20000,0x180000)+b"\\xff"*32)
+                row("factory",0,0,0x20000,0x180000)+b"\xff"*32)
 
     def test_no_merged_image_or_wrong_chip(self):
         with tempfile.TemporaryDirectory() as d:
