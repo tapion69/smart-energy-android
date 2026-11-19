@@ -14,7 +14,7 @@ web_path = root / "android/app/src/main/java/fr/smartenergy/android/EnergyDashbo
 
 def git_blob_sha(path: Path) -> str:
     data=path.read_bytes()
-    return hashlib.sha1(b"blob "+str(len(data)).encode("ascii")+b"\\0"+data).hexdigest()
+    return hashlib.sha1(b"blob "+str(len(data)).encode("ascii")+bytes([0])+data).hexdigest()
 
 # Exact Git blob contents of the original 0.3.65-dev implementation.
 assert git_blob_sha(fleet_path) == "cc9a6e0af4a22eba1e45b5ae3de163bab02e592d"
