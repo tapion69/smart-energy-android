@@ -72,7 +72,7 @@ def describe_partition_table(parts:dict[str,tuple[int,int,int,int]]) -> str:
 def check_installed_voltronic_layout(raw:bytes) -> None:
     """Accept compatible stock ESP-IDF SINGLE_APP layouts, not just >=2MB.
 
-    The old factory partition's size is not the target OTA partition size.
+    The old factory partition's size is not the target OTA partition size.\n    ESP-IDF requires application START addresses to align to 64 KiB, but\n    the PARTITION SIZE may align to 4 KiB (0x1000); 0x177000 is valid.
     Only the old offset, exact NVS/PHY entries and absence of other stored
     data matter here; the *new* partition layout remains strictly checked
     by validate_migration_images(), and the device's NVS keys before writes.
@@ -99,12 +99,12 @@ def check_installed_voltronic_layout(raw:bytes) -> None:
     factory=parts.get("factory")
     if not factory or factory[0:3]!=(0x00,0x00,0x10000) or (
         factory[3]<0x100000 or factory[3]>0xe00000 or
-        factory[3]%0x10000!=0
+        factory[3]%0x1000!=0
     ):
         raise ValueError(
             "Ancien partitionnement Voltronic incompatible : "
             "la partition application doit commencer à 0x10000 "
-            "et avoir une taille ESP-IDF valide d'au moins 1 Mo. "
+            "et avoir une taille ESP-IDF valide d'au moins 1 Mo, alignée sur 4 Ko. "
             "Partitions lues : "+details)
     # No old partition may overlap protected NVS or ESP-IDF partition table.
     for name,(_ty,_sub,start,size) in parts.items():
