@@ -2150,6 +2150,7 @@ class MainActivity : Activity() {
         lastRemoteAttempt=android.os.SystemClock.elapsedRealtime()
         state("Vérification Tailscale → ESP32 VPN → ESP32 JK…")
         async {
+            var connectionVerified=false
             try {
                 // Only the public, read-only health request is made before auth.
                 val health = httpCall("GET", "/api/v1/health")
@@ -2211,6 +2212,7 @@ class MainActivity : Activity() {
                 saveGatewayToken(secret)
                 prefs.edit().putString("remote_gateway_ip", host).apply()
                 lanVerified = true
+                connectionVerified=true
                 runOnUiThread {
                     gatewayTokenEdit.text.clear()
                     remoteStatus.text = if(gatewayRemoteParameterWritesAvailable)
@@ -2220,8 +2222,11 @@ class MainActivity : Activity() {
                     state("Accès distant sécurisé confirmé · JK associé reconnu.")
                 }
             } finally {
-                // Retry promptly on a failed handshake; back off thereafter.
-                if(!lanVerified) {
+                // Early samples are allowed after pairing, but a later failed
+                // VPN check must not leave a false authenticated connection.
+                if(!connectionVerified) {
+                    lanVerified=false
+                    gatewayRemoteParameterWritesAvailable=false
                     remoteRetryFailures=(remoteRetryFailures+1).coerceAtMost(4)
                     lastRemoteAttempt=android.os.SystemClock.elapsedRealtime()
                 } else remoteRetryFailures=0
