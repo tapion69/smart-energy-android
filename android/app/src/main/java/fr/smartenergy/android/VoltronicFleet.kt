@@ -10,6 +10,8 @@ import java.time.ZoneOffset
 import org.json.JSONArray
 import org.json.JSONObject
 import java.util.concurrent.ExecutorService
+import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicInteger
 import kotlin.math.abs
 
 /**
@@ -135,10 +137,13 @@ class VoltronicFleet(
             Config(slot,kind,host,port,code)
         }
         val previous=Array(3){ JSONObject(states[it].toString()) }
+        val remaining=AtomicInteger(configs.size)
+        val needsShortRetry=AtomicBoolean(false)
         busy=true
-        worker.execute {
-            var needsShortRetry=false
-            for(c in configs) {
+        // At most two HTTP reads run at once. A dead INV1 must not hold
+        // INV2/INV3 behind its VPN timeout; no extra polling is introduced.
+        for(c in configs) {
+            worker.execute {
                 val requestStartedAt=SystemClock.elapsedRealtime()
                 val prior=previous[c.slot-1]
                 val next=when {
@@ -187,7 +192,7 @@ class VoltronicFleet(
                             errors,prior.optLong("sampleAtMs",-1L),
                             prior.optLong("qpigsAgeMs",-1L),SystemClock.elapsedRealtime())
                         if(VoltronicHttpResilience.quickRetry(errors))
-                            needsShortRetry=true
+                            needsShortRetry.set(true)
                         JSONObject(prior.toString()).put("configured",true)
                             .put("slot",c.slot).put("fresh",recent)
                             .put("transportReachable",false)
@@ -213,14 +218,14 @@ class VoltronicFleet(
                     states[slotIndex]=next
                     mainHandler.removeCallbacks(partialRender)
                     mainHandler.postDelayed(partialRender,120L)
+                    // Only the final completed slot releases the poll guard.
+                    if(remaining.decrementAndGet()==0) {
+                        busy=false
+                        // Preserve existing bounded retry on transient errors.
+                        if(needsShortRetry.get())
+                            lastPoll=SystemClock.elapsedRealtime()-6000L
+                    }
                 }
-            }
-            mainHandler.post {
-                busy=false
-                // Short bounded retry on next 2.5s UI tick after 1-2 misses.
-                if(needsShortRetry)
-                    lastPoll=SystemClock.elapsedRealtime()-6000L
-                // Slot-specific callbacks above have already published results.
             }
         }
     }
