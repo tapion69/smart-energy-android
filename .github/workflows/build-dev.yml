@@ -2,7 +2,7 @@ name: Build development prototypes
 
 on:
   push:
-    branches: [main, dev, 'fix/jk-discovery-pairing-20261116', 'fix/voltronic-grid-sum-0360-20261118', 'perf/vpn-progressive-voltronic-20261118', 'feature/ble-wifi-recovery-universal-20261118', 'feature/vpn-s3-ota-app-20261118', 'fix/jk-voltronic-ota-migration-20261118', 'fix/jk-ota-dialog-choice-0365-20261119', 'perf/apk-live-latency-20261119', 'fix/voltronic-recovery-0367-20261119']
+    branches: [main, dev, 'fix/jk-discovery-pairing-20261116', 'fix/voltronic-grid-sum-0360-20261118', 'perf/vpn-progressive-voltronic-20261118', 'feature/ble-wifi-recovery-universal-20261118', 'feature/vpn-s3-ota-app-20261118', 'fix/jk-voltronic-ota-migration-20261118', 'fix/jk-ota-dialog-choice-0365-20261119', 'perf/apk-live-latency-20261119', 'fix/voltronic-recovery-0367-20261119', 'fix/voltronic-local-choice-0368-20261119']
     paths:
       - 'android/**'
       - 'firmware/jk-esp32/**'
@@ -74,6 +74,8 @@ jobs:
         run: python3 tools/tests/test_vpn_progressive.py
       - name: Check APK live latency isolation and UI coalescing
         run: python3 tools/tests/test_apk_live_latency.py
+      - name: Check LAN override stays explicit and JK routing unchanged
+        run: python3 tools/tests/test_inverter_lan_override.py
       - name: Validate isolated Bluetooth recovery implementation
         run: python3 tools/tests/test_ble_wifi_recovery.py
       - name: Validate OTA VPN layout and authenticated command
@@ -144,8 +146,8 @@ jobs:
           retention-days: 30
 
   publish-android-fix:
-    name: Publish verified signed 0.3.67 and enable in-app upgrades
-    if: github.ref == 'refs/heads/fix/voltronic-recovery-0367-20261119'
+    name: Publish verified signed 0.3.68 and enable in-app upgrades
+    if: github.ref == 'refs/heads/fix/voltronic-local-choice-0368-20261119'
     needs: [android]
     runs-on: ubuntu-latest
     permissions:
@@ -182,8 +184,8 @@ jobs:
           AAPT=$(find "$ANDROID_HOME/build-tools" -type f -name aapt | sort -V | tail -n 1)
           "$AAPT" dump badging "$APK" | head -n 1 | tee /tmp/smart-energy-package
           grep -q "name='fr.smartenergy.android'" /tmp/smart-energy-package
-          grep -q "versionCode='81'" /tmp/smart-energy-package
-          grep -q "versionName='0.3.67-dev'" /tmp/smart-energy-package
+          grep -q "versionCode='82'" /tmp/smart-energy-package
+          grep -q "versionName='0.3.68-dev'" /tmp/smart-energy-package
           sha256sum "$APK"
       - name: Publish signed release and update canonical manifest
         shell: bash
@@ -191,7 +193,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          TAG=android-v0.3.67-dev
+          TAG=android-v0.3.68-dev
           APK=release-files/SmartEnergy-Android.apk
           HASH=$(sha256sum "$APK" | awk '{print $1}')
           # Never overwrite an existing release or replace newer updates.
@@ -205,13 +207,13 @@ jobs:
           import base64,json
           r=json.load(open('/tmp/manifest-response.json'))
           current=json.loads(base64.b64decode(r['content']))
-          if current.get('versionCode') != 80:
+          if current.get('versionCode') != 81:
               raise SystemExit('Official manifest changed; refusing to overwrite')
           PY
           gh release create "$TAG" "$APK" \
             --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" \
-            --title "Smart Energy Android 0.3.67 (restore Voltronic inverter readings)" \
-            --notes "Recovery from 0.3.66: restore exact 0.3.65 single-file Voltronic polling and WebView dashboard behavior; keep independent JK telemetry, VPN reconnect improvements and diagnostics. No ESP firmware changes, no BMS config reset."
+            --title "Smart Energy Android 0.3.68 (direct home-WiFi inverter option)" \
+            --notes "Adds a session-only, explicit local Wi-Fi inverter mode that uses already paired local ESP IPs while JK can remain on Tailscale. Rejects activation without local Wi-Fi and configured local IP/code for every inverter; automatically expires if Wi-Fi network changes. Clarifies VPN error messages 503 and 403. No ESP firmware changes, no JK routing changes."
           export HASH
           python - <<'PY'
           import base64,json,os
@@ -220,15 +222,15 @@ jobs:
             'schemaVersion':1,
             'product':'smart-energy-android',
             'available':True,
-            'versionName':'0.3.67-dev',
-            'versionCode':81,
-            'downloadUrl':'https://github.com/tapion69/smart-energy-android/releases/download/android-v0.3.67-dev/SmartEnergy-Android.apk',
+            'versionName':'0.3.68-dev',
+            'versionCode':82,
+            'downloadUrl':'https://github.com/tapion69/smart-energy-android/releases/download/android-v0.3.68-dev/SmartEnergy-Android.apk',
             'sha256':os.environ['HASH'],
-            'releaseNotesUrl':'https://github.com/tapion69/smart-energy-android/releases/tag/android-v0.3.67-dev',
+            'releaseNotesUrl':'https://github.com/tapion69/smart-energy-android/releases/tag/android-v0.3.68-dev',
             'minimumSupportedVersionCode':1,
           }
           payload={
-            'message':'Publish verified Smart Energy Android 0.3.67 signed update',
+            'message':'Publish verified Smart Energy Android 0.3.68 signed update',
             'content':base64.b64encode((json.dumps(m,indent=2,ensure_ascii=False)+'\n').encode()).decode(),
             'sha':r['sha'],
             'branch':'main',
@@ -237,7 +239,7 @@ jobs:
           PY
           gh api --method PUT "repos/$GITHUB_REPOSITORY/contents/updates/android.json" \
             --input /tmp/android-update-request.json
-          echo "Official 0.3.67 manifest published after APK verification."
+          echo "Official 0.3.68 manifest published after APK verification."
   migration-backup-policy:
     name: Validate legacy backup excludes private credentials
     runs-on: ubuntu-latest
