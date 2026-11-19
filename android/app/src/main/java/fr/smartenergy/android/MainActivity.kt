@@ -183,6 +183,22 @@ class MainActivity : Activity() {
     private val voltronicProfiles by lazy { VoltronicProfileStore(prefs) }
     private lateinit var voltronicProfileFeedback:TextView
     private lateinit var migrationFeedback:TextView
+    // Explicit, session-only LAN choice: never send inverter reader codes over
+    // an arbitrary Wi-Fi on a different visit. JK keeps its VPN routing.
+    private var inverterLanSessionNetwork:android.net.Network?=null
+    private var inverterLanSessionEnabled=false
+    private var inverterLanSessionCheckbox:CheckBox?=null
+    private fun inverterLocalSessionActive():Boolean {
+        if(!inverterLanSessionEnabled)return false
+        val wifi=voltronicWifiNetwork()
+        val active=wifi!=null && wifi==inverterLanSessionNetwork
+        if(!active) {
+            inverterLanSessionEnabled=false
+            inverterLanSessionNetwork=null
+            inverterLanSessionCheckbox?.isChecked=false
+        }
+        return active
+    }
     // Bound to a physical Wi-Fi transport, not to an active Tailscale tunnel.
     // Voltronic is read-only and must never expose its setup code to a VPN proxy.
     private fun voltronicWifiNetwork():android.net.Network? =
@@ -198,7 +214,10 @@ class MainActivity : Activity() {
                 ?: connectivity.allNetworks.firstOrNull(::wifi)
         } catch (_:Exception) { null }
     private fun voltronicVpnRoute():VoltronicVpnRoute?=try {
-        if(selectedRoute()!=JkTransportPolicy.Route.GATEWAY_VPN || !vpnConnected())
+        // When explicitly opted in on the current home Wi-Fi, inverters
+        // connect directly to their known LAN ESPs even if JK uses Tailscale.
+        if(inverterLocalSessionActive() ||
+           selectedRoute()!=JkTransportPolicy.Route.GATEWAY_VPN || !vpnConnected())
             null
         else {
             val gateway=prefs.getString("remote_gateway_ip","") ?: ""
@@ -1061,6 +1080,49 @@ class MainActivity : Activity() {
 
         // Three equal inverter slots; preserve the original INV1 storage keys.
         val inverter=section(advanced,"Expert · Onduleurs 1 / 2 / 3 (configuration manuelle)",false)
+        val inverterLanCheckbox=CheckBox(this).apply {
+            text="Utiliser le Wi-Fi local pour mes onduleurs pendant cette session"
+            setTextColor(normal)
+            isChecked=false
+        }
+        inverterLanSessionCheckbox=inverterLanCheckbox
+        add(inverter,inverterLanCheckbox,6)
+        add(inverter,label("À activer uniquement sur le Wi-Fi de ta maison. "+
+            "Les onduleurs utilisent alors directement les IP locales déjà associées, "+
+            "même si Tailscale reste actif pour les batteries JK. "+
+            "Le choix expire au changement de réseau Wi-Fi et au redémarrage "+
+            "de l'application ; il ne modifie aucune configuration ESP.",12f,color=subdued))
+        inverterLanCheckbox.setOnCheckedChangeListener { _,checked ->
+            if(checked) {
+                val network=voltronicWifiNetwork()
+                val configured=(1..3).filter{voltronicFleet.configured(it)}
+                val ready=network!=null && configured.isNotEmpty() &&
+                    configured.all { slot ->
+                        val prefix=if(slot==1)"inverter_probe_" else "inverter_${slot}_"
+                        val ip=prefs.getString(prefix+"ip","") ?: ""
+                        val codeKey=if(slot==1)"premium_voltronic_code_cipher"
+                            else "premium_voltronic_${slot}_code_cipher"
+                        SunSpecReadOnly.isPrivateIPv4(ip) &&
+                            auxiliaryCode(codeKey).length in 8..32
+                    }
+                if(!ready) {
+                    inverterLanSessionEnabled=false
+                    inverterLanSessionNetwork=null
+                    inverterLanCheckbox.isChecked=false
+                    state("Wi-Fi local indisponible ou IP/code d'un onduleur non enregistré. "+
+                        "Associe d'abord chaque ESP Voltronic sur ton Wi-Fi maison.")
+                } else {
+                    inverterLanSessionNetwork=network
+                    inverterLanSessionEnabled=true
+                    state("Onduleurs : lecture directe sur le Wi-Fi courant. JK : route inchangée.")
+                }
+            } else {
+                inverterLanSessionEnabled=false
+                inverterLanSessionNetwork=null
+                state("Onduleurs : mode automatique VPN ou Wi-Fi rétabli.")
+            }
+            voltronicFleet.changed()
+        }
         add(inverter,label("ESP32 Onduleur découvert par nom via le VPN. Pour Deye, "+
             "l'IP du lecteur ESP32 est distincte de l'IP de la clé Wi-Fi. "+
             "Le firmware Deye expérimental lit mesures et paramètres ; "+
