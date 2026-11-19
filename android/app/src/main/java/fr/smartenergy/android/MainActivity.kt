@@ -4368,7 +4368,7 @@ class MainActivity : Activity() {
 
     private fun showTelemetry(rawResponse: JSONObject,newRead:Boolean=false) {
         if(::dashboardDebugStatus.isInitialized)dashboardDebugStatus.text=
-            status.text+" · JK HTTP "+lastJkHttpRoundTripMs+" ms"
+            status.text.toString()+" · JK HTTP "+lastJkHttpRoundTripMs+" ms"
         lastTelemetry=rawResponse
         val now=android.os.SystemClock.elapsedRealtime()
         if(newRead)fleetCache[activeReaderSlot]=now to rawResponse
