@@ -160,8 +160,9 @@ class MainActivity : Activity() {
     private val warmReadersPending=mutableSetOf<Int>() // accessed only from UI
     private var lastWarmStartAt=0L
     private val settingsWorker=Executors.newSingleThreadExecutor()
-    // Two simultaneous Voltronic reads: slow INV1 does not block INV2/3.
-    private val inverterWorker=Executors.newFixedThreadPool(2)
+    // Known-good Voltronic S3/VPN path: one ordered read at a time.
+    // The gateway's synchronous relay can stall with parallel requests.
+    private val inverterWorker=Executors.newSingleThreadExecutor()
     // Low-frequency solar-counter reads must not delay live inverter telemetry.
     private val inverterEnergyWorker=Executors.newSingleThreadExecutor()
     // One shared native navigation regardless of inverter/JK availability.
