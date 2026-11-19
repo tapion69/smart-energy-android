@@ -1,0 +1,60 @@
+name: Smart Energy Windows flasher Voltronic legacy partition fix
+
+on:
+  push:
+    branches: ['fix/voltronic-ota-legacy-partition-20261119']
+    paths:
+      - 'tools/windows-flasher/**'
+      - '.github/workflows/build-voltronic-ota-flasher-fix.yml'
+  workflow_dispatch:
+
+permissions:
+  actions: read
+  contents: read
+
+jobs:
+  windows-bundle:
+    name: Build corrected Voltronic OTA-compatible Windows flasher
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Reuse precompiled firmwares from validated successful run
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $ErrorActionPreference="Stop"
+          gh run download 44372956150 -R "$env:GITHUB_REPOSITORY" -n "SmartEnergy-VPN-ESP32-USB-PRECOMPILED" -D "firmware/vpn-gateway/dist"
+          gh run download 44372956150 -R "$env:GITHUB_REPOSITORY" -n "SmartEnergy-JK-ESP32-USB-PRECOMPILED" -D "firmware/jk-esp32/dist"
+          gh run download 44372956150 -R "$env:GITHUB_REPOSITORY" -n "SmartEnergy-VPN-ESP32S3-N16R8-USB-PRECOMPILED" -D "firmware/vpn-gateway/dist-s3"
+          gh run download 44372956150 -R "$env:GITHUB_REPOSITORY" -n "SmartEnergy-VOLTRONIC-ESP32S3-N16R8-READONLY" -D "firmware/voltronic-esp32/dist"
+          gh run download 44372956150 -R "$env:GITHUB_REPOSITORY" -n "SmartEnergy-VOLTRONIC-S3-OTA-MIGRATION" -D "firmware/voltronic-esp32/dist-ota"
+          gh run download 44372956150 -R "$env:GITHUB_REPOSITORY" -n "SmartEnergy-DEYE-ESP32S3-N16R8-EXPERIMENTAL" -D "firmware/deye-esp32/dist"
+          foreach($p in @(
+            "firmware/vpn-gateway/dist/smart-energy-vpn-USB-FACTORY-ESP32-0x0.bin",
+            "firmware/voltronic-esp32/dist-ota/voltronic-s3-ota-bootloader.bin",
+            "firmware/voltronic-esp32/dist-ota/voltronic-s3-ota-partition-table.bin",
+            "firmware/voltronic-esp32/dist-ota/voltronic-s3-ota-app.bin",
+            "firmware/jk-esp32/dist/smart-jk-esp32-app-only.bin"
+          )) { if(!(Test-Path $p)) { throw "Required verified firmware missing: $p" } }
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install pinned packaging tools
+        shell: pwsh
+        run: python -m pip install "pyinstaller==6.16.0" "esptool==4.9.0" "pyserial==3.5"
+      - name: Test USB and flash safeguards
+        shell: pwsh
+        working-directory: tools/windows-flasher
+        run: python -m unittest discover -p "test_*.py" -v
+      - name: Package one EXE with both JK and VPN factory/update firmwares
+        shell: pwsh
+        run: |
+          python -m PyInstaller --clean --noconfirm --onefile --windowed --name SmartEnergyFlasher --collect-all esptool --hidden-import serial.tools.list_ports --hidden-import voltronic_usb --hidden-import deye_usb --hidden-import jk_usb --hidden-import voltronic_ota_migration --hidden-import jk_usb_guard --add-data "firmware/vpn-gateway/dist/smart-energy-vpn-USB-FACTORY-ESP32-0x0.bin;embedded_firmware" --add-data "firmware/vpn-gateway/dist/smart-energy-vpn-USB-APP-ESP32-0x10000.bin;embedded_firmware" --add-data "firmware/vpn-gateway/dist-s3/smart-energy-vpn-USB-FACTORY-ESP32S3-N16R8-0x0.bin;embedded_firmware" --add-data "firmware/vpn-gateway/dist-s3/smart-energy-vpn-USB-APP-ESP32S3-N16R8-0x10000.bin;embedded_firmware" --add-data "firmware/jk-esp32/dist/smart-jk-esp32-factory.bin;embedded_firmware" --add-data "firmware/jk-esp32/dist/smart-jk-esp32-app-only.bin;embedded_firmware" --add-data "firmware/voltronic-esp32/dist/smart-energy-voltronic-S3-FACTORY-0x0.bin;embedded_firmware" --add-data "firmware/voltronic-esp32/dist/smart-energy-voltronic-S3-APP-0x10000.bin;embedded_firmware" --add-data "firmware/deye-esp32/dist/smart-energy-deye-S3-FACTORY-0x0.bin;embedded_firmware" --add-data "firmware/deye-esp32/dist/smart-energy-deye-S3-APP-0x10000.bin;embedded_firmware" --add-data "firmware/voltronic-esp32/dist-ota/voltronic-s3-ota-bootloader.bin;embedded_firmware" --add-data "firmware/voltronic-esp32/dist-ota/voltronic-s3-ota-partition-table.bin;embedded_firmware" --add-data "firmware/voltronic-esp32/dist-ota/voltronic-s3-ota-app.bin;embedded_firmware" tools/windows-flasher/smart_energy_flasher.py
+          if ((Get-Item "dist/SmartEnergyFlasher.exe").Length -lt 3000000) { throw "All-in-one Windows EXE suspiciously small" }
+      - name: Upload all-in-one Windows flasher
+        uses: actions/upload-artifact@v4
+        with:
+          name: SmartEnergyFlasher-Windows-VoltronicOTA-Legacy-Fix
+          path: dist/SmartEnergyFlasher.exe
+          retention-days: 30
