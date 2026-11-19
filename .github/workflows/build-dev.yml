@@ -2,7 +2,7 @@ name: Build development prototypes
 
 on:
   push:
-    branches: [main, dev, 'fix/jk-discovery-pairing-20261116', 'fix/voltronic-grid-sum-0360-20261118', 'perf/vpn-progressive-voltronic-20261118', 'feature/ble-wifi-recovery-universal-20261118', 'feature/vpn-s3-ota-app-20261118', 'fix/jk-voltronic-ota-migration-20261118', 'fix/jk-ota-dialog-choice-0365-20261119'
+    branches: [main, dev, 'fix/jk-discovery-pairing-20261116', 'fix/voltronic-grid-sum-0360-20261118', 'perf/vpn-progressive-voltronic-20261118', 'feature/ble-wifi-recovery-universal-20261118', 'feature/vpn-s3-ota-app-20261118', 'fix/jk-voltronic-ota-migration-20261118', 'fix/jk-ota-dialog-choice-0365-20261119']
     paths:
       - 'android/**'
       - 'firmware/jk-esp32/**'
