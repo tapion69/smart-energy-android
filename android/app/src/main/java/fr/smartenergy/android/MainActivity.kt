@@ -86,7 +86,8 @@ class MainActivity : Activity() {
     private lateinit var gatewayIpEdit: EditText
     private lateinit var gatewayTokenEdit: EditText
     @Volatile private var lanConnectionPending = false
-    private var lastRemoteAttempt = 0L
+    @Volatile private var lastRemoteAttempt = 0L
+    @Volatile private var remoteRetryFailures = 0
     private var bootPairTicket = 0L
     private var bootPairCode = ""
     private var bootPairDeviceId = ""
@@ -148,6 +149,9 @@ class MainActivity : Activity() {
     private lateinit var parameterFeedback: TextView
     private var lastParameterFeedback: String = ""
     @Volatile private var telemetryBusy = false
+    // Long /details, pairing or VPN handshakes must not hold live JK GETs.
+    private val liveTelemetryWorker=Executors.newSingleThreadExecutor()
+    private var lastJkHttpRoundTripMs=0L
     private var debugEnabled=false
     private val fleetWorker=Executors.newSingleThreadExecutor()
     // Each reader exposes an HTTP snapshot already maintained by its BLE firmware.
@@ -156,7 +160,8 @@ class MainActivity : Activity() {
     private val warmReadersPending=mutableSetOf<Int>() // accessed only from UI
     private var lastWarmStartAt=0L
     private val settingsWorker=Executors.newSingleThreadExecutor()
-    private val inverterWorker=Executors.newSingleThreadExecutor()
+    // Two simultaneous Voltronic reads: slow INV1 does not block INV2/3.
+    private val inverterWorker=Executors.newFixedThreadPool(2)
     // Low-frequency solar-counter reads must not delay live inverter telemetry.
     private val inverterEnergyWorker=Executors.newSingleThreadExecutor()
     // One shared native navigation regardless of inverter/JK availability.
@@ -281,7 +286,14 @@ class MainActivity : Activity() {
                 if (!lanVerified && !lanConnectionPending) {
                     when(route) {
                         JkTransportPolicy.Route.GATEWAY_VPN -> {
-                            if (now-lastRemoteAttempt>=30000L) {
+                            val delayMs=when(remoteRetryFailures) {
+                                0 -> 2500L
+                                1 -> 5000L
+                                2 -> 10000L
+                                3 -> 20000L
+                                else -> 30000L
+                            }
+                            if (now-lastRemoteAttempt>=delayMs) {
                                 lastRemoteAttempt=now
                                 connectGatewayRemote()
                             }
@@ -1882,8 +1894,17 @@ class MainActivity : Activity() {
             throw networkError(ex)
         }
         return try {
-            conn.connectTimeout = 8000
-            conn.readTimeout = if(remoteGatewayConnection && method=="POST")25000 else 15000
+            // Live snapshots are ESP-side caches. Bound GETs separately from
+            // parameter writes, which keep their conservative timeouts.
+            val fastRead=method=="GET" && path in setOf(
+                "/api/v1/health", "/api/v1/telemetry",
+                "/api/v1/info", "/api/v1/bms")
+            conn.connectTimeout = if(fastRead) {
+                if(remoteGatewayConnection) 4000 else 3000
+            } else 8000
+            conn.readTimeout = if(fastRead) 7000
+                else if(remoteGatewayConnection && method=="POST") 25000
+                else 15000
             conn.requestMethod = method
             conn.setRequestProperty("Accept", "application/json")
             if (remoteGatewayConnection && !setupTransport) {
@@ -2152,6 +2173,18 @@ class MainActivity : Activity() {
                 if (!matchesPairing) {
                     throw IllegalStateException("La passerelle VPN ne présente pas la batterie JK associée localement. Vérifie sa configuration.")
                 }
+                // Health plus matched JK telemetry already authenticate the
+                // reader. Do not wait for the optional /info write check to
+                // publish a valid live sample over a slow VPN.
+                if (!vpnConnected()) throw IllegalStateException("Tailscale s'est déconnecté.")
+                lanVerified=true
+                runOnUiThread {
+                    if(!isFinishing && !isDestroyed &&
+                       remoteGatewayConnection && gatewayHost==host) {
+                        showTelemetry(telemetry,newRead=true)
+                        telemetryStatus.text="JK reçu · vérification des réglages en cours."
+                    }
+                }
                 // Do not trust a global capability alone: match the exact
                 // originally paired JK device and require write-capable firmware.
                 var remoteVersion=""
@@ -2185,9 +2218,13 @@ class MainActivity : Activity() {
                         else "ESP32 VPN connecté en lecture seule."
                     wifiBtn.isEnabled = false
                     state("Accès distant sécurisé confirmé · JK associé reconnu.")
-                    showTelemetry(telemetry,newRead=true)
                 }
             } finally {
+                // Retry promptly on a failed handshake; back off thereafter.
+                if(!lanVerified) {
+                    remoteRetryFailures=(remoteRetryFailures+1).coerceAtMost(4)
+                    lastRemoteAttempt=android.os.SystemClock.elapsedRealtime()
+                } else remoteRetryFailures=0
                 lanConnectionPending = false
             }
         }
@@ -3413,12 +3450,20 @@ class MainActivity : Activity() {
         telemetryBusy = true
         val requestSlot=activeReaderSlot
         val requestEpoch=readerSelectionEpoch
-        io.execute {
+        val requestRoute=selectedRoute()
+        val requestStartedAt=android.os.SystemClock.elapsedRealtime()
+        liveTelemetryWorker.execute {
             try {
                 val reply = httpCall("GET", "/api/v1/telemetry")
+                val roundTrip=(android.os.SystemClock.elapsedRealtime()-requestStartedAt)
+                    .coerceAtLeast(0L)
                 runOnUiThread {
-                    if(requestSlot==activeReaderSlot && requestEpoch==readerSelectionEpoch)
+                    if(requestSlot==activeReaderSlot &&
+                       requestEpoch==readerSelectionEpoch &&
+                       requestRoute==selectedRoute() && lanVerified) {
+                        lastJkHttpRoundTripMs=roundTrip
                         showTelemetry(reply,newRead=true)
+                    }
                 }
             } catch (ex: Exception) {
                 if ((remoteVpnConnection || remoteGatewayConnection) && !vpnConnected()) lanVerified = false
@@ -4317,7 +4362,8 @@ class MainActivity : Activity() {
     }
 
     private fun showTelemetry(rawResponse: JSONObject,newRead:Boolean=false) {
-        if(::dashboardDebugStatus.isInitialized)dashboardDebugStatus.text=status.text
+        if(::dashboardDebugStatus.isInitialized)dashboardDebugStatus.text=
+            status.text+" · JK HTTP "+lastJkHttpRoundTripMs+" ms"
         lastTelemetry=rawResponse
         val now=android.os.SystemClock.elapsedRealtime()
         if(newRead)fleetCache[activeReaderSlot]=now to rawResponse
@@ -5568,6 +5614,7 @@ class MainActivity : Activity() {
         discoverListener = null
         releaseConnection()
         io.shutdownNow()
+        liveTelemetryWorker.shutdownNow()
         fleetWorker.shutdownNow()
         readerWarmWorker.shutdownNow()
         settingsWorker.shutdownNow()
