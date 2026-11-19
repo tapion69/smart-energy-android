@@ -59,22 +59,59 @@ def validate_migration_images(directory:Path) -> tuple[Path,Path,Path]:
         raise ValueError("Les images ne doivent pas écraser NVS")
     return boot,table,app
 
+def describe_partition_table(parts:dict[str,tuple[int,int,int,int]]) -> str:
+    """Non-sensitive diagnostic: partition names, types and offsets only."""
+    return "; ".join(
+        f"{name}: type=0x{kind:02x}/0x{subtype:02x}, "
+        f"adresse=0x{offset:x}, taille=0x{size:x}"
+        for name,(kind,subtype,offset,size) in sorted(
+            parts.items(),key=lambda item:item[1][2])
+    ) or "(aucune partition reconnue)"
+
+
 def check_installed_voltronic_layout(raw:bytes) -> None:
-    """Require installed classic SINGLE_APP_LARGE, exact NVS and Voltronic NVS.
-    Unknown, already-OTA or incompatible partition layouts must not be altered.
+    """Accept compatible stock ESP-IDF SINGLE_APP layouts, not just >=2MB.
+
+    The old factory partition's size is not the target OTA partition size.
+    Only the old offset, exact NVS/PHY entries and absence of other stored
+    data matter here; the *new* partition layout remains strictly checked
+    by validate_migration_images(), and the device's NVS keys before writes.
     """
     parts=parse_partition_table(raw)
-    nvs=parts.get("nvs")
+    details=describe_partition_table(parts)
+    if parts.get("nvs")!=(0x01,0x02,0x9000,0x6000):
+        raise ValueError(
+            "NVS non reconnue à 0x9000/0x6000 : migration USB interdite. "
+            "Partitions lues : "+details)
+    if parts.get("phy_init")!=(0x01,0x01,0xf000,0x1000):
+        raise ValueError(
+            "PHY non reconnue à 0xf000/0x1000 : migration USB interdite. "
+            "Partitions lues : "+details)
+    if "ota_0" in parts or "ota_1" in parts or "otadata" in parts:
+        raise ValueError(
+            "Une ancienne configuration OTA est détectée : "
+            "ne pas réécrire les partitions. "+details)
+    unexpected=set(parts)-{"nvs","phy_init","factory"}
+    if unexpected:
+        raise ValueError(
+            "Partitions supplémentaires incompatibles avec la conversion sûre : "
+            +", ".join(sorted(unexpected))+". "+details)
     factory=parts.get("factory")
-    if nvs!=(0x01,0x02,0x9000,0x6000):
-        raise ValueError("NVS non reconnue à 0x9000/0x6000 : migration USB interdite")
-    if not factory or factory[0:3]!=(0x00,0x00,0x10000) or factory[3]<0x200000:
-        raise ValueError("Ancien firmware non compatible avec notre migration Voltronic")
-    if "ota_0" in parts or "ota_1" in parts:
-        raise ValueError("Une table OTA est déjà présente : ne pas réécrire les partitions")
+    if not factory or factory[0:3]!=(0x00,0x00,0x10000) or (
+        factory[3]<0x100000 or factory[3]>0xe00000 or
+        factory[3]%0x10000!=0
+    ):
+        raise ValueError(
+            "Ancien partitionnement Voltronic incompatible : "
+            "la partition application doit commencer à 0x10000 "
+            "et avoir une taille ESP-IDF valide d'au moins 1 Mo. "
+            "Partitions lues : "+details)
+    # No old partition may overlap protected NVS or ESP-IDF partition table.
     for name,(_ty,_sub,start,size) in parts.items():
-        if name!="nvs" and start<0xf000 and start+size>0x9000:
-            raise ValueError("Une autre partition recouvre la NVS : migration interdite")
+        if size<=0 or (name!="nvs" and start<0xf000 and start+size>0x9000):
+            raise ValueError(
+                "Partition recouvrant la NVS ou taille invalide : "
+                +name+". "+details)
 
 
 def flash_voltronic_ota_migration(
@@ -106,8 +143,12 @@ def flash_voltronic_ota_migration(
                      "0x8000","0x1000",str(original_table)])
         if not original_table.exists() or original_table.stat().st_size!=0x1000:
             raise ValueError("Lecture de la table de partitions incomplète")
-        check_installed_voltronic_layout(original_table.read_bytes())
-        log("Partitionnement single-app confirmé. Sauvegarde NVS privée…")
+        # Show only partition addresses/sizes; never display NVS or secrets.
+        raw_table=original_table.read_bytes()
+        layout=parse_partition_table(raw_table)
+        log("Table actuelle (lecture seule) : "+describe_partition_table(layout))
+        check_installed_voltronic_layout(raw_table)
+        log("Ancien partitionnement compatible confirmé. Sauvegarde NVS privée…")
         esptool_main(base+["--before","no_reset","--after","no_reset",
                      "read_flash","0x9000","0x6000",str(original_nvs)])
         if not original_nvs.is_file() or original_nvs.stat().st_size!=0x6000:
