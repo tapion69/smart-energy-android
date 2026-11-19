@@ -34,7 +34,7 @@ class MigrationTests(unittest.TestCase):
                   b"\xff"*32)
         check_installed_voltronic_layout(original)
         # Stock ESP-IDF single_app_large can be 1.5 MB.
-        for old_size in (0x100000,0x180000,0x1e0000,0x200000):
+        for old_size in (0x100000,0x177000,0x180000,0x1e0000,0x200000):
             variant=original.replace(row("factory",0,0,0x10000,0x300000),
                                       row("factory",0,0,0x10000,old_size))
             check_installed_voltronic_layout(variant)
@@ -50,6 +50,11 @@ class MigrationTests(unittest.TestCase):
             check_installed_voltronic_layout(original.replace(
                 row("factory",0,0,0x10000,0x300000),
                 row("factory",0,0,0x10000,0x80000)))
+        with self.assertRaises(ValueError):
+            check_installed_voltronic_layout(original.replace(
+                row("factory",0,0,0x10000,0x300000),
+                row("factory",0,0,0x10000,0x177001)))
+
 
     def test_reject_unknown_data_partitions_and_non_ota_safe_layout(self):
         def row(name,kind,sub,offset,size):
