@@ -2,7 +2,6 @@ package fr.smartenergy.android
 
 import android.content.Context
 import android.graphics.Color
-import android.os.SystemClock
 import android.webkit.JavascriptInterface
 import android.webkit.WebResourceRequest
 import android.webkit.WebSettings
@@ -17,14 +16,6 @@ class EnergyDashboardV3(context:Context) : WebView(context) {
     private var ready=false
     private var latest="{}"
     private var requestedSection="home"
-    // JK and inverter replies may land within the same few milliseconds.
-    // Publish the newest state without rendering every intermediate state.
-    private var publishScheduled=false
-    private val publishTask=Runnable {
-        publishScheduled=false
-        if(ready) publish()
-    }
-    private var lastFitAtMs=0L
     private val bridge=object {
         @JavascriptInterface fun navigate(destination:String) {
             post {onNavigate?.invoke(destination)}
@@ -50,8 +41,6 @@ class EnergyDashboardV3(context:Context) : WebView(context) {
             override fun onPageFinished(view:WebView?,url:String?) {
                 if(url!="file:///android_asset/energy_dashboard_v3.html")return
                 ready=true
-                removeCallbacks(publishTask)
-                publishScheduled=false
                 publish()
                 applyRequestedSection()
             }
@@ -71,22 +60,15 @@ class EnergyDashboardV3(context:Context) : WebView(context) {
     }
     fun showSnapshot(snapshot:JSONObject) {
         latest=snapshot.toString()
-        if(ready && !publishScheduled) {
-            publishScheduled=true
-            postDelayed(publishTask,120L)
-        }
+        if(ready)publish()
     }
     private fun publish() {
         evaluateJavascript("window.updateSmartEnergy($latest);") {
-            // Full DOM height probes on every JK poll cause native relayouts.
-            // Page changes still trigger a fit immediately.
-            if(SystemClock.elapsedRealtime()-lastFitAtMs>=5000L)
-                post {fitHeight()}
+            post {fitHeight()}
         }
     }
     private fun fitHeight() {
         if(!ready||width<=0)return
-        lastFitAtMs=SystemClock.elapsedRealtime()
         // The dashboard is inside a native ScrollView. The old 3600dp
         // hard cap clipped long QPIRI/QDOP inverter pages and trapped swipes
         // inside the WebView; size it to content and let Android scroll once.
