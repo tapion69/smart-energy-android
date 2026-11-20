@@ -2,7 +2,7 @@ name: Build development prototypes
 
 on:
   push:
-    branches: [main, dev, 'fix/jk-discovery-pairing-20261116', 'fix/voltronic-grid-sum-0360-20261118', 'perf/vpn-progressive-voltronic-20261118', 'feature/ble-wifi-recovery-universal-20261118', 'feature/vpn-s3-ota-app-20261118', 'fix/jk-voltronic-ota-migration-20261118', 'fix/jk-ota-dialog-choice-0365-20261119', 'perf/apk-live-latency-20261119', 'fix/voltronic-recovery-0367-20261119', 'fix/voltronic-local-choice-0368-20261119']
+    branches: [main, dev, 'fix/jk-discovery-pairing-20261116', 'fix/voltronic-grid-sum-0360-20261118', 'perf/vpn-progressive-voltronic-20261118', 'feature/ble-wifi-recovery-universal-20261118', 'feature/vpn-s3-ota-app-20261118', 'fix/jk-voltronic-ota-migration-20261118', 'fix/jk-ota-dialog-choice-0365-20261119', 'perf/apk-live-latency-20261119', 'fix/voltronic-recovery-0367-20261119', 'fix/voltronic-local-choice-0368-20261119', 'fix/voltronic-discovery-self-heal-20261120']
     paths:
       - 'android/**'
       - 'firmware/jk-esp32/**'
@@ -76,6 +76,8 @@ jobs:
         run: python3 tools/tests/test_apk_live_latency.py
       - name: Check LAN override stays explicit and JK routing unchanged
         run: python3 tools/tests/test_inverter_lan_override.py
+      - name: Check inverter rediscovery restores the correct existing slot
+        run: python3 tools/tests/test_discovered_voltronic_rebind.py
       - name: Validate isolated Bluetooth recovery implementation
         run: python3 tools/tests/test_ble_wifi_recovery.py
       - name: Validate OTA VPN layout and authenticated command
