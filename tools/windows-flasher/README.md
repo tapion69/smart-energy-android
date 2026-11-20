@@ -4,6 +4,41 @@ Cette version regroupe **3 onglets uniquement** : **ESP32 JK**, **ESP32 VPN** et
 Tous les firmwares disponibles sont précompilés et inclus dans `SmartEnergyFlasher.exe`.
 **Aucune IP locale à prévoir** et aucun fichier `.bin` externe à choisir.
 
+## Réparer les onduleurs via le VPN sans reflasher (erreur 503)
+
+Un ESP32 Voltronic peut répondre sur le Wi-Fi local et dans Home Assistant
+tout en étant absent du relais VPN : l'association nom/code n'a pas abouti,
+ou l'IP du lecteur a changé. Le VPN renvoie alors `source_not_configured`
+(503), **sans signifier que la NVS a été effacée**.
+
+Pour contourner la découverte par nom, utiliser
+`SmartEnergy-VPN-ReparerOnduleurs.exe` (GitHub Actions
+`build-vpn-target-repair.yml`) ou la section de réparation USB de l'onglet
+ESP32 VPN du flasher récent. **Aucun firmware n'est écrit.**
+
+1. Relever l'IP locale **actuelle** de chaque ESP32 Voltronic (celle qui
+   fonctionne dans Home Assistant), puis son code de lecture déjà configuré.
+   Une réservation DHCP dans la box évite que cette IP change.
+2. Brancher **la passerelle VPN** au PC Windows avec un câble USB de données,
+   pas les ESP32 Voltronic. Sélectionner le port COM réel.
+3. Choisir INV1, saisir l'IP privée et le code de l'ESP32 Voltronic 1.
+   Cliquer **Enregistrer cet INV dans le VPN — AUCUN FLASH**.
+4. Sur la passerelle VPN, maintenir BOOT environ 4 secondes puis relâcher,
+   sans appuyer sur RESET. L'outil vérifie le canal USB par `SEVPN_PING` avec
+   nonce avant tout envoi de configuration.
+5. Attendre la confirmation `SEVPN_OK_REBOOT`. Elle signifie que le firmware
+   a écrit **uniquement** `volt1_ip` et `volt1_code` puis relu la NVS.
+   La passerelle redémarre et rejoint son réseau.
+6. Refaire pour INV2 avec son IP et son code, une fois le VPN revenu.
+   Vérifier les remontées en 4G/5G avec Tailscale.
+
+L'outil refuse une IP publique ou Tailscale, un code mal formé et toute absence
+de réponse bidirectionnelle USB. Si la confirmation NVS n'arrive pas, l'état
+est **non confirmé** et aucun réessai d'écriture n'est effectué
+automatiquement. Sur un ancien firmware sans cette commande, il est
+impossible de l'utiliser : ne pas reflasher la passerelle de production par
+défaut. Les JK, Wi-Fi, clé Tailscale, token et autres INV ne sont pas modifiés.
+
 ## Préparer un nouveau module
 
 1. Brancher **un seul ESP32** au PC, le sélectionner dans la liste de ports COM.
