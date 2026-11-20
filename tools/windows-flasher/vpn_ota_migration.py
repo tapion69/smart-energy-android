@@ -93,10 +93,14 @@ def prepare_usb_migration(port:str,images_dir:Path,backup_dir:Path,
         do=esptool
     base=["--chip","esp32s3","--port",port,"--baud","115200",
           "--before","no_reset","--after","no_reset"]
+    # First query uses esptool's normal auto-BOOT sequence. Subsequent
+    # transactions hold the ROM in download mode without resetting.
+    first=["--chip","esp32s3","--port",port,"--baud","115200",
+           "--after","no_reset"]
     # Keep the ESP in ROM download mode until writes and verification complete.
     backup_dir.mkdir(parents=True,exist_ok=False)
     log("VPN : lecture USB des partitions, sans modifier l'ESP")
-    original_parts=_read_exact(do,base,0x8000,0x1000,backup_dir/"partitions-avant.bin")
+    original_parts=_read_exact(do,first,0x8000,0x1000,backup_dir/"partitions-avant.bin")
     validate_installed_vpn_table(original_parts)
     log("Table SINGLE_APP_LARGE VPN reconnue. Sauvegarde des données privées.")
     nvs=_read_exact(do,base,NVS_OFFSET,NVS_LENGTH,backup_dir/"nvs-PRIVEE.bin")
