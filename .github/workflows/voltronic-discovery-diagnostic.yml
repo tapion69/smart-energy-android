@@ -1,0 +1,40 @@
+name: Voltronic discovery diagnosis — read only Windows utility
+on:
+  push:
+    branches: ['diag/voltronic-announce-listener-20261120']
+    paths:
+      - 'tools/diagnostics/voltronic_discovery_diagnostic.py'
+      - 'tools/diagnostics/test_voltronic_discovery_diagnostic.py'
+      - '.github/workflows/voltronic-discovery-diagnostic.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  windows:
+    name: Test and package passive discovery monitor
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install pinned dependencies
+        run: python -m pip install "zeroconf==0.148.0" "pyinstaller==6.16.0"
+      - name: Tests and Python syntax
+        shell: pwsh
+        run: |
+          python -m py_compile tools/diagnostics/voltronic_discovery_diagnostic.py
+          python -m unittest discover -s tools/diagnostics -p "test_voltronic_discovery_diagnostic.py" -v
+      - name: Compile read-only Windows application
+        shell: pwsh
+        run: |
+          python -m PyInstaller --clean --noconfirm --onefile --windowed --name SmartEnergy-Diagnostic-Decouverte --collect-all zeroconf tools/diagnostics/voltronic_discovery_diagnostic.py
+          if (!(Test-Path dist/SmartEnergy-Diagnostic-Decouverte.exe)) { throw "EXE missing" }
+      - uses: actions/upload-artifact@v4
+        with:
+          name: SmartEnergy-Diagnostic-Decouverte-Windows-LECTURE-SEULE
+          path: dist/SmartEnergy-Diagnostic-Decouverte.exe
+          if-no-files-found: error
+          retention-days: 30
