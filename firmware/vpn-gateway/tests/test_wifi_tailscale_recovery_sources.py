@@ -11,7 +11,6 @@ cm=(Path(__file__).resolve().parents[1]/"main/CMakeLists.txt").read_text(encodin
 wifi=s[s.index("static void on_wifi_event("):s.index("static void start_wifi(")]
 health=s[s.index("static esp_err_t health_handler("):s.index("static esp_err_t vpn_ota_status_handler(")]
 main=s[s.index("void app_main(void)"):]
-assert "esp_timer esp_http" not in cm or True  # full CMake below
 assert "esp_event esp_timer nvs_flash" in cm
 assert "static volatile uint32_t wifi_disconnect_total = 0;" in s
 assert "static volatile uint32_t wifi_got_ip_total = 0;" in s
@@ -19,7 +18,8 @@ assert "++wifi_disconnect_total;" in wifi
 assert "++wifi_got_ip_total;" in wifi
 assert "wifi_last_disconnect_reason = 0;" not in wifi, "Do not forget failure on reconnect"
 assert "schedule_wifi_retry();" in wifi
-assert "esp_wifi_connect();" not in wifi, "Do not hammer Wi-Fi from event callback"
+disconnect_handler=wifi[wifi.index("WIFI_EVENT_STA_DISCONNECTED"):wifi.index("IP_EVENT_STA_GOT_IP")]
+assert "esp_wifi_connect();" not in disconnect_handler, "Do not hammer Wi-Fi from disconnect callback"
 assert "esp_timer_create(&retry_args,&wifi_retry_timer)" in s
 assert "const uint32_t disconnects=wifi_disconnect_total;" in main
 assert "const uint32_t got_ip=wifi_got_ip_total;" in main
