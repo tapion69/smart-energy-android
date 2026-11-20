@@ -1,0 +1,85 @@
+name: Smart Energy Windows flasher — 0.3.8 Voltronic recovery
+on:
+  push:
+    branches: ['release/voltronic-wifi-discovery-0369-20261120']
+    paths:
+      - '.github/workflows/build-windows-flasher-0369.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  windows-bundle:
+    name: Build all-in-one Windows flasher with JK/VPN/S3 Voltronic
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          run-id: 44762066866
+          repository: tapion69/smart-energy-android
+          github-token: ${{ github.token }}
+          name: SmartEnergy-VPN-ESP32-USB-PRECOMPILED
+          path: firmware/vpn-gateway/dist
+      - uses: actions/download-artifact@v4
+        with:
+          run-id: 44762066866
+          repository: tapion69/smart-energy-android
+          github-token: ${{ github.token }}
+          name: SmartEnergy-JK-ESP32-USB-PRECOMPILED
+          path: firmware/jk-esp32/dist
+      - uses: actions/download-artifact@v4
+        with:
+          run-id: 44762066866
+          repository: tapion69/smart-energy-android
+          github-token: ${{ github.token }}
+          name: SmartEnergy-VPN-ESP32S3-N16R8-USB-PRECOMPILED
+          path: firmware/vpn-gateway/dist-s3
+      - uses: actions/download-artifact@v4
+        with:
+          run-id: 44762066866
+          repository: tapion69/smart-energy-android
+          github-token: ${{ github.token }}
+          name: SmartEnergy-VOLTRONIC-ESP32S3-N16R8-READONLY
+          path: firmware/voltronic-esp32/dist
+      - uses: actions/download-artifact@v4
+        with:
+          run-id: 44762066866
+          repository: tapion69/smart-energy-android
+          github-token: ${{ github.token }}
+          name: SmartEnergy-VOLTRONIC-S3-OTA-MIGRATION
+          path: firmware/voltronic-esp32/dist-ota
+      - uses: actions/download-artifact@v4
+        with:
+          run-id: 44762066866
+          repository: tapion69/smart-energy-android
+          github-token: ${{ github.token }}
+          name: SmartEnergy-DEYE-ESP32S3-N16R8-EXPERIMENTAL
+          path: firmware/deye-esp32/dist
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install pinned packaging tools
+        shell: pwsh
+        run: python -m pip install "pyinstaller==6.16.0" "esptool==4.9.0" "pyserial==3.5"
+      - name: Verify bundled Voltronic is 0.3.8 Wi-Fi/discovery
+        shell: pwsh
+        run: |
+          python -c "from pathlib import Path; p=Path('firmware/voltronic-esp32/dist/smart-energy-voltronic-S3-APP-0x10000.bin'); assert b'0.3.8-dev-wifi-discovery' in p.read_bytes(), 'Old Voltronic firmware!'; print('Voltronic 0.3.8 verified')"
+      - name: Test USB and flash safeguards
+        shell: pwsh
+        working-directory: tools/windows-flasher
+        run: python -m unittest discover -p "test_*.py" -v
+      - name: Package one EXE with both JK and VPN factory/update firmwares
+        shell: pwsh
+        run: |
+          python -m PyInstaller --clean --noconfirm --onefile --windowed --name SmartEnergyFlasher --collect-all esptool --hidden-import serial.tools.list_ports --hidden-import voltronic_usb --hidden-import deye_usb --hidden-import jk_usb --hidden-import voltronic_ota_migration --hidden-import jk_usb_guard --add-data "firmware/vpn-gateway/dist/smart-energy-vpn-USB-FACTORY-ESP32-0x0.bin;embedded_firmware" --add-data "firmware/vpn-gateway/dist/smart-energy-vpn-USB-APP-ESP32-0x10000.bin;embedded_firmware" --add-data "firmware/vpn-gateway/dist-s3/smart-energy-vpn-USB-FACTORY-ESP32S3-N16R8-0x0.bin;embedded_firmware" --add-data "firmware/vpn-gateway/dist-s3/smart-energy-vpn-USB-APP-ESP32S3-N16R8-0x10000.bin;embedded_firmware" --add-data "firmware/jk-esp32/dist/smart-jk-esp32-factory.bin;embedded_firmware" --add-data "firmware/jk-esp32/dist/smart-jk-esp32-app-only.bin;embedded_firmware" --add-data "firmware/voltronic-esp32/dist/smart-energy-voltronic-S3-FACTORY-0x0.bin;embedded_firmware" --add-data "firmware/voltronic-esp32/dist/smart-energy-voltronic-S3-APP-0x10000.bin;embedded_firmware" --add-data "firmware/deye-esp32/dist/smart-energy-deye-S3-FACTORY-0x0.bin;embedded_firmware" --add-data "firmware/deye-esp32/dist/smart-energy-deye-S3-APP-0x10000.bin;embedded_firmware" --add-data "firmware/voltronic-esp32/dist-ota/voltronic-s3-ota-bootloader.bin;embedded_firmware" --add-data "firmware/voltronic-esp32/dist-ota/voltronic-s3-ota-partition-table.bin;embedded_firmware" --add-data "firmware/voltronic-esp32/dist-ota/voltronic-s3-ota-app.bin;embedded_firmware" tools/windows-flasher/smart_energy_flasher.py
+          if ((Get-Item "dist/SmartEnergyFlasher.exe").Length -lt 3000000) { throw "All-in-one Windows EXE suspiciously small" }
+      - name: Upload all-in-one Windows flasher
+        uses: actions/upload-artifact@v4
+        with:
+          name: SmartEnergyFlasher-Windows-AllInOne-JK-VPN
+          path: dist/SmartEnergyFlasher.exe
+          retention-days: 30
