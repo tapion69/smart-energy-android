@@ -1,0 +1,118 @@
+name: Publish verified Voltronic S3 OTA 0.3.8 Wi-Fi discovery
+on:
+  push:
+    branches: ['release/voltronic-wifi-discovery-0369-20261120']
+    paths:
+      - '.github/workflows/publish-voltronic-ota-038.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  actions: read
+
+jobs:
+  publish-voltronic-ota:
+    name: Release exact dual-OTA Voltronic 0.3.8 and update official feed
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Download tested dual-OTA S3 application image
+        uses: actions/download-artifact@v4
+        with:
+          run-id: 44762066866
+          repository: tapion69/smart-energy-android
+          github-token: ${{ github.token }}
+          name: SmartEnergy-VOLTRONIC-S3-OTA-0.3.3-PREFLIGHT
+          path: staging/ota-app
+      - name: Download source-build partition validation evidence
+        uses: actions/download-artifact@v4
+        with:
+          run-id: 44762066866
+          repository: tapion69/smart-energy-android
+          github-token: ${{ github.token }}
+          name: SmartEnergy-VOLTRONIC-S3-OTA-MIGRATION
+          path: staging/validated-layout
+      - name: Fail closed unless exact image, chip, partition layout, and source job match
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          # The overall source run also included a failed Windows-test job.
+          # Explicitly require the actual ESP-IDF OTA compilation job to have
+          # succeeded, and pin the source commit to this review.
+          gh api repos/$GITHUB_REPOSITORY/actions/jobs/136377047667 \
+            --jq '.conclusion' | grep -qx success
+          gh api repos/$GITHUB_REPOSITORY/actions/runs/44762066866 \
+            --jq '.head_sha' | grep -qx b6b0459ec4f6d7748dddecc96a3d044776c9c10c
+          python - <<'PY'
+          from pathlib import Path
+          import sys,hashlib
+          sys.path.insert(0,"tools/windows-flasher")
+          from voltronic_ota_migration import EXPECTED,parse_partition_table
+          app=Path("staging/ota-app/smart-energy-voltronic-S3-OTA.bin")
+          part=Path("staging/validated-layout/voltronic-s3-ota-partition-table.bin")
+          assert app.is_file() and part.is_file(), "Missing tested OTA binary or partition table"
+          data=app.read_bytes()
+          assert 16384<=len(data)<=0x200000, "OTA image exceeds 2 MB partition"
+          assert data[0]==0xE9 and int.from_bytes(data[12:14],"little")==9, "Not ESP32-S3 image"
+          assert b"0.3.8-dev-wifi-discovery" in data, "Unexpected firmware version"
+          assert parse_partition_table(part.read_bytes())==EXPECTED, "Unexpected OTA layout"
+          print("Voltronic S3 0.3.8 dual OTA verified; bytes=",len(data))
+          print("SHA256=",hashlib.sha256(data).hexdigest())
+          PY
+          mkdir -p release-files
+          cp staging/ota-app/smart-energy-voltronic-S3-OTA.bin \
+            release-files/smart-energy-voltronic-S3-OTA.bin
+      - name: Publish release and canonical OTA manifest (no remote flashing)
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          TAG=voltronic-v0.3.8-dev-wifi-discovery
+          APK=release-files/smart-energy-voltronic-S3-OTA.bin
+          HASH=$(sha256sum "$APK" | awk '{print $1}')
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "::error::Firmware OTA release already exists. Refuse replacement."
+            exit 1
+          fi
+          gh api "repos/$GITHUB_REPOSITORY/contents/updates/voltronic-esp32.json?ref=main" \
+            > /tmp/manifest-source.json
+          python - <<'PY'
+          import base64,json
+          src=json.load(open("/tmp/manifest-source.json"))
+          previous=json.loads(base64.b64decode(src["content"]))
+          if previous.get("product")!="smart-voltronic-esp32" or \
+             previous.get("version")!="0.3.7" or not previous.get("available",False):
+              raise SystemExit("Official OTA feed changed: refusing to overwrite it")
+          PY
+          gh release create "$TAG" "$APK" --repo "$GITHUB_REPOSITORY" \
+            --target b6b0459ec4f6d7748dddecc96a3d044776c9c10c \
+            --title "Voltronic ESP32-S3 OTA 0.3.8-dev — Wi-Fi et découverte" \
+            --notes "Voltronic 0.3.8-dev-wifi-discovery: bounded Wi-Fi reconnect; retry mDNS after obtaining Wi-Fi and outside event callback; recover authenticated UDP broadcast socket and broadcast to local subnet. RS232 polling and settings unchanged. OTA image for ESP32-S3 N16R8 dual-OTA only. The APK checks partition readiness, user confirmation, and SHA-256. Not installed automatically. No JK or VPN firmware changes."
+          export HASH
+          python - <<'PY'
+          import os,base64,json
+          r=json.load(open("/tmp/manifest-source.json"))
+          tag="voltronic-v0.3.8-dev-wifi-discovery"
+          doc={
+            "schemaVersion":1,
+            "product":"smart-voltronic-esp32",
+            "available":True,
+            "version":"0.3.8-dev-wifi-discovery",
+            "hardwareTargets":["esp32s3-n16r8"],
+            "downloadUrl":f"https://github.com/tapion69/smart-energy-android/releases/download/{tag}/smart-energy-voltronic-S3-OTA.bin",
+            "sha256":os.environ["HASH"],
+            "releaseNotesUrl":f"https://github.com/tapion69/smart-energy-android/releases/tag/{tag}"
+          }
+          request={
+            "message":"release(voltronic): enable verified 0.3.8 S3 dual OTA in Smart Energy Android",
+            "content":base64.b64encode((json.dumps(doc,ensure_ascii=False,indent=2)+"\n").encode()).decode(),
+            "sha":r["sha"],
+            "branch":"main"
+          }
+          open("/tmp/manifest-write.json","w").write(json.dumps(request))
+          PY
+          gh api --method PUT "repos/$GITHUB_REPOSITORY/contents/updates/voltronic-esp32.json" \
+            --input /tmp/manifest-write.json
+          echo "Official OTA feed published. No device has been flashed."
