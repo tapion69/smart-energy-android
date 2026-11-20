@@ -1,7 +1,7 @@
 name: Smart Energy ESP32 VPN Gateway (experimental)
 on:
   push:
-    branches: [dev, 'feature/universal-reader-discovery-20261116', 'feature/names-only-signed-android-20261116', 'fix/jk-discovery-pairing-20261116', 'feature/ble-wifi-recovery-universal-20261118', 'feature/vpn-s3-ota-app-20261118']
+    branches: [dev, 'feature/universal-reader-discovery-20261116', 'feature/names-only-signed-android-20261116', 'fix/jk-discovery-pairing-20261116', 'feature/ble-wifi-recovery-universal-20261118', 'feature/vpn-s3-ota-app-20261118', 'release/voltronic-wifi-discovery-0369-20261120']
     paths:
       - 'firmware/vpn-gateway/**'
       - 'firmware/voltronic-esp32/**'
@@ -211,6 +211,7 @@ jobs:
             firmware/voltronic-esp32/tests/test_protocol.c \
             -o /tmp/se-voltronic-protocol -lm
           /tmp/se-voltronic-protocol
+          python firmware/voltronic-esp32/tests/test_discovery_self_heal_sources.py
       - name: ESP-IDF 5.3.2 ESP32-S3 build
         uses: espressif/esp-idf-ci-action@v1
         with:
@@ -224,6 +225,12 @@ jobs:
           mkdir -p firmware/voltronic-esp32/dist
           cp firmware/voltronic-esp32/build/smart_energy_voltronic_s3.bin \
             firmware/voltronic-esp32/dist/smart-energy-voltronic-S3-APP-0x10000.bin
+          python - <<'PY'
+          from pathlib import Path
+          body=Path("firmware/voltronic-esp32/dist/smart-energy-voltronic-S3-APP-0x10000.bin").read_bytes()
+          assert b"0.3.8-dev-wifi-discovery" in body, "Wrong Voltronic S3 firmware in flasher build"
+          print("Confirmed bundled Voltronic S3 0.3.8-dev Wi-Fi/discovery image")
+          PY
           python -m esptool --chip esp32s3 merge_bin \
             --flash_mode dio --flash_freq 40m --flash_size 16MB \
             -o firmware/voltronic-esp32/dist/smart-energy-voltronic-S3-FACTORY-0x0.bin \
@@ -263,6 +270,11 @@ jobs:
           cp firmware/voltronic-esp32/build_ota/bootloader/bootloader.bin firmware/voltronic-esp32/dist-ota/voltronic-s3-ota-bootloader.bin
           cp firmware/voltronic-esp32/build_ota/partition_table/partition-table.bin firmware/voltronic-esp32/dist-ota/voltronic-s3-ota-partition-table.bin
           cp firmware/voltronic-esp32/build_ota/smart_energy_voltronic_s3.bin firmware/voltronic-esp32/dist-ota/voltronic-s3-ota-app.bin
+          python - <<'PY'
+          from pathlib import Path
+          body=Path("firmware/voltronic-esp32/dist-ota/voltronic-s3-ota-app.bin").read_bytes()
+          assert b"0.3.8-dev-wifi-discovery" in body, "Wrong Voltronic OTA migration firmware"
+          PY
           cp firmware/voltronic-esp32/build_ota/smart_energy_voltronic_s3.bin firmware/voltronic-esp32/dist-ota/smart-energy-voltronic-S3-OTA.bin
           python - <<'PY'
           import sys
