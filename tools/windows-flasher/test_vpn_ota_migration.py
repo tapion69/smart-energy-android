@@ -55,7 +55,7 @@ class FakeUsb:
             self.wrote=True
             i=argv.index("write_flash")
             assert argv[-6::2]==["0x0","0x8000","0x10000"]
-            self.wrote_parts=Path(argv[i+4]).read_bytes().ljust(0x1000,b"\xff")
+            self.wrote_parts=Path(argv[-3]).read_bytes().ljust(0x1000,b"\xff")
         elif "verify_flash" in argv:
             assert self.wrote
         else:raise AssertionError(f"invalid esptool command {argv}")
