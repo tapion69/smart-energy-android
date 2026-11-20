@@ -1,0 +1,181 @@
+name: Build guarded VPN USB OTA bootstrap Windows flasher (0.3.14)
+on:
+  push:
+    branches: ['fix/vpn-usb-ota-bootstrap-20261120']
+    paths:
+      - 'tools/windows-flasher/**'
+      - '.github/workflows/build-vpn-ota-bootstrap-flasher.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  safety:
+    runs-on: ubuntu-latest
+    name: Guard unknown partitions, backup and OTA rollback
+    steps:
+      - uses: actions/checkout@v4
+      - name: Offline S3 migration simulations and VPN policy regressions
+        run: |
+          set -euo pipefail
+          cd tools/windows-flasher
+          python3 -m unittest test_vpn_ota_migration -v
+          cd ../..
+          python3 firmware/vpn-gateway/tests/test_vpn_s3_ota_sources.py
+          python3 firmware/vpn-gateway/tests/test_wifi_tailscale_recovery_sources.py
+
+  s3:
+    runs-on: ubuntu-latest
+    needs: safety
+    name: Build exact VPN 0.3.14 S3 OTA-ready USB migration images
+    steps:
+      - uses: actions/checkout@v4
+      - name: Pin TailTiny 3.3.0 with peer and rebind security fixes
+        run: |
+          set -euo pipefail
+          git clone --quiet https://github.com/Asimmimx/tailtiny.git /tmp/tailtiny-v33
+          git -C /tmp/tailtiny-v33 checkout --detach 68351ae2908e1e77c46022c143582ddc6af5e76a
+          test "$(git -C /tmp/tailtiny-v33 rev-parse HEAD)" = 68351ae2908e1e77c46022c143582ddc6af5e76a
+          mkdir -p firmware/vpn-gateway/components
+          cp -a /tmp/tailtiny-v33/components/tailtiny firmware/vpn-gateway/components/
+      - name: ESP-IDF 5.3.2 build for ESP32-S3 N16R8 (no user secrets)
+        uses: espressif/esp-idf-ci-action@v1
+        with:
+          esp_idf_version: v5.3.2
+          target: esp32s3
+          path: firmware/vpn-gateway
+      - name: Produce standalone partition and verified-offset files
+        run: |
+          set -euo pipefail
+          python3 -m pip install "esptool==4.9.0"
+          mkdir -p firmware/vpn-gateway/dist-s3
+          d=firmware/vpn-gateway/dist-s3
+          b=firmware/vpn-gateway/build
+          cp "$b/bootloader/bootloader.bin" "$d/vpn-s3-ota-bootloader.bin"
+          cp "$b/partition_table/partition-table.bin" "$d/vpn-s3-ota-partition-table.bin"
+          cp "$b/smart_energy_vpn_gateway.bin" "$d/SmartEnergy-VPN-S3-OTA.bin"
+          cp "$b/smart_energy_vpn_gateway.bin" "$d/smart-energy-vpn-USB-APP-ESP32S3-N16R8-0x10000.bin"
+          python3 -m esptool --chip esp32s3 merge_bin --flash_mode dio --flash_freq 40m --flash_size 16MB \
+            -o "$d/smart-energy-vpn-USB-FACTORY-ESP32S3-N16R8-0x0.bin" \
+            0x0 "$d/vpn-s3-ota-bootloader.bin" \
+            0x8000 "$d/vpn-s3-ota-partition-table.bin" \
+            0x10000 "$d/SmartEnergy-VPN-S3-OTA.bin"
+          python3 - <<'PY'
+          from pathlib import Path
+          import sys,hashlib
+          sys.path.insert(0,"tools/windows-flasher")
+          from vpn_ota_migration import validate_images
+          from voltronic_ota_migration import parse_partition_table,EXPECTED
+          p=Path("firmware/vpn-gateway/dist-s3")
+          boot,part,app=validate_images(p)
+          assert parse_partition_table(part.read_bytes())==EXPECTED
+          assert b"0.3.14-dev-vpn-wifi-recovery" in app.read_bytes()
+          print("Safe VPN 0.3.14 USB images:",boot.stat().st_size,part.stat().st_size,app.stat().st_size)
+          print("App SHA256:",hashlib.sha256(app.read_bytes()).hexdigest())
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: SmartEnergy-VPN-S3-0.3.14-USB-OTA-BOOTSTRAP-IMAGES
+          path: firmware/vpn-gateway/dist-s3/*.bin
+          if-no-files-found: error
+          retention-days: 14
+
+  windows:
+    name: Windows EXE all-in-one with guarded VPN OTA migration
+    runs-on: windows-latest
+    needs: s3
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: SmartEnergy-VPN-S3-0.3.14-USB-OTA-BOOTSTRAP-IMAGES
+          path: firmware/vpn-gateway/dist-s3
+      - uses: actions/download-artifact@v4
+        with:
+          run-id: 44762066866
+          repository: tapion69/smart-energy-android
+          github-token: ${{ github.token }}
+          name: SmartEnergy-VPN-ESP32-USB-PRECOMPILED
+          path: firmware/vpn-gateway/dist
+      - uses: actions/download-artifact@v4
+        with:
+          run-id: 44762066866
+          repository: tapion69/smart-energy-android
+          github-token: ${{ github.token }}
+          name: SmartEnergy-JK-ESP32-USB-PRECOMPILED
+          path: firmware/jk-esp32/dist
+      - uses: actions/download-artifact@v4
+        with:
+          run-id: 44762066866
+          repository: tapion69/smart-energy-android
+          github-token: ${{ github.token }}
+          name: SmartEnergy-VOLTRONIC-ESP32S3-N16R8-READONLY
+          path: firmware/voltronic-esp32/dist
+      - uses: actions/download-artifact@v4
+        with:
+          run-id: 44762066866
+          repository: tapion69/smart-energy-android
+          github-token: ${{ github.token }}
+          name: SmartEnergy-VOLTRONIC-S3-OTA-MIGRATION
+          path: firmware/voltronic-esp32/dist-ota
+      - uses: actions/download-artifact@v4
+        with:
+          run-id: 44762066866
+          repository: tapion69/smart-energy-android
+          github-token: ${{ github.token }}
+          name: SmartEnergy-DEYE-ESP32S3-N16R8-EXPERIMENTAL
+          path: firmware/deye-esp32/dist
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install pinned packaging and USB dependencies
+        shell: pwsh
+        run: python -m pip install "pyinstaller==6.16.0" "esptool==4.9.0" "pyserial==3.5"
+      - name: Run all Windows flasher safety regression tests
+        shell: pwsh
+        working-directory: tools/windows-flasher
+        run: python -m unittest discover -p "test_*.py" -v
+      - name: Build EXE with VPN, JK, Voltronic, Deye and OTA migration binaries
+        shell: pwsh
+        run: |
+          $files = @(
+            'firmware/vpn-gateway/dist/smart-energy-vpn-USB-FACTORY-ESP32-0x0.bin',
+            'firmware/vpn-gateway/dist/smart-energy-vpn-USB-APP-ESP32-0x10000.bin',
+            'firmware/vpn-gateway/dist-s3/smart-energy-vpn-USB-FACTORY-ESP32S3-N16R8-0x0.bin',
+            'firmware/vpn-gateway/dist-s3/smart-energy-vpn-USB-APP-ESP32S3-N16R8-0x10000.bin',
+            'firmware/jk-esp32/dist/smart-jk-esp32-factory.bin',
+            'firmware/jk-esp32/dist/smart-jk-esp32-app-only.bin',
+            'firmware/voltronic-esp32/dist/smart-energy-voltronic-S3-FACTORY-0x0.bin',
+            'firmware/voltronic-esp32/dist/smart-energy-voltronic-S3-APP-0x10000.bin',
+            'firmware/deye-esp32/dist/smart-energy-deye-S3-FACTORY-0x0.bin',
+            'firmware/deye-esp32/dist/smart-energy-deye-S3-APP-0x10000.bin',
+            'firmware/voltronic-esp32/dist-ota/voltronic-s3-ota-bootloader.bin',
+            'firmware/voltronic-esp32/dist-ota/voltronic-s3-ota-partition-table.bin',
+            'firmware/voltronic-esp32/dist-ota/voltronic-s3-ota-app.bin',
+            'firmware/vpn-gateway/dist-s3/vpn-s3-ota-bootloader.bin',
+            'firmware/vpn-gateway/dist-s3/vpn-s3-ota-partition-table.bin',
+            'firmware/vpn-gateway/dist-s3/SmartEnergy-VPN-S3-OTA.bin'
+          )
+          foreach ($f in $files) { if (!(Test-Path $f)) { throw "Missing bundled image: $f" } }
+          $args = @('--clean','--noconfirm','--onefile','--windowed',
+            '--name','SmartEnergyFlasher',
+            '--collect-all','esptool',
+            '--hidden-import','serial.tools.list_ports',
+            '--hidden-import','voltronic_usb',
+            '--hidden-import','deye_usb',
+            '--hidden-import','jk_usb',
+            '--hidden-import','voltronic_ota_migration',
+            '--hidden-import','vpn_ota_migration',
+            '--hidden-import','jk_usb_guard')
+          foreach ($f in $files) { $args += @('--add-data',"$f;embedded_firmware") }
+          $args += 'tools/windows-flasher/smart_energy_flasher.py'
+          python -m PyInstaller @args
+          if ((Get-Item 'dist/SmartEnergyFlasher.exe').Length -lt 3000000) { throw 'EXE suspiciously small' }
+      - uses: actions/upload-artifact@v4
+        with:
+          name: SmartEnergyFlasher-VPN-OTA-BOOTSTRAP-0.3.14-Windows
+          path: dist/SmartEnergyFlasher.exe
+          if-no-files-found: error
+          retention-days: 14
