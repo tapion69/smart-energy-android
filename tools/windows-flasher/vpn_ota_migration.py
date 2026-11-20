@@ -86,8 +86,11 @@ def prepare_usb_migration(port:str,images_dir:Path,backup_dir:Path,
     boot,part,app=validate_images(images_dir)
     if backup_dir.exists():
         raise ValueError("Choisir un dossier de sauvegarde NOUVEAU : aucun écrasement")
-    from esptool import main as esptool_main
-    do=esptool if esptool is not None else esptool_main
+    if esptool is None:
+        from esptool import main as esptool_main
+        do=esptool_main
+    else:
+        do=esptool
     base=["--chip","esp32s3","--port",port,"--baud","115200",
           "--before","no_reset","--after","no_reset"]
     # Keep the ESP in ROM download mode until writes and verification complete.
