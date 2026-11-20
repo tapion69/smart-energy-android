@@ -657,8 +657,11 @@ class Flasher(tk.Tk):
                         variable=self.volt_mode,value="factory").pack(anchor="w")
         ttk.Radiobutton(modes,text="Mise à jour S3 — APP-ONLY : conserver Wi-Fi et code",
                         variable=self.volt_mode,value="update").pack(anchor="w")
-        ttk.Label(root,text="APP-ONLY : conserve Wi-Fi, code de lecture et NVS, "
-                  "sans reconfiguration USB. FACTORY : S3 neuf uniquement.",
+        ttk.Label(root,text="Voltronic précompilé : 0.3.8-dev-wifi-discovery. "
+                  "mDNS et annonces UDP réparables, reconnexion Wi-Fi progressive ; "
+                  "RS232 et MQTT/HA inchangés. APP-ONLY préserve la NVS et le code, "
+                  "mais nécessite une implantation de partitions compatible. "
+                  "FACTORY uniquement pour un S3 vierge.",
                   wraplength=690).grid(row=6,column=0,columnspan=3,sticky="w",padx=8,pady=4)
         params=ttk.LabelFrame(root,text="Configuration USB (première installation)",padding=8)
         params.grid(row=3,column=0,columnspan=3,sticky="ew",padx=8,pady=8)
