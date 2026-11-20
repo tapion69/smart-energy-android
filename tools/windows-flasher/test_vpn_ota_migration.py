@@ -85,7 +85,7 @@ class MigrationSafetyTests(unittest.TestCase):
     def test_read_and_verify_before_write(self):
         with tempfile.TemporaryDirectory() as root:
             path=Path(root)
-            imgs=self.make_images(path/"imgs") if False else path/"imgs"
+            imgs=path/"imgs"
             imgs.mkdir()
             self.make_images(imgs)
             backup=path/"backups"
@@ -107,7 +107,7 @@ class MigrationSafetyTests(unittest.TestCase):
             for fixture in (table(EXPECTED),table({"nvs":(1,2,0xA000,0x5000)})):
                 usb=FakeUsb(initial_table=fixture)
                 with self.assertRaises(ValueError):
-                    prepare_usb_migration("COM3",imgs,p/f"backup-{len(usb.commands)}-{len(fixture)}"+str(0) if False else p/("out"+str(fixture[:20].hex())),lambda s:None,esptool=usb)
+                    prepare_usb_migration("COM3",imgs,p/("out"+fixture[:20].hex()),lambda s:None,esptool=usb)
                 self.assertFalse(usb.wrote)
     def test_foreign_nvs_is_never_written(self):
         with tempfile.TemporaryDirectory() as td:
