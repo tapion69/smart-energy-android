@@ -1,0 +1,101 @@
+name: Publish S3 VPN 0.3.14 OTA after security and rollback validation
+on:
+  push:
+    branches: ['fix/vpn-tailscale-ping-recovery-20261120']
+    paths: ['.github/workflows/publish-vpn-ota-0314.yml']
+  workflow_dispatch:
+
+permissions:
+  actions: read
+  contents: write
+
+jobs:
+  publish:
+    name: Release tested S3 VPN OTA and activate official APK feed
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Retrieve compiled S3 firmware from verified TailTiny 3.3 CI run
+        uses: actions/download-artifact@v4
+        with:
+          run-id: 44782086407
+          repository: tapion69/smart-energy-android
+          github-token: ${{ github.token }}
+          name: SmartEnergy-VPN-S3-0.3.14-TailTiny33-TEST-ONLY
+          path: staging
+      - name: Verify exact source, security test and S3 firmware image
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          test "$(gh api repos/$GITHUB_REPOSITORY/actions/runs/44782086407 --jq '.head_sha')" = cd1534b554970465b3f233e4364a7b2b69a4175f
+          test "$(gh api repos/$GITHUB_REPOSITORY/actions/runs/44782086407 --jq '.conclusion')" = success
+          test "$(gh api repos/$GITHUB_REPOSITORY/actions/jobs/136447141404 --jq '.conclusion')" = success
+          test "$(gh api repos/$GITHUB_REPOSITORY/actions/jobs/136447228572 --jq '.conclusion')" = success
+          python3 - <<'PY'
+          from pathlib import Path
+          import hashlib
+          original=Path("staging/smart_energy_vpn_gateway.bin")
+          assert original.is_file(), "Missing exact CI OTA application artifact"
+          data=original.read_bytes()
+          assert 16384<=len(data)<=0x200000, "OTA image exceeds 2 MiB slot"
+          assert data[0]==0xE9 and int.from_bytes(data[12:14],"little")==9, "Wrong ESP32-S3 target"
+          assert b"0.3.14-dev-vpn-wifi-recovery" in data, "Wrong VPN firmware build"
+          print("Verified S3 0.3.14 TailTiny 3.3.0 image:",len(data),"bytes")
+          print("SHA256:",hashlib.sha256(data).hexdigest())
+          target=Path("release/SmartEnergy-VPN-S3-OTA.bin")
+          target.parent.mkdir(exist_ok=True)
+          target.write_bytes(data)
+          PY
+      - name: Publish official firmware and enable update in current Android APK
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          TAG=vpn-gateway-v0.3.14
+          FILE=release/SmartEnergy-VPN-S3-OTA.bin
+          HASH=$(sha256sum "$FILE" | cut -d' ' -f1)
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "::error::Release already exists. Do not overwrite OTA binary."
+            exit 1
+          fi
+          gh api "repos/$GITHUB_REPOSITORY/contents/updates/vpn-gateway.json?ref=main" > /tmp/vpn-manifest-old.json
+          python3 - <<'PY'
+          import base64,json
+          item=json.load(open("/tmp/vpn-manifest-old.json"))
+          old=json.loads(base64.b64decode(item["content"]))
+          assert old.get("schemaVersion")==1, "Unexpected manifest schema"
+          assert old.get("product")=="smart-energy-vpn-gateway", "Wrong firmware product"
+          assert old.get("available") is False, "Another VPN release already published"
+          assert old.get("target")=="esp32s3-n16r8", "Wrong hardware target"
+          PY
+          gh release create "$TAG" "$FILE" --repo "$GITHUB_REPOSITORY" \
+            --target cd1534b554970465b3f233e4364a7b2b69a4175f \
+            --title "VPN ESP32-S3 0.3.14 — Wi-Fi reconnect et TailTiny 3.3" \
+            --notes "Official VPN S3 OTA 0.3.14. ESP32-S3 N16R8 with existing dual OTA only. Fixes missed short Wi-Fi disconnects, adds bounded Wi-Fi retry and TailTiny rebind after reconnection. Updates TailTiny 3.1.0 to 3.3.0 for security and reliability. Private health diagnostics add RSSI, Wi-Fi disconnect reasons, and VPN rebind counters. No changes to JK/Voltronic associations, gateway credentials or existing NVS. OTA is opt-in through the signed APK; the gateway verifies SHA256 and rollback is enabled if boot cannot establish Wi-Fi and Tailnet."
+          export HASH
+          python3 - <<'PY'
+          import base64,json,os
+          original=json.load(open("/tmp/vpn-manifest-old.json"))
+          tag="vpn-gateway-v0.3.14"
+          doc={
+            "schemaVersion":1,
+            "product":"smart-energy-vpn-gateway",
+            "available":True,
+            "version":"0.3.14",
+            "target":"esp32s3-n16r8",
+            "downloadUrl":f"https://github.com/tapion69/smart-energy-android/releases/download/{tag}/SmartEnergy-VPN-S3-OTA.bin",
+            "sha256":os.environ["HASH"],
+            "releaseNotesUrl":f"https://github.com/tapion69/smart-energy-android/releases/tag/{tag}"
+          }
+          payload={
+            "message":"release(vpn): publish verified ESP32-S3 OTA 0.3.14 in Android feed",
+            "content":base64.b64encode((json.dumps(doc,ensure_ascii=False,indent=2)+"\n").encode()).decode(),
+            "sha":original["sha"],
+            "branch":"main"
+          }
+          with open("/tmp/vpn-manifest-update.json","w") as fd: json.dump(payload,fd)
+          PY
+          gh api --method PUT "repos/$GITHUB_REPOSITORY/contents/updates/vpn-gateway.json" \
+            --input /tmp/vpn-manifest-update.json
+          echo "VPN S3 OTA published; no device flashed automatically."
