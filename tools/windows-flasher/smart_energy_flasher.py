@@ -351,6 +351,9 @@ class Flasher(tk.Tk):
                    command=self._flash_jk).pack(side="right", padx=5)
         ttk.Button(vpn.actions, text="Flasher VPN (mode sélectionné)",
                    command=self._flash_vpn).pack(side="right", padx=5)
+        ttk.Button(vpn.actions,
+                   text="Préparer OTA VPN (USB + sauvegarde NVS)",
+                   command=self._migrate_vpn_to_ota).pack(side="left", padx=5)
 
         # On current VPN firmware: no USB permission switch. Android's
         # explicit confirmation precedes a whitelist-validated remote SET.
@@ -1030,6 +1033,57 @@ class Flasher(tk.Tk):
             "Si tu sais que ce SSID diffuse aussi en 2,4 GHz, "
             "veux-tu continuer quand même ?"
         )
+
+    def _vpn_migration_images(self) -> Path:
+        from vpn_ota_migration import validate_images
+        folder=Path(getattr(sys,"_MEIPASS",Path(__file__).resolve().parent)) / "embedded_firmware"
+        validate_images(folder)
+        return folder
+
+    def _migrate_vpn_to_ota(self) -> None:
+        """One-time physically guarded USB migration, no credentials rewritten."""
+        try:
+            from vpn_ota_migration import prepare_usb_migration
+            port=self._assert_ready()
+            if self.vpn_chip.get()!="esp32s3":
+                raise ValueError("Migration OTA VPN réservée à ESP32-S3 N16R8.")
+            image_dir=self._vpn_migration_images()
+            if not messagebox.askyesno(
+                "VPN S3 : préparer OTA sans perdre les paramètres",
+                "Le service OTA est absent (HTTP 404) sur certains anciens VPN.\n\n"
+                "Cette opération USB est UNIQUEMENT destinée à un ESP32-S3 "
+                "dont la table est SINGLE_APP_LARGE et reconnaissable.\n\n"
+                "Le flasher lira et sauvegardera l'ancien firmware, sa table "
+                "de partitions ET la NVS privée (identité Tailscale, Wi-Fi, "
+                "token, noms et codes JK/Voltronic), puis vérifiera les copies.\n"
+                "Si la disposition actuelle est déjà OTA ou inconnue, il "
+                "refusera sans rien modifier.\n\n"
+                "Aucun erase_flash ni réassociation ne sera exécuté. Continuer ?"):
+                return
+            folder=filedialog.askdirectory(
+                title="Choisir le dossier PARENT pour la sauvegarde VPN PRIVÉE")
+            if not folder:return
+            backup=Path(folder)/(
+                "SmartEnergy-VPN-SAUVEGARDE-PRIVEE-"+port+"-"+
+                datetime.now().strftime("%Y%m%d-%H%M%S"))
+            if backup.exists():
+                raise ValueError("Le dossier privé existe déjà : en choisir un autre.")
+            if not messagebox.askyesno(
+                "Confirmation physique VPN S3",
+                "Vérifie que le port "+port+" correspond bien à la PASSERELLE VPN, "
+                "et non à un ESP JK ou Voltronic.\n\n"
+                "L'opération commence par une lecture seule, vérifie l'identité "
+                "et la partition NVS à 0x9000 ; elle s'arrête au moindre doute. "
+                "Si toutes les vérifications passent, elle écrit le bootloader, "
+                "la table OTA et l'application 0.3.14, puis relit la NVS.\n\n"
+                "Tu dois conserver le dossier de sauvegarde privé.\n\n"
+                "Confirmer la migration USB ?"):
+                return
+            self._run_async(
+                lambda:prepare_usb_migration(port,image_dir,backup,self._log),
+                mode="vpn-ota-migration")
+        except Exception as ex:
+            messagebox.showerror("Migration OTA VPN",str(ex))
 
     def _flash_vpn(self) -> None:
         try:
