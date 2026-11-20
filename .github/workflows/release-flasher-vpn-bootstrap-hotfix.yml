@@ -1,0 +1,150 @@
+name: Windows Flasher VPN OTA Bootstrap 0.3.14.1 — datetime hotfix release
+on:
+  push:
+    branches: ['fix/vpn-usb-ota-bootstrap-20261120']
+    paths: ['.github/workflows/release-flasher-vpn-bootstrap-hotfix.yml']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  actions: read
+
+jobs:
+  windows:
+    name: Windows EXE all-in-one with guarded VPN OTA migration
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          run-id: 44785779511
+          repository: tapion69/smart-energy-android
+          github-token: ${{ github.token }}
+          name: SmartEnergy-VPN-S3-0.3.14-USB-OTA-BOOTSTRAP-IMAGES
+          path: firmware/vpn-gateway/dist-s3
+      - uses: actions/download-artifact@v4
+        with:
+          run-id: 44762066866
+          repository: tapion69/smart-energy-android
+          github-token: ${{ github.token }}
+          name: SmartEnergy-VPN-ESP32-USB-PRECOMPILED
+          path: firmware/vpn-gateway/dist
+      - uses: actions/download-artifact@v4
+        with:
+          run-id: 44762066866
+          repository: tapion69/smart-energy-android
+          github-token: ${{ github.token }}
+          name: SmartEnergy-JK-ESP32-USB-PRECOMPILED
+          path: firmware/jk-esp32/dist
+      - uses: actions/download-artifact@v4
+        with:
+          run-id: 44762066866
+          repository: tapion69/smart-energy-android
+          github-token: ${{ github.token }}
+          name: SmartEnergy-VOLTRONIC-ESP32S3-N16R8-READONLY
+          path: firmware/voltronic-esp32/dist
+      - uses: actions/download-artifact@v4
+        with:
+          run-id: 44762066866
+          repository: tapion69/smart-energy-android
+          github-token: ${{ github.token }}
+          name: SmartEnergy-VOLTRONIC-S3-OTA-MIGRATION
+          path: firmware/voltronic-esp32/dist-ota
+      - uses: actions/download-artifact@v4
+        with:
+          run-id: 44762066866
+          repository: tapion69/smart-energy-android
+          github-token: ${{ github.token }}
+          name: SmartEnergy-DEYE-ESP32S3-N16R8-EXPERIMENTAL
+          path: firmware/deye-esp32/dist
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install pinned packaging and USB dependencies
+        shell: pwsh
+        run: python -m pip install "pyinstaller==6.16.0" "esptool==4.9.0" "pyserial==3.5"
+      - name: Run all Windows flasher safety regression tests including VPN datetime fix
+        shell: pwsh
+        working-directory: tools/windows-flasher
+        run: |
+          python -m py_compile smart_energy_flasher.py vpn_ota_migration.py
+          python -m unittest discover -p "test_*.py" -v
+          python -m unittest test_vpn_migration_dialog -v
+      - name: Build EXE with VPN, JK, Voltronic, Deye and OTA migration binaries
+        shell: pwsh
+        run: |
+          $files = @(
+            'firmware/vpn-gateway/dist/smart-energy-vpn-USB-FACTORY-ESP32-0x0.bin',
+            'firmware/vpn-gateway/dist/smart-energy-vpn-USB-APP-ESP32-0x10000.bin',
+            'firmware/vpn-gateway/dist-s3/smart-energy-vpn-USB-FACTORY-ESP32S3-N16R8-0x0.bin',
+            'firmware/vpn-gateway/dist-s3/smart-energy-vpn-USB-APP-ESP32S3-N16R8-0x10000.bin',
+            'firmware/jk-esp32/dist/smart-jk-esp32-factory.bin',
+            'firmware/jk-esp32/dist/smart-jk-esp32-app-only.bin',
+            'firmware/voltronic-esp32/dist/smart-energy-voltronic-S3-FACTORY-0x0.bin',
+            'firmware/voltronic-esp32/dist/smart-energy-voltronic-S3-APP-0x10000.bin',
+            'firmware/deye-esp32/dist/smart-energy-deye-S3-FACTORY-0x0.bin',
+            'firmware/deye-esp32/dist/smart-energy-deye-S3-APP-0x10000.bin',
+            'firmware/voltronic-esp32/dist-ota/voltronic-s3-ota-bootloader.bin',
+            'firmware/voltronic-esp32/dist-ota/voltronic-s3-ota-partition-table.bin',
+            'firmware/voltronic-esp32/dist-ota/voltronic-s3-ota-app.bin',
+            'firmware/vpn-gateway/dist-s3/vpn-s3-ota-bootloader.bin',
+            'firmware/vpn-gateway/dist-s3/vpn-s3-ota-partition-table.bin',
+            'firmware/vpn-gateway/dist-s3/SmartEnergy-VPN-S3-OTA.bin'
+          )
+          foreach ($f in $files) { if (!(Test-Path $f)) { throw "Missing bundled image: $f" } }
+          $args = @('--clean','--noconfirm','--onefile','--windowed',
+            '--name','SmartEnergyFlasher',
+            '--collect-all','esptool',
+            '--hidden-import','serial.tools.list_ports',
+            '--hidden-import','voltronic_usb',
+            '--hidden-import','deye_usb',
+            '--hidden-import','jk_usb',
+            '--hidden-import','voltronic_ota_migration',
+            '--hidden-import','vpn_ota_migration',
+            '--hidden-import','jk_usb_guard')
+          foreach ($f in $files) { $args += @('--add-data',"$f;embedded_firmware") }
+          $args += 'tools/windows-flasher/smart_energy_flasher.py'
+          python -m PyInstaller @args
+          if ((Get-Item 'dist/SmartEnergyFlasher.exe').Length -lt 3000000) { throw 'EXE suspiciously small' }
+      - uses: actions/upload-artifact@v4
+        with:
+          name: SmartEnergyFlasher-VPN-OTA-BOOTSTRAP-0.3.14-Windows
+          path: dist/SmartEnergyFlasher.exe
+          if-no-files-found: error
+          retention-days: 14
+
+  publish:
+    name: Publish direct-download corrected EXE 0.3.14.1
+    runs-on: ubuntu-latest
+    needs: windows
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: SmartEnergyFlasher-VPN-OTA-BOOTSTRAP-0.3.14-Windows
+          path: release
+      - name: Verify binary and publish new immutable release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          import hashlib
+          p=Path("release/SmartEnergyFlasher.exe")
+          assert p.is_file(), "Compiled EXE not found"
+          assert p.stat().st_size>10000000, "EXE unexpectedly small"
+          assert p.read_bytes()[:2]==b"MZ", "Not a Windows executable"
+          print("Corrected EXE bytes",p.stat().st_size)
+          print("SHA256",hashlib.sha256(p.read_bytes()).hexdigest())
+          PY
+          TAG=flasher-vpn-ota-bootstrap-v0.3.14.1
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "::error::Release already exists; refusing overwrite"
+            exit 1
+          fi
+          gh release create "$TAG" release/SmartEnergyFlasher.exe \
+            --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" \
+            --title "SmartEnergyFlasher Windows 0.3.14.1 — VPN migration datetime fix" \
+            --notes "Corrected Windows flasher. Fixes 'name datetime is not defined' when opening the VPN S3 OTA migration backup dialog. Regression tests added. Contains the same verified VPN 0.3.14, JK, Voltronic 0.3.8 and Deye precompiled images as the previous build. For existing VPN S3, choose VPN > ESP32-S3 N16R8 > Préparer OTA VPN (USB + sauvegarde NVS). NEVER use FACTORY on the configured device. No flash runs until explicit confirmation; the migration checks the actual partition table and saves a private NVS backup before writing. Not yet tested on the user's physical S3."
+          echo "https://github.com/$GITHUB_REPOSITORY/releases/download/$TAG/SmartEnergyFlasher.exe"
