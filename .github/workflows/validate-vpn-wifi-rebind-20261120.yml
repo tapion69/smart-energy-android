@@ -1,0 +1,91 @@
+name: Validate TailTiny 3.3 VPN Wi-Fi recovery — NO OTA PUBLICATION
+on:
+  push:
+    branches: ['fix/vpn-tailscale-ping-recovery-20261120']
+    paths:
+      - '.github/workflows/validate-vpn-wifi-rebind-20261120.yml'
+      - 'firmware/vpn-gateway/**'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  policy-and-wifi:
+    name: VPN behavior, security, and Wi-Fi recovery tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate VPN guards and transient Wi-Fi recovery
+        run: |
+          set -euo pipefail
+          cc -std=gnu11 -Wall -Wextra -Werror firmware/vpn-gateway/tests/test_policy.c -o /tmp/vpn-policy
+          /tmp/vpn-policy
+          python3 firmware/vpn-gateway/tests/test_confirmed_write_policy.py
+          python3 firmware/vpn-gateway/tests/test_s3_provisioning_sources.py
+          python3 firmware/vpn-gateway/tests/test_vpn_s3_ota_sources.py
+          python3 firmware/vpn-gateway/tests/test_wifi_tailscale_recovery_sources.py
+  esp32s3:
+    name: Compile S3 N16R8 VPN with security-fixed TailTiny 3.3.0
+    needs: policy-and-wifi
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Fetch and verify exact upstream TailTiny v3.3.0 commit
+        run: |
+          set -euo pipefail
+          git clone --quiet https://github.com/Asimmimx/tailtiny.git /tmp/tailtiny-v33
+          git -C /tmp/tailtiny-v33 checkout --detach 68351ae2908e1e77c46022c143582ddc6af5e76a
+          test "$(git -C /tmp/tailtiny-v33 rev-parse HEAD)" = 68351ae2908e1e77c46022c143582ddc6af5e76a
+          mkdir -p firmware/vpn-gateway/components
+          cp -a /tmp/tailtiny-v33/components/tailtiny firmware/vpn-gateway/components/
+      - name: Compile experimental S3 firmware with ESP-IDF 5.3.2
+        uses: espressif/esp-idf-ci-action@v1
+        with:
+          esp_idf_version: v5.3.2
+          target: esp32s3
+          path: firmware/vpn-gateway
+      - name: Validate S3 OTA partition safety; save candidate (NOT released)
+        run: |
+          set -euo pipefail
+          test -s firmware/vpn-gateway/build/smart_energy_vpn_gateway.bin
+          grep -q '^CONFIG_IDF_TARGET_ESP32S3=y' firmware/vpn-gateway/sdkconfig
+          grep -q '^CONFIG_PARTITION_TABLE_CUSTOM=y' firmware/vpn-gateway/sdkconfig
+          grep -q '^CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE=y' firmware/vpn-gateway/sdkconfig
+          python3 - <<'PY'
+          from pathlib import Path
+          import hashlib
+          app=Path("firmware/vpn-gateway/build/smart_energy_vpn_gateway.bin")
+          raw=app.read_bytes()
+          assert b"0.3.14-dev-vpn-wifi-recovery" in raw
+          assert raw[0]==0xe9 and int.from_bytes(raw[12:14],"little")==9
+          print("S3 candidate image",len(raw),"SHA256",hashlib.sha256(raw).hexdigest())
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: SmartEnergy-VPN-S3-0.3.14-TailTiny33-TEST-ONLY
+          path: firmware/vpn-gateway/build/smart_energy_vpn_gateway.bin
+          if-no-files-found: error
+          retention-days: 7
+  esp32:
+    name: Compile classic ESP32 VPN with TailTiny 3.3.0
+    needs: policy-and-wifi
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Fetch and verify exact TailTiny v3.3.0 commit
+        run: |
+          set -euo pipefail
+          git clone --quiet https://github.com/Asimmimx/tailtiny.git /tmp/tailtiny-v33
+          git -C /tmp/tailtiny-v33 checkout --detach 68351ae2908e1e77c46022c143582ddc6af5e76a
+          test "$(git -C /tmp/tailtiny-v33 rev-parse HEAD)" = 68351ae2908e1e77c46022c143582ddc6af5e76a
+          mkdir -p firmware/vpn-gateway/components
+          cp -a /tmp/tailtiny-v33/components/tailtiny firmware/vpn-gateway/components/
+      - name: Compile classic ESP32 with ESP-IDF 5.3.2
+        uses: espressif/esp-idf-ci-action@v1
+        with:
+          esp_idf_version: v5.3.2
+          target: esp32
+          path: firmware/vpn-gateway
+      - name: Verify classic firmware exists (NO publishing)
+        run: test -s firmware/vpn-gateway/build/smart_energy_vpn_gateway.bin
