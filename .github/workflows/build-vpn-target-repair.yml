@@ -1,0 +1,47 @@
+name: Smart Energy VPN inverter USB recovery — NO FIRMWARE FLASH
+on:
+  push:
+    branches: ['fix/vpn-voltronic-usb-target-repair-20261120']
+    paths:
+      - 'tools/windows-flasher/vpn_target_repair.py'
+      - 'tools/windows-flasher/vpn_usb.py'
+      - 'tools/windows-flasher/smart_energy_flasher.py'
+      - 'tools/windows-flasher/test_vpn_target_repair.py'
+      - '.github/workflows/build-vpn-target-repair.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  windows-vpn-recovery:
+    name: Test and compile standalone no-flash VPN inverter repair
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install Windows USB serial and packaging dependencies
+        run: python -m pip install "pyserial==3.5" "pyinstaller==6.16.0"
+      - name: Compile syntax and run security tests
+        working-directory: tools/windows-flasher
+        shell: pwsh
+        run: |
+          python -m py_compile vpn_target_repair.py vpn_usb.py smart_energy_flasher.py
+          python -m unittest test_vpn_target_repair.py -v
+          python -m unittest test_vpn_usb.py -v
+      - name: Create stand-alone repair executable WITHOUT any firmware binary
+        shell: pwsh
+        run: |
+          python -m PyInstaller --clean --noconfirm --onefile --windowed --name SmartEnergy-VPN-ReparerOnduleurs --paths tools/windows-flasher --hidden-import serial.tools.list_ports tools/windows-flasher/vpn_target_repair.py
+          if (!(Test-Path dist/SmartEnergy-VPN-ReparerOnduleurs.exe)) { throw "Missing recovery EXE" }
+          $bytes=(Get-Item dist/SmartEnergy-VPN-ReparerOnduleurs.exe).Length
+          if ($bytes -lt 1000000) { throw "Invalid executable size" }
+          Write-Output "Built USB-only repair executable ($bytes bytes)."
+      - uses: actions/upload-artifact@v4
+        with:
+          name: SmartEnergy-VPN-ReparerOnduleurs-Windows-SANS-FLASH
+          path: dist/SmartEnergy-VPN-ReparerOnduleurs.exe
+          if-no-files-found: error
+          retention-days: 30
