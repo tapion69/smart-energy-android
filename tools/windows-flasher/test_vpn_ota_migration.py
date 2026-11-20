@@ -37,7 +37,7 @@ class FakeUsb:
         self.parts=initial_table or table(EXPECTED_LEGACY)
         self.nvs=initial_nvs.ljust(0x6000,b"\xff")
         self.old_app=image(
-            parse_partition_table(self.parts)["factory"][3],
+            parse_partition_table(self.parts).get("factory",EXPECTED_LEGACY["factory"])[3],
             "Smart Energy VPN Gateway")
         self.commands=[]
         self.wrote=False
