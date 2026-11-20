@@ -40,7 +40,7 @@ assert 'se_ble_wifi_guard_start()' in source
 assert 'se_vpn_start_physical_maintenance_monitor(void)' in source
 assert 'usb_maintenance_watch_task' in source
 main=(Path(__file__).resolve().parents[1] / "main" / "main.c").read_text()
-assert '#define GATEWAY_VERSION "0.3.13-dev-vpn-s3-ota"' in main
+assert '#define GATEWAY_VERSION "0.3.14-dev-vpn-wifi-recovery"' in main
 assert '"/api/v1/discovery"' in main
 assert 'discovery_inventory(httpd_req_t *req)' in main
 assert 'if(!request_is_private_vpn(req))' in main
