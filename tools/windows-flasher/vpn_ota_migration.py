@@ -22,10 +22,14 @@ OTA_DATA_LENGTH = 0x2000
 NVS_OFFSET = 0x9000
 NVS_LENGTH = 0x6000
 APP_OFFSET = 0x10000
+# ESP-IDF v5.3.2 partitions_singleapp_large.csv uses 1500K (0x177000).
+# Early Smart Energy test images also supported a 3 MiB factory app.
+# Allow only these two known layouts; never relax NVS/offset protection.
+LEGACY_FACTORY_APP_SIZES = (1500 * 1024, 0x300000)
 EXPECTED_LEGACY = {
     "nvs": (0x01,0x02,0x9000,0x6000),
     "phy_init": (0x01,0x01,0xF000,0x1000),
-    "factory": (0x00,0x00,0x10000,0x300000),
+    "factory": (0x00,0x00,0x10000,1500 * 1024),
 }
 
 def _image_is_s3(raw: bytes) -> bool:
@@ -38,20 +42,34 @@ def _read_exact(esptool:Callable, args:list[str], where:int,
         raise ValueError("Lecture physique USB incomplète : aucune écriture autorisée")
     return destination.read_bytes()
 
-def validate_installed_vpn_table(raw:bytes) -> None:
+def _layout_description(parts:dict[str,tuple[int,int,int,int]]) -> str:
+    """Metadata only: no NVS, tokens, password, values or contents."""
+    return ", ".join(
+        f"{name} type={ty:02x}/{sub:02x} offset=0x{offset:x} taille=0x{size:x}"
+        for name,(ty,sub,offset,size) in sorted(parts.items())
+    )
+
+def validate_installed_vpn_table(raw:bytes) -> int:
+    """Accept only known historic single-app layouts; return actual app size."""
     parts=parse_partition_table(raw)
-    if parts.get("ota_0") or parts.get("ota_1") or parts.get("otadata"):
+    if "ota_0" in parts or "ota_1" in parts or "otadata" in parts:
         raise ValueError(
-            "Ce VPN possède déjà une table OTA. Le service OTA 404 provient "
-            "du firmware installé : ne pas écraser les partitions en USB. "
-            "Une mise à jour spécifique au slot actif est nécessaire.")
-    if parts!=EXPECTED_LEGACY:
+            "Table déjà OTA ; migration refusée sans écriture. "
+            "Partitions : " + _layout_description(parts))
+    factory=parts.get("factory")
+    expected_without_app={k:v for k,v in EXPECTED_LEGACY.items() if k!="factory"}
+    actual_without_app={k:v for k,v in parts.items() if k!="factory"}
+    if (actual_without_app!=expected_without_app or not factory or
+        factory[:3]!=(0x00,0x00,APP_OFFSET) or
+        factory[3] not in LEGACY_FACTORY_APP_SIZES):
         raise ValueError(
-            "Table VPN non reconnue : migration refusée sans diagnostic. "
-            "La configuration Tailscale/NVS ne sera pas touchée.")
+            "Table VPN non reconnue : migration refusée avant écriture. "
+            "Partitions détectées (métadonnées uniquement) : "+
+            _layout_description(parts))
     for key,(_ty,_sub,start,length) in parts.items():
         if key!="nvs" and start<NVS_OFFSET+NVS_LENGTH and start+length>NVS_OFFSET:
             raise ValueError("Une partition recouvre la NVS : migration refusée")
+    return factory[3]
 
 def validate_images(directory:Path)->tuple[Path,Path,Path]:
     boot,table,app=(directory/file for file in (BOOT,TABLE,APP))
@@ -101,14 +119,16 @@ def prepare_usb_migration(port:str,images_dir:Path,backup_dir:Path,
     backup_dir.mkdir(parents=True,exist_ok=False)
     log("VPN : lecture USB des partitions, sans modifier l'ESP")
     original_parts=_read_exact(do,first,0x8000,0x1000,backup_dir/"partitions-avant.bin")
-    validate_installed_vpn_table(original_parts)
-    log("Table SINGLE_APP_LARGE VPN reconnue. Sauvegarde des données privées.")
+    legacy_app_size=validate_installed_vpn_table(original_parts)
+    log("Table VPN historique reconnue : application 0x%x octets ; NVS intacte." %
+        legacy_app_size)
+    log("Sauvegarde des données privées avant toute écriture.")
     nvs=_read_exact(do,base,NVS_OFFSET,NVS_LENGTH,backup_dir/"nvs-PRIVEE.bin")
     # Namespace & key identify OUR gateway without exposing their values.
     if b"se_vpn_cfg" not in nvs or b"json" not in nvs:
         raise ValueError(
             "Identité NVS VPN absente : aucune écriture. Ne partage pas la sauvegarde.")
-    old_app=_read_exact(do,base,APP_OFFSET,0x300000,backup_dir/"app-avant.bin")
+    old_app=_read_exact(do,base,APP_OFFSET,legacy_app_size,backup_dir/"app-avant.bin")
     if not _image_is_s3(old_app[:14]) or (
         b"Smart Energy VPN Gateway" not in old_app and
         b"smart-energy-vpn-gateway" not in old_app):
