@@ -2990,11 +2990,23 @@ class MainActivity : Activity() {
                         connectHomeLan() // Verify authenticated /bms before persisting the new identity.
                     }
                 }else{
-                    val slot=(1..3).firstOrNull {
-                        !voltronicFleet.configured(it)
+                    // mDNS rediscovery must repair an existing inverter slot
+                    // rather than looking only for a free slot. Never pick an
+                    // arbitrary existing inverter or interchange INV1 / INV2.
+                    val matches=(1..3).filter { slot ->
+                        voltronicFleet.configured(slot) &&
+                            prefs.getString("inverter_${slot}_name","")?.trim()
+                                ?.equals(reader.name.trim(),ignoreCase=true)==true
                     }
+                    val slot=if(matches.size==1)matches[0]
+                        else if(matches.isEmpty())(1..3).firstOrNull {
+                            !voltronicFleet.configured(it)
+                        } else null
                     if(slot==null){
-                        state("Trois onduleurs sont configurés. Retire un ancien appareil avant d'en ajouter.")
+                        state(if(matches.size>1)
+                            "Nom d'onduleur ambigu : plusieurs emplacements utilisent le même nom."
+                            else "Trois onduleurs sont configurés. Aucun nom correspondant. "+
+                                "Ne remplace pas un autre onduleur.")
                     }else{
                         state("Vérification en lecture seule de "+reader.name+"…")
                         inverterWorker.execute {
@@ -3005,9 +3017,18 @@ class MainActivity : Activity() {
                                     reader.ip,secret,reader.port,wifi)
                                 if(info.optString("product")!="smart-energy-voltronic-s3")
                                     throw IllegalStateException("Lecteur non reconnu")
+                                // Match the actual name returned by the ESP,
+                                // not just the unauthenticated mDNS label.
+                                if(info.optString("device_name").trim()!=reader.name.trim())
+                                    throw IllegalStateException("Le nom réel de l'ESP ne correspond pas à son annonce.")
+                                val identity=info.optString("device_id")
+                                if(!Regex("^se-voltronic-[a-fA-F0-9]{12}$").matches(identity))
+                                    throw IllegalStateException("Identité Voltronic absente ou invalide")
+                                val known=prefs.getString("inverter_${slot}_device_id","").orEmpty()
+                                if(known.isNotEmpty() && !known.equals(identity,true))
+                                    throw IllegalStateException("Identité différente de l'INV${slot} enregistré : association refusée")
                                 if(slot==1) {
-                                    // INV1 keeps the historical profile keys;
-                                    // all existing charts, entities and settings rely on them.
+                                    // Keep historical slot-1 profile and dashboard keys.
                                     saveAuxiliaryCode("premium_voltronic_code_cipher",secret)
                                     prefs.edit()
                                         .putString("inverter_probe_ip",reader.ip)
@@ -3015,6 +3036,7 @@ class MainActivity : Activity() {
                                         .putInt("inverter_probe_port",reader.port)
                                         .putBoolean("inverter_probe_validated",true)
                                         .putString("inverter_1_name",reader.name)
+                                        .putString("inverter_1_device_id",identity)
                                         .apply()
                                 }else{
                                     saveAuxiliaryCode("premium_voltronic_"+slot+"_code_cipher",secret)
@@ -3023,13 +3045,18 @@ class MainActivity : Activity() {
                                         .putString("inverter_"+slot+"_name",reader.name)
                                         .putInt("inverter_"+slot+"_port",reader.port)
                                         .putBoolean("inverter_"+slot+"_validated",true)
+                                        .putString("inverter_"+slot+"_device_id",identity)
                                         .apply()
                                 }
-                                "Onduleur "+reader.name+" associé avec succès (slot "+slot+")."
+                                "Onduleur "+reader.name+" vérifié sur INV"+slot+
+                                    " · adresse locale retrouvée automatiquement."
                             }catch(ex:Exception){
                                 "Association refusée : "+(ex.message ?: "authentification ou réseau")
                             }
-                            runOnUiThread {state(result);voltronicFleet.changed()}
+                            runOnUiThread {
+                                state(result)
+                                if(result.startsWith("Onduleur "))voltronicFleet.changed()
+                            }
                         }
                     }
                 }
