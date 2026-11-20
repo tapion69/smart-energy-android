@@ -9,8 +9,10 @@ import tempfile
 import unittest
 from vpn_ota_migration import (
     BOOT,TABLE,APP,EXPECTED,EXPECTED_LEGACY,
-    validate_installed_vpn_table,validate_images,prepare_usb_migration
+    validate_installed_vpn_table,validate_images,prepare_usb_migration,
+    LEGACY_FACTORY_APP_SIZES
 )
+from voltronic_ota_migration import parse_partition_table
 
 def table(items):
     body=bytearray()
@@ -34,7 +36,9 @@ class FakeUsb:
     def __init__(self,initial_nvs=b"se_vpn_cfg----json",initial_table=None):
         self.parts=initial_table or table(EXPECTED_LEGACY)
         self.nvs=initial_nvs.ljust(0x6000,b"\xff")
-        self.old_app=image(0x300000,"Smart Energy VPN Gateway")
+        self.old_app=image(
+            parse_partition_table(self.parts)["factory"][3],
+            "Smart Energy VPN Gateway")
         self.commands=[]
         self.wrote=False
         self.wrote_parts=None
@@ -75,8 +79,14 @@ class MigrationSafetyTests(unittest.TestCase):
             (Path(td)/BOOT).write_bytes(image(16384).replace(b"\t\x00",b"\x00\x00",1))
             with self.assertRaises(ValueError):validate_images(Path(td))
     def test_legacy_layout_only(self):
-        validate_installed_vpn_table(table(EXPECTED_LEGACY))
-        with self.assertRaisesRegex(ValueError,"déjà une table OTA"):
+        self.assertEqual(validate_installed_vpn_table(table(EXPECTED_LEGACY)),
+                         1500*1024)
+        # The older 3 MiB prototype stays supported; backup length follows
+        # the actual installed partition rather than a hardcoded 3 MiB.
+        other=dict(EXPECTED_LEGACY)
+        other["factory"]=(0,0,0x10000,0x300000)
+        self.assertEqual(validate_installed_vpn_table(table(other)),0x300000)
+        with self.assertRaisesRegex(ValueError,"Table déjà OTA"):
             validate_installed_vpn_table(table(EXPECTED))
         invalid=dict(EXPECTED_LEGACY)
         invalid["nvs"]=(1,2,0xA000,0x5000)
@@ -94,13 +104,33 @@ class MigrationSafetyTests(unittest.TestCase):
             self.assertTrue(usb.wrote)
             self.assertEqual((backup/"nvs-PRIVEE.bin").read_bytes(),usb.nvs)
             self.assertEqual((backup/"nvs-apres-PRIVEE.bin").read_bytes(),usb.nvs)
-            self.assertEqual(len((backup/"app-avant.bin").read_bytes()),0x300000)
+            self.assertEqual(len((backup/"app-avant.bin").read_bytes()),1500*1024)
             operations=[c[[i for i,x in enumerate(c) if x in ("read_flash","write_flash","verify_flash")][0]] for c in usb.commands]
             self.assertEqual(operations.count("write_flash"),1)
             self.assertIn("verify_flash",operations)
             self.assertTrue(all(x=="read_flash" for x in operations[:5]))
             self.assertEqual(operations[-2:],[ "read_flash","read_flash" ])
             self.assertFalse(any("erase_flash" in c for c in usb.commands))
+    def test_legacy_3m_is_backed_up_without_truncation(self):
+        with tempfile.TemporaryDirectory() as root:
+            p=Path(root);imgs=p/"imgs";imgs.mkdir();self.make_images(imgs)
+            original=dict(EXPECTED_LEGACY)
+            original["factory"]=(0,0,0x10000,0x300000)
+            usb=FakeUsb(initial_table=table(original))
+            prepare_usb_migration("COM7",imgs,p/"backup",lambda s:None,esptool=usb)
+            self.assertEqual((p/"backup/app-avant.bin").stat().st_size,0x300000)
+            self.assertTrue(usb.wrote)
+
+    def test_unknown_size_is_diagnosed_without_flashing(self):
+        with tempfile.TemporaryDirectory() as root:
+            p=Path(root);imgs=p/"imgs";imgs.mkdir();self.make_images(imgs)
+            wrong=dict(EXPECTED_LEGACY)
+            wrong["factory"]=(0,0,0x10000,0x1C0000)
+            usb=FakeUsb(initial_table=table(wrong))
+            with self.assertRaisesRegex(ValueError,"taille=0x1c0000"):
+                prepare_usb_migration("COM4",imgs,p/"backup",lambda s:None,esptool=usb)
+            self.assertFalse(usb.wrote)
+
     def test_unknown_or_already_ota_never_written(self):
         with tempfile.TemporaryDirectory() as td:
             p=Path(td);imgs=p/"imgs";imgs.mkdir();self.make_images(imgs)
