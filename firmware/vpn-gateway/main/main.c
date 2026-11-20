@@ -26,6 +26,7 @@
 #include "esp_err.h"
 #include "esp_event.h"
 #include "esp_wifi.h"
+#include "esp_timer.h"
 #include "esp_netif.h"
 #include "esp_http_server.h"
 #include "esp_http_client.h"
@@ -43,7 +44,7 @@
 #include "cJSON.h"
 #include <math.h>
 
-#define GATEWAY_VERSION "0.3.13-dev-vpn-s3-ota"
+#define GATEWAY_VERSION "0.3.14-dev-vpn-wifi-recovery"
 #define GATEWAY_PORT 18767
 #define MAX_JSON_BYTES 32768
 
@@ -56,6 +57,32 @@ static const int WIFI_READY = BIT0;
 static volatile bool wifi_ready = false;
 static volatile uint16_t wifi_last_disconnect_reason = 0;
 static volatile unsigned wifi_retry_count = 0;
+/* Boot-local counters: no tokens, names, addresses or keys. The generation
+ * counters let the VPN task detect even a sub-second Wi-Fi interruption. */
+static volatile uint32_t wifi_disconnect_total = 0;
+static volatile uint32_t wifi_got_ip_total = 0;
+static volatile uint32_t vpn_rebind_total = 0;
+static volatile uint32_t vpn_rebind_failures = 0;
+static esp_timer_handle_t wifi_retry_timer = NULL;
+static void schedule_wifi_retry(void);
+static void connect_wifi_retry(void *arg) {
+    (void)arg;
+    esp_err_t result=esp_wifi_connect();
+    if(result!=ESP_OK)
+        ESP_LOGW(TAG,"WiFi connect request error=%s",esp_err_to_name(result));
+}
+static void schedule_wifi_retry(void){
+    static const uint32_t delays_ms[]={250,1000,2000,4000,8000,15000};
+    unsigned attempt=wifi_retry_count;
+    unsigned ix=(attempt>0 && attempt<=6)?attempt-1:5;
+    if(wifi_retry_timer){
+        (void)esp_timer_stop(wifi_retry_timer);
+        esp_err_t err=esp_timer_start_once(wifi_retry_timer,
+                                (uint64_t)delays_ms[ix]*1000ULL);
+        if(err!=ESP_OK)
+            ESP_LOGW(TAG,"WiFi retry timer error=%s",esp_err_to_name(err));
+    }
+}
 /* Verified local reader bindings. Only a known label + code may create one. */
 static char discovered_ip[2][3][16];
 static char discovered_id[2][3][48];
@@ -88,6 +115,7 @@ static void on_wifi_event(void *arg, esp_event_base_t base,
         const uint16_t reason = event ? event->reason : 0;
         wifi_last_disconnect_reason = reason;
         ++wifi_retry_count;
+        ++wifi_disconnect_total;
         wifi_ready = false;
         xEventGroupClearBits(wifi_events, WIFI_READY);
         // Throttle the human-readable report, not the reconnect attempt.
@@ -95,12 +123,12 @@ static void on_wifi_event(void *arg, esp_event_base_t base,
         if(wifi_retry_count <= 6 || wifi_retry_count % 10 == 0)
             ESP_LOGW(TAG, "WiFi retry %u: reason=%u (%s). No credentials logged.",
                      wifi_retry_count, (unsigned)reason, wifi_failure_hint(reason));
-        esp_err_t retry=esp_wifi_connect();
-        if(retry!=ESP_OK)
-            ESP_LOGW(TAG,"WiFi retry request error=%s",esp_err_to_name(retry));
+        schedule_wifi_retry();
     } else if (base == IP_EVENT && id == IP_EVENT_STA_GOT_IP) {
+        if(wifi_retry_timer)(void)esp_timer_stop(wifi_retry_timer);
         wifi_ready = true;
-        wifi_last_disconnect_reason = 0;
+        ++wifi_got_ip_total;
+        /* Keep the last disconnect reason even after the link recovers. */
         wifi_retry_count = 0;
         (void)se_ble_wifi_promote("se_vpn_cfg","json");
         xEventGroupSetBits(wifi_events, WIFI_READY);
@@ -110,6 +138,12 @@ static void on_wifi_event(void *arg, esp_event_base_t base,
 
 static void start_wifi(void) {
     wifi_events = xEventGroupCreate();
+    ESP_ERROR_CHECK(wifi_events?ESP_OK:ESP_ERR_NO_MEM);
+    const esp_timer_create_args_t retry_args={
+        .callback=&connect_wifi_retry,
+        .arg=NULL,.dispatch_method=ESP_TIMER_TASK,.name="vpn_wifi_retry"
+    };
+    ESP_ERROR_CHECK(esp_timer_create(&retry_args,&wifi_retry_timer));
     ESP_ERROR_CHECK(esp_netif_init());
     ESP_ERROR_CHECK(esp_event_loop_create_default());
     esp_netif_create_default_wifi_sta();
@@ -230,7 +264,10 @@ static esp_err_t health_handler(httpd_req_t *req) {
         return deny(req, "403 Forbidden", "{\"error\":\"vpn_only\"}");
     // Compatibility: read_only still describes the default JK telemetry
     // interface. Writable routes are separate and individually gated by USB.
-    char body[512]={0};
+    char body[1024]={0};
+    wifi_ap_record_t ap={0};
+    int rssi=0;
+    if(wifi_ready && esp_wifi_sta_get_ap_info(&ap)==ESP_OK)rssi=ap.rssi;
     snprintf(body,sizeof body,
         "{\"product\":\"smart-energy-vpn-gateway\","
         "\"version\":\"%s\",\"vpn_connected\":true,"
@@ -243,8 +280,24 @@ static esp_err_t health_handler(httpd_req_t *req) {
          * explicitly confirmed semantic write requests are accepted. */
         "\"remote_parameter_writes_opt_in\":true,"
         "\"remote_parameter_writes_supported\":true,"
-        "\"remote_write_confirmation_required\":true}",
-        GATEWAY_VERSION);
+        "\"remote_write_confirmation_required\":true,"
+        "\"wifi_connected\":%s,"
+        "\"wifi_disconnect_count\":%lu,"
+        "\"wifi_got_ip_count\":%lu,"
+        "\"wifi_last_disconnect_reason\":%u,"
+        "\"wifi_rssi_dbm\":%d,"
+        "\"vpn_rebind_count\":%lu,"
+        "\"vpn_rebind_failures\":%lu,"
+        "\"free_heap_bytes\":%lu,"
+        "\"uptime_ms\":%lu}",
+        GATEWAY_VERSION, wifi_ready?"true":"false",
+        (unsigned long)wifi_disconnect_total,
+        (unsigned long)wifi_got_ip_total,
+        (unsigned)wifi_last_disconnect_reason,rssi,
+        (unsigned long)vpn_rebind_total,
+        (unsigned long)vpn_rebind_failures,
+        (unsigned long)esp_get_free_heap_size(),
+        (unsigned long)esp_log_timestamp());
     httpd_resp_set_type(req,"application/json");
     httpd_resp_set_hdr(req,"Cache-Control","no-store");
     return httpd_resp_sendstr(req,body);
@@ -1117,13 +1170,38 @@ void app_main(void) {
     }
     start_private_http();
     se_vpn_ota_confirm_after_tailnet_ready();
+    // Consume the boot-time DHCP event. Only subsequent Wi-Fi reconnections
+    // require a TailTiny rebind. Counting events, rather than sampling
+    // !wifi_ready each three seconds, also catches brief drop/rejoin cycles.
+    uint32_t handled_disconnects=wifi_disconnect_total;
+    uint32_t handled_got_ip=wifi_got_ip_total;
     while (true) {
         if (!wifi_ready) {
-            ESP_LOGW(TAG, "WiFi disconnected; waiting for local WiFi recovery");
-            xEventGroupWaitBits(wifi_events, WIFI_READY, pdFALSE,
-                                pdTRUE, portMAX_DELAY);
-            if (vpn) tailtiny_rebind(vpn);
+            xEventGroupWaitBits(wifi_events,WIFI_READY,pdFALSE,pdTRUE,
+                                pdMS_TO_TICKS(1000));
+            continue;
         }
-        vTaskDelay(pdMS_TO_TICKS(3000));
+        const uint32_t disconnects=wifi_disconnect_total;
+        const uint32_t got_ip=wifi_got_ip_total;
+        if(disconnects!=handled_disconnects || got_ip!=handled_got_ip){
+            // Let DHCP settle; if another dropout happens, retry on the next
+            // stable Wi-Fi session. This never erases identity or touches NVS.
+            vTaskDelay(pdMS_TO_TICKS(500));
+            if(!wifi_ready)continue;
+            if(vpn){
+                ESP_LOGW(TAG,"WiFi session changed (drops=%lu, IP=%lu); rebinding TailTiny",
+                         (unsigned long)disconnects,(unsigned long)got_ip);
+                esp_err_t rebound=tailtiny_rebind(vpn);
+                if(rebound==ESP_OK){
+                    ++vpn_rebind_total;
+                    handled_disconnects=disconnects;
+                    handled_got_ip=got_ip;
+                }else{
+                    ++vpn_rebind_failures;
+                    ESP_LOGW(TAG,"TailTiny rebind failed: %s",esp_err_to_name(rebound));
+                }
+            }
+        }
+        vTaskDelay(pdMS_TO_TICKS(1000));
     }
 }
