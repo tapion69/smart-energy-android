@@ -42,7 +42,7 @@
 #include "voltronic_protocol.h"
 #include "voltronic_edit.h"
 
-#define VT_VERSION "0.3.7-test-ha-bridge"
+#define VT_VERSION "0.3.8-dev-wifi-discovery"
 #define VT_UART UART_NUM_1
 #define VT_TX GPIO_NUM_17
 #define VT_RX GPIO_NUM_16
