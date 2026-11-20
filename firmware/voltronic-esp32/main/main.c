@@ -21,6 +21,7 @@
 #include "esp_log.h"
 #include "esp_wifi.h"
 #include "esp_event.h"
+#include "esp_timer.h"
 #include "esp_netif.h"
 #include "esp_http_server.h"
 #include "esp_ota_ops.h"
@@ -294,25 +295,52 @@ static void usb_provision(void) {
 
 static void setup_mdns_discovery(void);
 
+/* Wi-Fi station remains on the existing SSID. Repeated immediate reconnects
+ * can make a weak AP flap continuously and cause HTTP gaps in Home Assistant.
+ * Use one bounded one-shot timer; no Wi-Fi credential changes, no reboot. */
+static esp_timer_handle_t wifi_reconnect_timer=NULL;
+static uint8_t wifi_retry_step=0;
+static void wifi_connect_attempt(void *unused){
+    (void)unused;
+    portENTER_CRITICAL(&net_diag_lock);
+    net_diag.wifi_connect_attempts++;
+    portEXIT_CRITICAL(&net_diag_lock);
+    esp_err_t result=esp_wifi_connect();
+    if(result!=ESP_OK)
+        ESP_LOGW(TAG,"Wi-Fi reconnect request rejected: %s",esp_err_to_name(result));
+}
+static void wifi_schedule_reconnect(void){
+    static const uint32_t delay_ms[]={250,1000,2000,4000,8000,15000};
+    unsigned index=wifi_retry_step<6?wifi_retry_step:5;
+    if(wifi_retry_step<6)wifi_retry_step++;
+    // All timer scheduling is owned by the Wi-Fi event loop.
+    if(wifi_reconnect_timer){
+        (void)esp_timer_stop(wifi_reconnect_timer);
+        esp_err_t result=esp_timer_start_once(wifi_reconnect_timer,
+            (uint64_t)delay_ms[index]*1000ULL);
+        if(result!=ESP_OK)
+            ESP_LOGW(TAG,"Wi-Fi retry scheduling failed: %s",esp_err_to_name(result));
+    }
+}
+
 static void wifi_handler(void *arg,esp_event_base_t base,int32_t id,void *data){
     (void)arg;
     if(base==WIFI_EVENT && id==WIFI_EVENT_STA_START) {
-        portENTER_CRITICAL(&net_diag_lock);
-        net_diag.wifi_connect_attempts++;
-        portEXIT_CRITICAL(&net_diag_lock);
-        esp_wifi_connect();
+        wifi_retry_step=0;
+        wifi_connect_attempt(NULL);
     }
     if(base==WIFI_EVENT && id==WIFI_EVENT_STA_DISCONNECTED){
         wifi_event_sta_disconnected_t *evt=(wifi_event_sta_disconnected_t *)data;
         portENTER_CRITICAL(&net_diag_lock);
         net_diag.wifi_disconnects++;
-        net_diag.wifi_connect_attempts++;
         if(evt)net_diag.wifi_last_disconnect_reason=evt->reason;
         portEXIT_CRITICAL(&net_diag_lock);
         xEventGroupClearBits(wifi_events,WIFI_OK);
-        esp_wifi_connect();
+        wifi_schedule_reconnect();
     }
     if(base==IP_EVENT && id==IP_EVENT_STA_GOT_IP) {
+        if(wifi_reconnect_timer)(void)esp_timer_stop(wifi_reconnect_timer);
+        wifi_retry_step=0;
         portENTER_CRITICAL(&net_diag_lock);
         net_diag.wifi_got_ip++;
         portEXIT_CRITICAL(&net_diag_lock);
@@ -320,13 +348,20 @@ static void wifi_handler(void *arg,esp_event_base_t base,int32_t id,void *data){
             // No candidate is normal; any failed promotion is handled by guard.
         }
         xEventGroupSetBits(wifi_events,WIFI_OK);
-        // Register after the Wi-Fi interface has a real address, then retry
-        // if a later reconnect is needed. Never block the RS232 poller.
-        setup_mdns_discovery();
+        // The independent discovery task registers mDNS after GOT_IP and
+        // retries on each 15s cycle; keep event-loop callbacks very short.
     }
 }
 static void wifi_start(void){
     wifi_events=xEventGroupCreate();
+    ESP_ERROR_CHECK(wifi_events?ESP_OK:ESP_ERR_NO_MEM);
+    const esp_timer_create_args_t reconnect_args={
+        .callback=&wifi_connect_attempt,
+        .arg=NULL,
+        .dispatch_method=ESP_TIMER_TASK,
+        .name="vt_wifi_retry"
+    };
+    ESP_ERROR_CHECK(esp_timer_create(&reconnect_args,&wifi_reconnect_timer));
     ESP_ERROR_CHECK(esp_netif_init());
     ESP_ERROR_CHECK(esp_event_loop_create_default());
     esp_netif_create_default_wifi_sta();
@@ -1486,6 +1521,9 @@ static void discovery_broadcast_task(void *arg){
         mac[0],mac[1],mac[2],mac[3],mac[4],mac[5]);
     for(;;){
         if((xEventGroupGetBits(wifi_events)&WIFI_OK)!=0){
+            // Retry mDNS registration every cycle, even if the Wi-Fi link did
+            // not drop. Do not block the system Wi-Fi/IP event dispatcher.
+            setup_mdns_discovery();
             // Recover local discovery after transient socket allocation errors.
             if(fd<0){
                 fd=socket(AF_INET,SOCK_DGRAM,IPPROTO_UDP);
@@ -1574,7 +1612,7 @@ void app_main(void){
                          cfg.wifi_password,sizeof(cfg.wifi_password));
     se_ble_wifi_guard_start();
     wifi_start();
-    if(xTaskCreate(discovery_broadcast_task,"se-discover",4096,NULL,2,NULL)!=pdPASS)
+    if(xTaskCreate(discovery_broadcast_task,"se-discover",6144,NULL,2,NULL)!=pdPASS)
         ESP_LOGE(TAG,"UDP discovery task failed; RS232 polling unaffected");
     /* Network time only for UTC-dated QED/QEM/QEY/QLD/QLM/QLY.
        The serial reader does not depend on Internet or an NTP response. */
