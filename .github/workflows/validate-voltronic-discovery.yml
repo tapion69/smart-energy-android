@@ -1,0 +1,39 @@
+name: Validate Voltronic name discovery self-heal (NO AUTO DEPLOY)
+on:
+  push:
+    branches: ['fix/voltronic-discovery-self-heal-20261120']
+    paths:
+      - 'firmware/voltronic-esp32/**'
+      - '.github/workflows/validate-voltronic-discovery.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  voltronic-discovery:
+    name: Build ESP32-S3 Voltronic with self-healing name discovery
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify existing RS232 protocol and discovery invariants
+        run: |
+          set -e
+          gcc -std=gnu11 -Wall -Wextra -Werror firmware/voltronic-esp32/tests/test_protocol.c -o /tmp/vt_protocol -lm
+          /tmp/vt_protocol
+          python3 firmware/voltronic-esp32/tests/test_discovery_self_heal_sources.py
+      - name: Compile firmware (no changes to installed ESP or NVS)
+        uses: espressif/esp-idf-ci-action@v1
+        with:
+          esp_idf_version: v5.3.2
+          target: esp32s3
+          path: firmware/voltronic-esp32
+      - name: Verify S3 application compiled
+        run: test -s firmware/voltronic-esp32/build/smart_energy_voltronic_s3.bin
+      - name: Archive TEST-ONLY application (NOT published to OTA)
+        uses: actions/upload-artifact@v4
+        with:
+          name: Voltronic-S3-discovery-self-heal-TEST-ONLY
+          path: firmware/voltronic-esp32/build/smart_energy_voltronic_s3.bin
+          if-no-files-found: error
+          retention-days: 7
