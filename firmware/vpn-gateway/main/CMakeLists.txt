@@ -4,5 +4,5 @@ if(IDF_TARGET STREQUAL "esp32s3")
   set(SE_VPN_USB_EXTRA esp_driver_usb_serial_jtag)
 endif()
 idf_component_register(SRCS "main.c" "se_ble_wifi.c" "vpn_ota.c" "vpn_provision.c" INCLUDE_DIRS "." REQUIRES
-  tailtiny esp_wifi esp_netif esp_event nvs_flash esp_http_server esp_http_client
+  tailtiny esp_wifi esp_netif esp_event esp_timer nvs_flash esp_http_server esp_http_client
   freertos lwip mbedtls driver esp_driver_uart esp_driver_gpio json ${SE_VPN_USB_EXTRA} bt app_update esp-tls)
