@@ -292,6 +292,8 @@ static void usb_provision(void) {
     }
 }
 
+static void setup_mdns_discovery(void);
+
 static void wifi_handler(void *arg,esp_event_base_t base,int32_t id,void *data){
     (void)arg;
     if(base==WIFI_EVENT && id==WIFI_EVENT_STA_START) {
@@ -318,6 +320,9 @@ static void wifi_handler(void *arg,esp_event_base_t base,int32_t id,void *data){
             // No candidate is normal; any failed promotion is handled by guard.
         }
         xEventGroupSetBits(wifi_events,WIFI_OK);
+        // Register after the Wi-Fi interface has a real address, then retry
+        // if a later reconnect is needed. Never block the RS232 poller.
+        setup_mdns_discovery();
     }
 }
 static void wifi_start(void){
@@ -1439,32 +1444,59 @@ static void ota_postboot_validate_task(void *unused){
 /* Local discovery broadcasts contain only public identity; never secrets, IP,
  * MAC or telemetry. Receiver must authenticate with X-Setup-Code before relay.
  * A stable hardware ID is separate from the customizable display name. */
+static bool mdns_registration_done=false;
 static void setup_mdns_discovery(void){
+    if(mdns_registration_done)return;
     uint8_t mac[6]={0};
     if(esp_read_mac(mac,ESP_MAC_WIFI_STA)!=ESP_OK)return;
     char host[24]={0},instance[64]={0};
     snprintf(host,sizeof(host),"sevolt-%02x%02x%02x",mac[3],mac[4],mac[5]);
     snprintf(instance,sizeof(instance),"%s (%s)",cfg.display_name,host);
     esp_err_t err=mdns_init();
-    if(err!=ESP_OK && err!=ESP_ERR_INVALID_STATE)return;
-    mdns_hostname_set(host);
-    mdns_instance_name_set(instance);
-    mdns_service_add(instance,"_http","_tcp",VT_HTTP_PORT,NULL,0);
-    mdns_service_txt_item_set("_http","_tcp","family","voltronic");
+    if(err!=ESP_OK && err!=ESP_ERR_INVALID_STATE){
+        ESP_LOGW(TAG,"mDNS initialization deferred: %s",esp_err_to_name(err));
+        return;
+    }
+    err=mdns_hostname_set(host);
+    if(err!=ESP_OK){
+        ESP_LOGW(TAG,"mDNS hostname deferred: %s",esp_err_to_name(err));
+        return;
+    }
+    err=mdns_instance_name_set(instance);
+    if(err!=ESP_OK){
+        ESP_LOGW(TAG,"mDNS instance deferred: %s",esp_err_to_name(err));
+        return;
+    }
+    err=mdns_service_add(instance,"_http","_tcp",VT_HTTP_PORT,NULL,0);
+    if(err!=ESP_OK){
+        ESP_LOGW(TAG,"mDNS service deferred: %s",esp_err_to_name(err));
+        return;
+    }
+    err=mdns_service_txt_item_set("_http","_tcp","family","voltronic");
+    if(err!=ESP_OK)
+        ESP_LOGW(TAG,"mDNS TXT registration failed: %s",esp_err_to_name(err));
+    mdns_registration_done=true;
+    ESP_LOGI(TAG,"mDNS discovery online as %s",instance);
 }
 static void discovery_broadcast_task(void *arg){
     (void)arg;
-    int fd=socket(AF_INET,SOCK_DGRAM,IPPROTO_UDP);
-    if(fd<0){vTaskDelete(NULL);return;}
-    int broadcast=1;setsockopt(fd,SOL_SOCKET,SO_BROADCAST,&broadcast,sizeof(broadcast));
-    struct sockaddr_in dst={0};
-    dst.sin_family=AF_INET;dst.sin_port=htons(18769);
-    dst.sin_addr.s_addr=htonl(INADDR_BROADCAST);
+    int fd=-1;
     uint8_t mac[6]={0};esp_read_mac(mac,ESP_MAC_WIFI_STA);
     char id[36];snprintf(id,sizeof(id),"se-voltronic-%02x%02x%02x%02x%02x%02x",
         mac[0],mac[1],mac[2],mac[3],mac[4],mac[5]);
     for(;;){
         if((xEventGroupGetBits(wifi_events)&WIFI_OK)!=0){
+            // Recover local discovery after transient socket allocation errors.
+            if(fd<0){
+                fd=socket(AF_INET,SOCK_DGRAM,IPPROTO_UDP);
+                if(fd>=0){
+                    int broadcast=1;
+                    if(setsockopt(fd,SOL_SOCKET,SO_BROADCAST,
+                                  &broadcast,sizeof(broadcast))!=0){
+                        close(fd);fd=-1;
+                    }
+                }
+            }
             cJSON *j=cJSON_CreateObject();
             cJSON_AddStringToObject(j,"proto","smart-energy-discovery-v1");
             cJSON_AddStringToObject(j,"family","voltronic");
@@ -1496,8 +1528,24 @@ static void discovery_broadcast_task(void *arg){
                 }
             }
             char *payload=cJSON_PrintUnformatted(j);
-            if(payload){sendto(fd,payload,strlen(payload),0,
-                (struct sockaddr*)&dst,sizeof(dst));free(payload);}
+            if(payload && fd>=0 && local_ip[0]){
+                struct sockaddr_in dst={0};
+                dst.sin_family=AF_INET;dst.sin_port=htons(18769);
+                dst.sin_addr.s_addr=htonl(INADDR_BROADCAST);
+                int global=sendto(fd,payload,strlen(payload),0,
+                    (struct sockaddr*)&dst,sizeof(dst));
+                int directed=-1;
+                if(ni && ip.netmask.addr!=0){
+                    dst.sin_addr.s_addr=ip.ip.addr | ~ip.netmask.addr;
+                    directed=sendto(fd,payload,strlen(payload),0,
+                        (struct sockaddr*)&dst,sizeof(dst));
+                }
+                if(global<0 && directed<0){
+                    ESP_LOGW(TAG,"UDP discovery send failed; reopening socket");
+                    close(fd);fd=-1;
+                }
+            }
+            if(payload)free(payload);
             cJSON_Delete(j);
         }
         vTaskDelay(pdMS_TO_TICKS(15000));
@@ -1526,8 +1574,8 @@ void app_main(void){
                          cfg.wifi_password,sizeof(cfg.wifi_password));
     se_ble_wifi_guard_start();
     wifi_start();
-    setup_mdns_discovery();
-    xTaskCreate(discovery_broadcast_task,"se-discover",4096,NULL,2,NULL);
+    if(xTaskCreate(discovery_broadcast_task,"se-discover",4096,NULL,2,NULL)!=pdPASS)
+        ESP_LOGE(TAG,"UDP discovery task failed; RS232 polling unaffected");
     /* Network time only for UTC-dated QED/QEM/QEY/QLD/QLM/QLY.
        The serial reader does not depend on Internet or an NTP response. */
     esp_sntp_setoperatingmode(SNTP_OPMODE_POLL);
