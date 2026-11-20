@@ -1,10 +1,10 @@
 {
   "schemaVersion": 1,
   "product": "smart-energy-vpn-gateway",
-  "available": false,
-  "version": "",
+  "available": true,
+  "version": "0.3.14",
   "target": "esp32s3-n16r8",
-  "downloadUrl": "",
-  "sha256": "",
-  "notes": "No VPN S3 OTA release published. Classic ESP32 and legacy single-app S3 require USB migration; enable only after physical Wi-Fi/Tailnet/rollback validation."
+  "downloadUrl": "https://github.com/tapion69/smart-energy-android/releases/download/vpn-gateway-v0.3.14/SmartEnergy-VPN-S3-OTA.bin",
+  "sha256": "22e18cb3aaf30261be84ecabbbbba682d3d78868c708bb8f244abfb765611579",
+  "releaseNotesUrl": "https://github.com/tapion69/smart-energy-android/releases/tag/vpn-gateway-v0.3.14"
 }
