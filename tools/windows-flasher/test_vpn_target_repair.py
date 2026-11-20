@@ -45,13 +45,15 @@ class TestVpnInverterRepair(unittest.TestCase):
         self.assertNotIn("SEVPN_REMOTE_WRITES_",UI)
         self.assertIn('self.code.set("")',UI)
 
-    def test_existing_flasher_exposes_repair(self):
-        self.assertIn('self.vpn_patch_slot = tk.StringVar(value="1")',FLASHER)
-        self.assertIn("self.vpn_repair_ip = tk.StringVar()",FLASHER)
-        self.assertIn("self.vpn_repair_code = tk.StringVar()",FLASHER)
-        self.assertIn("command=self._add_voltronic_only",FLASHER)
-        self.assertIn("ip=self.vpn_repair_ip.get().strip()",FLASHER)
-        self.assertIn("code=self.vpn_repair_code.get()",FLASHER)
+    def test_all_in_one_flasher_uses_only_name_and_code(self):
+        # A standalone rescue utility is kept for exceptional legacy devices,
+        # but the main flasher does not expose any manual-IP inverter mapping.
+        self.assertNotIn("self.vpn_repair_ip",FLASHER)
+        self.assertNotIn("self.vpn_patch_slot",FLASHER)
+        self.assertNotIn("command=self._add_voltronic_only",FLASHER)
+        self.assertIn('"volt1_name"',FLASHER)
+        self.assertIn('"volt1_code"',FLASHER)
+        self.assertIn('values[f"{family}{slot}_ip"]=""',FLASHER)
 
     def test_firmware_requires_physical_usb_and_nvs_readback(self):
         self.assertIn('const char add_volt[]="SEVPN_ADD_VOLTRONIC "',FIRMWARE)
