@@ -971,15 +971,18 @@ static esp_err_t edit_parameter_handler(httpd_req_t *r){
     }
     if(xSemaphoreTake(edit_lock,pdMS_TO_TICKS(100))!=pdTRUE){
         cJSON_Delete(doc);
-        return httpd_resp_send_err(r,HTTPD_503_SERVICE_UNAVAILABLE,"edit lock busy");
+        httpd_resp_set_status(r,"503 Service Unavailable");
+        return httpd_resp_sendstr(r,"{\"error\":\"edit_lock_busy\"}");
     }
     if(edit_request.pending && edit_request.waiter_active){
         xSemaphoreGive(edit_lock);cJSON_Delete(doc);
-        return httpd_resp_send_err(r,HTTPD_409_CONFLICT,"previous edit still completing");
+        httpd_resp_set_status(r,"409 Conflict");
+        return httpd_resp_sendstr(r,"{\"error\":\"previous_edit_still_completing\"}");
     }
     if(edit_request.pending && !edit_request.finished){
         xSemaphoreGive(edit_lock);cJSON_Delete(doc);
-        return httpd_resp_send_err(r,HTTPD_409_CONFLICT,"previous UART edit unresolved");
+        httpd_resp_set_status(r,"409 Conflict");
+        return httpd_resp_sendstr(r,"{\"error\":\"previous_uart_edit_unresolved\"}");
     }
     /* A lost HTTP response must not cause an already verified write
      * to be repeated. Serve the recorded result once for the same target.
@@ -1023,7 +1026,8 @@ static esp_err_t edit_parameter_handler(httpd_req_t *r){
     if(spawned!=pdPASS){
         memset(&edit_request,0,sizeof(edit_request));
         xSemaphoreGive(edit_lock);cJSON_Delete(doc);
-        httpd_resp_send_err(async_request,HTTPD_503_SERVICE_UNAVAILABLE,"edit worker unavailable");
+        httpd_resp_set_status(async_request,"503 Service Unavailable");
+        httpd_resp_sendstr(async_request,"{\"error\":\"edit_worker_unavailable\"}");
         httpd_req_async_handler_complete(async_request);
         return ESP_OK;
     }
