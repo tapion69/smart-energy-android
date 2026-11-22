@@ -18,7 +18,9 @@ jobs:
       - uses: actions/checkout@v4
       - name: Explicit ESP cache bridge security contract
         run: python3 firmware/voltronic-esp32/tests/test_ha_bridge_contract.py
-      - name: ESP verified-write priority contract\n        run: python3 firmware/voltronic-esp32/tests/test_priority_write_contract.py\n      - name: Strict host parser tests (no inverter, no RS232 output)
+      - name: ESP verified-write priority contract
+        run: python3 firmware/voltronic-esp32/tests/test_priority_write_contract.py
+      - name: Strict host parser tests (no inverter, no RS232 output)
         run: |
           gcc -std=gnu11 -Wall -Wextra -Werror \
             firmware/voltronic-esp32/tests/test_protocol.c \
