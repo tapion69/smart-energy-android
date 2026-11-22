@@ -1,0 +1,72 @@
+name: Publish tested Voltronic 0.3.9 priority dual-OTA beta
+on:
+  push:
+    branches: ['fix/esp32-priority-verified-write-20261122']
+    paths:
+      - '.github/workflows/release-voltronic-priority-039.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  actions: read
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify source build provenance
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          SOURCE_RUN=45006606557
+          SOURCE_SHA=5b6e291ffc3c929ce7f6d39d880c957a7d1fc1d1
+          test "$(gh api repos/$GITHUB_REPOSITORY/actions/runs/$SOURCE_RUN --jq '.conclusion')" = success
+          test "$(gh api repos/$GITHUB_REPOSITORY/actions/runs/$SOURCE_RUN --jq '.head_sha')" = "$SOURCE_SHA"
+          test "$(gh api repos/$GITHUB_REPOSITORY/actions/runs/$SOURCE_RUN --jq '.head_branch')" = 'fix/esp32-priority-verified-write-20261122'
+          if gh release view voltronic-v0.3.9 --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "::error::Release voltronic-v0.3.9 exists; refusing replacement"
+            exit 1
+          fi
+      - name: Download the exact successful dual-OTA artifact
+        uses: actions/download-artifact@v4
+        with:
+          run-id: 45006606557
+          repository: tapion69/smart-energy-android
+          github-token: ${{ github.token }}
+          name: SmartEnergy-Voltronic-S3-Priority-0.3.9-DUAL-OTA-TEST
+          path: staging/verified-ota
+      - name: Validate chip, version, NVS-safe partition layout and SHA256
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          import hashlib,sys
+          sys.path.insert(0,"tools/windows-flasher")
+          from voltronic_ota_migration import EXPECTED,parse_partition_table
+          d=Path("staging/verified-ota")
+          app=d/"smart-energy-voltronic-S3-OTA-0.3.9-TEST.bin"
+          part=d/"validated-partition-table.bin"
+          assert app.is_file() and part.is_file(),"Missing verified dual-OTA assets"
+          b=app.read_bytes()
+          assert 16384<=len(b)<=0x200000,"Firmware too large for OTA partition"
+          assert b[0]==0xe9 and int.from_bytes(b[12:14],"little")==9,"Invalid ESP32-S3 binary"
+          assert b"0.3.9-test-priority-write" in b,"Wrong firmware build"
+          assert parse_partition_table(part.read_bytes())==EXPECTED,"Unsafe partition map"
+          print("Voltronic 0.3.9 tested dual-OTA image",len(b),"bytes")
+          print("SHA256",hashlib.sha256(b).hexdigest())
+          PY
+          mkdir -p release-files
+          cp staging/verified-ota/smart-energy-voltronic-S3-OTA-0.3.9-TEST.bin release-files/smart-energy-voltronic-S3-OTA.bin
+      - name: Publish only the explicit beta firmware release for the APK feed
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh release create voltronic-v0.3.9 release-files/smart-energy-voltronic-S3-OTA.bin \
+            --repo "$GITHUB_REPOSITORY" \
+            --target 5b6e291ffc3c929ce7f6d39d880c957a7d1fc1d1 \
+            --prerelease \
+            --title "Voltronic ESP32-S3 0.3.9 beta - priorite aux parametres HA" \
+            --notes "Firmware ESP32-S3 N16R8 dual-OTA uniquement, version interne 0.3.9-test-priority-write. SETs de parametres prioritaires dans la tache UART; API HTTP asynchrone pour ne pas bloquer la telemetrie; relecture native avant et apres SET; gestion du resultat deja applique et des transactions incertaines sans repetition aveugle. Utiliser avec Smart Voltronic HA 2.3.18. Version beta : tests sur onduleur reel necessaires. Installation manuelle et volontaire via APK; jamais de flash automatique. Ne pas utiliser sur partitionnement single-app ni sur JK/Deye/VPN."
