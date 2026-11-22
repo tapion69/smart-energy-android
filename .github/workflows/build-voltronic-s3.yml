@@ -1,7 +1,7 @@
 name: Smart Energy Voltronic ESP32-S3 parameter-write experimental
 on:
   push:
-    branches: [dev, 'test/esp32-ha-bridge', 'experiment/esp32-s3-full-live-test', 'feature/universal-reader-discovery-20261116']
+    branches: [dev, 'test/esp32-ha-bridge', 'experiment/esp32-s3-full-live-test', 'feature/universal-reader-discovery-20261116', 'fix/esp32-priority-verified-write-20261122']
     paths:
       - 'firmware/voltronic-esp32/**'
       - '.github/workflows/build-voltronic-s3.yml'
@@ -18,7 +18,7 @@ jobs:
       - uses: actions/checkout@v4
       - name: Explicit ESP cache bridge security contract
         run: python3 firmware/voltronic-esp32/tests/test_ha_bridge_contract.py
-      - name: Strict host parser tests (no inverter, no RS232 output)
+      - name: ESP verified-write priority contract\n        run: python3 firmware/voltronic-esp32/tests/test_priority_write_contract.py\n      - name: Strict host parser tests (no inverter, no RS232 output)
         run: |
           gcc -std=gnu11 -Wall -Wextra -Werror \
             firmware/voltronic-esp32/tests/test_protocol.c \
