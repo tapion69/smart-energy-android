@@ -42,7 +42,7 @@
 #include "voltronic_protocol.h"
 #include "voltronic_edit.h"
 
-#define VT_VERSION "0.3.8-dev-wifi-discovery"
+#define VT_VERSION "0.3.9-test-priority-write"
 #define VT_UART UART_NUM_1
 #define VT_TX GPIO_NUM_17
 #define VT_RX GPIO_NUM_16
@@ -111,7 +111,7 @@ static uint32_t bridge_seq=0;
 static SemaphoreHandle_t state_lock;
 static EventGroupHandle_t wifi_events;
 typedef struct {
-    bool pending, running, finished;
+    bool pending, running, finished, waiter_active;
     char key[52];
     double old_value, new_value;
     char candidate[VT_MAX_COMMAND]; /* validated, same semantic setting only */
@@ -121,6 +121,7 @@ typedef struct {
 static vt_edit_request_t edit_request={0};
 static SemaphoreHandle_t edit_lock;
 static SemaphoreHandle_t edit_completed;
+static TaskHandle_t uart_poll_handle=NULL;
 #define WIFI_OK BIT0
 /* Aggregated, anonymous counters; no SSID, MAC, IP, password or access code. */
 typedef struct {
@@ -892,9 +893,46 @@ static esp_err_t ota_image_handler(httpd_req_t *req){
     xTaskCreate(ota_restart,"ota_restart",2048,NULL,3,NULL);
     return reply;
 }
-/* Authenticated, opt-in parameter writes. The HTTP task never uses UART;
- * the existing polling task performs preflight, SET and readback atomically.
- * No raw serial command can be supplied by an HTTP client. */
+/* Authenticated, opt-in parameter writes. A dedicated HTTP response
+ * worker waits for the ONLY UART poll task to complete preflight/SET/readback.
+ * The HTTP server itself stays responsive to telemetry/details while writing.
+ * One write per inverter; no timeout can trigger a blind second SET. */
+static void edit_parameter_worker(void *arg){
+    httpd_req_t *request=(httpd_req_t*)arg;
+    bool completed=xSemaphoreTake(edit_completed,pdMS_TO_TICKS(18000))==pdTRUE;
+    bool verified=false, acknowledged=false;
+    char result[64]={0};
+    xSemaphoreTake(edit_lock,portMAX_DELAY);
+    if(completed && edit_request.pending && edit_request.finished){
+        verified=edit_request.verified;
+        acknowledged=edit_request.set_acknowledged;
+        snprintf(result,sizeof(result),"%s",edit_request.result);
+        memset(&edit_request,0,sizeof(edit_request));
+    } else {
+        /* The UART task may still be finishing. Keep the slot occupied until
+         * its result is known. A later request can safely recover that slot;
+         * it must never repeat a possibly applied SET automatically. */
+        edit_request.waiter_active=false;
+        completed=false;
+    }
+    xSemaphoreGive(edit_lock);
+    if(completed){
+        cJSON *answer=base_json("voltronic-parameter-verification");
+        cJSON_ReplaceItemInObject(answer,"read_only",cJSON_CreateBool(false));
+        cJSON_AddBoolToObject(answer,"verified",verified);
+        cJSON_AddBoolToObject(answer,"set_acknowledged",acknowledged);
+        cJSON_AddStringToObject(answer,"result",result);
+        send_json(request,answer);
+    } else {
+        httpd_resp_set_status(request,"504 Gateway Timeout");
+        httpd_resp_set_type(request,"application/json");
+        httpd_resp_sendstr(request,
+            "{\"verified\":false,\"set_acknowledged\":false,"
+            "\"result\":\"state_uncertain_no_automatic_retry\"}");
+    }
+    httpd_req_async_handler_complete(request);
+    vTaskDelete(NULL);
+}
 static esp_err_t edit_parameter_handler(httpd_req_t *r){
     if(!authorized(r))return deny(r);
     char confirmed[8]={0};
@@ -933,39 +971,66 @@ static esp_err_t edit_parameter_handler(httpd_req_t *r){
     }
     if(xSemaphoreTake(edit_lock,pdMS_TO_TICKS(100))!=pdTRUE){
         cJSON_Delete(doc);
-        return httpd_resp_send_err(r,HTTPD_500_INTERNAL_SERVER_ERROR,"edit busy");
+        return httpd_resp_send_err(r,HTTPD_503_SERVICE_UNAVAILABLE,"edit lock busy");
     }
-    if(edit_request.pending){
+    if(edit_request.pending && edit_request.waiter_active){
         xSemaphoreGive(edit_lock);cJSON_Delete(doc);
-        return httpd_resp_send_err(r,HTTPD_500_INTERNAL_SERVER_ERROR,"previous edit unresolved");
+        return httpd_resp_send_err(r,HTTPD_409_CONFLICT,"previous edit still completing");
     }
+    if(edit_request.pending && !edit_request.finished){
+        xSemaphoreGive(edit_lock);cJSON_Delete(doc);
+        return httpd_resp_send_err(r,HTTPD_409_CONFLICT,"previous UART edit unresolved");
+    }
+    /* A lost HTTP response must not cause an already verified write
+     * to be repeated. Serve the recorded result once for the same target.
+     * If the preceding operation was unverified, the new explicit request
+     * must pass fresh UART preflight again. */
+    if(edit_request.pending && edit_request.finished && edit_request.verified &&
+       strcmp(edit_request.key,spec->key)==0 &&
+       fabs(edit_request.new_value-value->valuedouble)<=spec->tolerance){
+        bool ack=edit_request.set_acknowledged;
+        char last[64]={0};
+        snprintf(last,sizeof(last),"%s",edit_request.result);
+        memset(&edit_request,0,sizeof(edit_request));
+        xSemaphoreTake(edit_completed,0);
+        xSemaphoreGive(edit_lock);cJSON_Delete(doc);
+        cJSON *answer=base_json("voltronic-parameter-verification");
+        cJSON_ReplaceItemInObject(answer,"read_only",cJSON_CreateBool(false));
+        cJSON_AddBoolToObject(answer,"verified",true);
+        cJSON_AddBoolToObject(answer,"set_acknowledged",ack);
+        cJSON_AddStringToObject(answer,"result",last);
+        return send_json(r,answer);
+    }
+    /* Discard ONLY a completed transaction with no active response waiter. */
     memset(&edit_request,0,sizeof(edit_request));
+    xSemaphoreTake(edit_completed,0); // drain completion of timed-out request
     snprintf(edit_request.key,sizeof(edit_request.key),"%s",spec->key);
     edit_request.old_value=old->valuedouble;
     edit_request.new_value=value->valuedouble;
     if(candidate&&candidate->valuestring)
         snprintf(edit_request.candidate,sizeof(edit_request.candidate),"%s",candidate->valuestring);
+    httpd_req_t *async_request=NULL;
+    esp_err_t async_status=httpd_req_async_handler_begin(r,&async_request);
+    if(async_status!=ESP_OK){
+        memset(&edit_request,0,sizeof(edit_request));
+        xSemaphoreGive(edit_lock);cJSON_Delete(doc);
+        return httpd_resp_send_err(r,HTTPD_500_INTERNAL_SERVER_ERROR,"async request unavailable");
+    }
     edit_request.pending=true;
+    edit_request.waiter_active=true;
+    BaseType_t spawned=xTaskCreate(edit_parameter_worker,"voltronic_edit_reply",
+                                    6144,async_request,4,NULL);
+    if(spawned!=pdPASS){
+        memset(&edit_request,0,sizeof(edit_request));
+        xSemaphoreGive(edit_lock);cJSON_Delete(doc);
+        httpd_resp_send_err(async_request,HTTPD_503_SERVICE_UNAVAILABLE,"edit worker unavailable");
+        httpd_req_async_handler_complete(async_request);
+        return ESP_OK;
+    }
     xSemaphoreGive(edit_lock);
     cJSON_Delete(doc);
-    /* No automatic retries, even if the HTTP connection disappears. */
-    if(xSemaphoreTake(edit_completed,pdMS_TO_TICKS(15000))!=pdTRUE){
-        return httpd_resp_send_err(r,HTTPD_500_INTERNAL_SERVER_ERROR,
-            "edit state uncertain; no retry; inspect inverter");
-    }
-    xSemaphoreTake(edit_lock,portMAX_DELAY);
-    bool verified=edit_request.verified;
-    bool acknowledged=edit_request.set_acknowledged;
-    char result[64]={0};
-    snprintf(result,sizeof(result),"%s",edit_request.result);
-    memset(&edit_request,0,sizeof(edit_request));
-    xSemaphoreGive(edit_lock);
-    cJSON *answer=base_json("voltronic-parameter-verification");
-    cJSON_ReplaceItemInObject(answer,"read_only",cJSON_CreateBool(false));
-    cJSON_AddBoolToObject(answer,"verified",verified);
-    cJSON_AddBoolToObject(answer,"set_acknowledged",acknowledged);
-    cJSON_AddStringToObject(answer,"result",result);
-    return send_json(r,answer);
+    if(uart_poll_handle)xTaskNotifyGive(uart_poll_handle);
+    return ESP_OK;
 }
 
 static void start_api(void){
@@ -1292,9 +1357,9 @@ static void perform_parameter_edit(
         edit_result(result,"fresh_read_failed");return;
     }
     double current=fields[spec->index];
-    if(fabs(current-request->old_value)>spec->tolerance){
-        edit_result(result,"changed_since_preview");return;
-    }
+    /* HA/APK preview values may be several minutes old. The requested
+     * setting is explicit: trust the fresh CRC-valid inverter read instead
+     * of rejecting the change solely because another client updated it. */
     int nominal=0;
     if(strcmp(spec->query,"QPIRI")==0 && count>9){
         double under_voltage=fields[9];
@@ -1303,6 +1368,23 @@ static void perform_parameter_edit(
     }
     if(!vt_edit_allowed(spec,current,request->new_value,nominal)){
         edit_result(result,"value_or_step_not_supported");return;
+    }
+    /* Idempotency: when already at target, confirm using the fresh preflight
+     * and update both native and HA bridge caches, without a duplicate SET. */
+    if(fabs(current-request->new_value)<=spec->tolerance){
+        xSemaphoreTake(state_lock,portMAX_DELAY);
+        const uint32_t fresh_ms=esp_log_timestamp();
+        interpret_reply(spec->query,&before,fresh_ms);
+        for(size_t j=0;j<VT_JOBS;j++){
+            if(strcmp(jobs[j].command,spec->query)==0){
+                bridge_store_reply(j,spec->query,&before,fresh_ms);
+                break;
+            }
+        }
+        xSemaphoreGive(state_lock);
+        *verified=true;
+        edit_result(result,"already_at_requested_value");
+        return;
     }
     char command[VT_MAX_COMMAND]={0};
     if(!vt_edit_command(spec,request->new_value,command,sizeof(command))){
@@ -1398,7 +1480,7 @@ static void polling_task(void *unused) {
         bool secondary=(iterations%3==2);
         vt_job_t *job=next_due_job(now,secondary);
         if(!job)job=next_due_job(now,!secondary);
-        if(!job) {vTaskDelay(pdMS_TO_TICKS(120));continue;}
+        if(!job) {ulTaskNotifyTake(pdTRUE,pdMS_TO_TICKS(120));continue;}
         if(strcmp(job->command,"QPIGS2")==0 &&
            (int32_t)(now-state.q2_disabled_until_ms)<0) {
             job->next_ms=state.q2_disabled_until_ms;
@@ -1449,7 +1531,7 @@ static void polling_task(void *unused) {
         bridge_store_reply((size_t)(job-jobs),cmd,&rx,end);
         xSemaphoreGive(state_lock);
         iterations++;
-        vTaskDelay(pdMS_TO_TICKS(120));
+        ulTaskNotifyTake(pdTRUE,pdMS_TO_TICKS(120));
     }
 }
 /* A migrated dual-OTA image must be confirmed after it has started its
@@ -1619,7 +1701,8 @@ void app_main(void){
     esp_sntp_setoperatingmode(SNTP_OPMODE_POLL);
     esp_sntp_setservername(0,"pool.ntp.org");
     esp_sntp_init();
-    xTaskCreate(polling_task,"voltronic_read",7168,NULL,6,NULL);
+    ESP_ERROR_CHECK(xTaskCreate(polling_task,"voltronic_read",7168,NULL,6,
+                    &uart_poll_handle)==pdPASS?ESP_OK:ESP_ERR_NO_MEM);
     start_api();
     xTaskCreate(ota_postboot_validate_task,"ota_validate",3072,NULL,3,NULL);
     ESP_LOGI(TAG,"Voltronic bridge starting. HTTP port %d",VT_HTTP_PORT);
