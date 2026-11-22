@@ -2,11 +2,11 @@
   "schemaVersion": 1,
   "product": "smart-voltronic-esp32",
   "available": true,
-  "version": "0.3.8-dev-wifi-discovery",
+  "version": "0.3.9",
   "hardwareTargets": [
     "esp32s3-n16r8"
   ],
-  "downloadUrl": "https://github.com/tapion69/smart-energy-android/releases/download/voltronic-v0.3.8-dev-wifi-discovery/smart-energy-voltronic-S3-OTA.bin",
-  "sha256": "6eb7fa79b567943e314a6da9c5269040ddaa108b145f8fe61e29fb0ffb99066b",
-  "releaseNotesUrl": "https://github.com/tapion69/smart-energy-android/releases/tag/voltronic-v0.3.8-dev-wifi-discovery"
+  "downloadUrl": "https://github.com/tapion69/smart-energy-android/releases/download/voltronic-v0.3.9/smart-energy-voltronic-S3-OTA.bin",
+  "sha256": "59f177b33e864b29dfe133675d1ec088c245611bed0e23b43b89e81c8daf4e43",
+  "releaseNotesUrl": "https://github.com/tapion69/smart-energy-android/releases/tag/voltronic-v0.3.9"
 }
