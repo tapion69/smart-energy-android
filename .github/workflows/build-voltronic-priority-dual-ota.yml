@@ -8,10 +8,10 @@ on:
       - '.github/workflows/build-voltronic-priority-dual-ota.yml'
   workflow_dispatch:
 permissions:
-  contents: read
+  contents: write
 jobs:
   ota-priority:
-    name: Build isolated dual-OTA app (no release, no device flash)
+    name: Build and publish validated dual-OTA beta (no device flash)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -63,3 +63,21 @@ jobs:
           path: firmware/voltronic-esp32/dist-priority-ota/*.bin
           if-no-files-found: error
           retention-days: 30
+
+      - name: Publish verified OTA beta and update APK feed
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/ota-release
+          cp firmware/voltronic-esp32/dist-priority-ota/smart-energy-voltronic-S3-OTA-0.3.10-TEST.bin /tmp/ota-release/smart-energy-voltronic-S3-OTA.bin
+          gh release create voltronic-v0.3.10 /tmp/ota-release/smart-energy-voltronic-S3-OTA.bin --target "$GITHUB_SHA" --prerelease --title "Voltronic ESP32-S3 0.3.10 beta" --notes "POP and PCP profiles 00-03; verified writes; dual OTA only. Hardware validation pending."
+          git fetch origin main
+          git checkout -B ota-feed origin/main
+          python3 -m unittest discover -s tools/releases -p 'test_*.py'
+          python3 tools/releases/publish_update_manifest.py --tag voltronic-v0.3.10 --asset /tmp/ota-release/smart-energy-voltronic-S3-OTA.bin --version 0.3.10
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add updates/voltronic-esp32.json
+          git commit -m "chore(updates): publish verified Voltronic 0.3.10 OTA"
+          git push origin HEAD:main
