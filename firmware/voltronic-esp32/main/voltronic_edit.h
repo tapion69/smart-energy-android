@@ -46,8 +46,7 @@ static inline bool vt_edit_allowed(const vt_edit_spec_t *s,
                                    double current,double target,int nominal_v){
     if(!s||!isfinite(current)||!isfinite(target)||
        current<s->min_value||current>s->max_value||
-       target<s->min_value||target>s->max_value||
-       fabs(target-current)<s->step*0.4)return false;
+       target<s->min_value||target>s->max_value)return false;
     double steps=target/s->step;
     if(fabs(steps-round(steps))>0.00001)return false;
     if(s->voltage) {

@@ -1370,7 +1370,7 @@ static void perform_parameter_edit(
         nominal=under_voltage>=36.0&&under_voltage<=65.0?48:
                 under_voltage>=16.0&&under_voltage<=34.0?24:0;
     }
-    if(fabs(current-request->new_value)>spec->tolerance && !vt_edit_allowed(spec,current,request->new_value,nominal)){
+    if(!vt_edit_allowed(spec,current,request->new_value,nominal)){
         edit_result(result,"value_or_step_not_supported");return;
     }
     /* Idempotency: when already at target, confirm using the fresh preflight

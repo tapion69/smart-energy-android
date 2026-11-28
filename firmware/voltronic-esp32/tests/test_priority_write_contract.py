@@ -2,7 +2,7 @@
 """Static safety contract. No serial hardware or network required."""
 from pathlib import Path
 p=Path("firmware/voltronic-esp32/main/main.c").read_text()
-assert '#define VT_VERSION "0.3.9-test-priority-write"' in p
+assert '#define VT_VERSION "0.3.10-test-pop-pcp"' in p
 assert "httpd_req_async_handler_begin(r,&async_request)" in p
 assert "httpd_req_async_handler_complete(request)" in p
 assert 'xTaskCreate(edit_parameter_worker,"voltronic_edit_reply"' in p

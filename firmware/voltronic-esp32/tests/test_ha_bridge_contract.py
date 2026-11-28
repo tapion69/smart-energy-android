@@ -10,7 +10,7 @@ EDIT = (Path(__file__).resolve().parent.parent / "main" / "voltronic_edit.h").re
 
 class BridgeContract(unittest.TestCase):
     def test_branch_identification(self):
-        self.assertIn('#define VT_VERSION "0.3.9-test-priority-write"', SRC)
+        self.assertIn('#define VT_VERSION "0.3.10-test-pop-pcp"', SRC)
         self.assertIn('"ha_bridge_protocol","esp-cache-v1"', SRC)
 
     def test_single_owner_contract(self):
