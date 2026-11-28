@@ -42,7 +42,7 @@
 #include "voltronic_protocol.h"
 #include "voltronic_edit.h"
 
-#define VT_VERSION "0.3.9-test-priority-write"
+#define VT_VERSION "0.3.10-test-pop-pcp"
 #define VT_UART UART_NUM_1
 #define VT_TX GPIO_NUM_17
 #define VT_RX GPIO_NUM_16
@@ -1370,7 +1370,7 @@ static void perform_parameter_edit(
         nominal=under_voltage>=36.0&&under_voltage<=65.0?48:
                 under_voltage>=16.0&&under_voltage<=34.0?24:0;
     }
-    if(!vt_edit_allowed(spec,current,request->new_value,nominal)){
+    if(fabs(current-request->new_value)>spec->tolerance && !vt_edit_allowed(spec,current,request->new_value,nominal)){
         edit_result(result,"value_or_step_not_supported");return;
     }
     /* Idempotency: when already at target, confirm using the fresh preflight

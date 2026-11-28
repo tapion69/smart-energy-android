@@ -23,6 +23,11 @@ int main(void) {
     assert(p && vt_edit_allowed(p,0,2,48));
     assert(vt_edit_command(p,2,cmd,sizeof(cmd)));
     assert(strcmp(cmd,"POP02")==0);
+    const vt_edit_spec_t *pc=vt_edit_find("charger_source_priority_code");
+    for(int i=0;i<4;i++)for(int j=0;j<4;j++)if(i!=j){assert(vt_edit_allowed(p,i,j,48));assert(vt_edit_allowed(pc,i,j,48));}
+    assert(!vt_edit_allowed(p,2,4,48));assert(!vt_edit_allowed(pc,2,-1,48));
+    assert(vt_edit_candidate_allowed(p,3,"POP03"));assert(vt_edit_candidate_allowed(pc,0,"PCP00"));
+    assert(!vt_edit_candidate_allowed(p,3,"POP02"));assert(!vt_edit_candidate_allowed(pc,0,"POP00"));
     const vt_edit_spec_t *b=vt_edit_find("battery_type_code");
     assert(b && !vt_edit_allowed(b,2,4,48));
     assert(!vt_edit_find("raw_command"));

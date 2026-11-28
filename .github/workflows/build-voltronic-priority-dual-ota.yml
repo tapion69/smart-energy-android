@@ -1,7 +1,7 @@
-name: Verify Voltronic S3 0.3.9 dual-OTA priority image
+name: Verify Voltronic S3 0.3.10 dual-OTA priority image
 on:
   push:
-    branches: ['fix/esp32-priority-verified-write-20261122']
+    branches: ['fix/voltronic-pop-pcp-ota-0310']
     paths:
       - 'firmware/voltronic-esp32/**'
       - 'tools/windows-flasher/voltronic_ota_migration.py'
@@ -17,6 +17,7 @@ jobs:
       - uses: actions/checkout@v4
       - name: Validate priority and native protocol contracts
         run: |
+          cc firmware/voltronic-esp32/tests/test_edit.c -lm -o /tmp/test_edit && /tmp/test_edit
           python3 firmware/voltronic-esp32/tests/test_ha_bridge_contract.py
           python3 firmware/voltronic-esp32/tests/test_priority_write_contract.py
       - name: Select the official dual-OTA layout before building
@@ -37,7 +38,7 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p firmware/voltronic-esp32/dist-priority-ota
-          cp firmware/voltronic-esp32/build_ota/smart_energy_voltronic_s3.bin firmware/voltronic-esp32/dist-priority-ota/smart-energy-voltronic-S3-OTA-0.3.9-TEST.bin
+          cp firmware/voltronic-esp32/build_ota/smart_energy_voltronic_s3.bin firmware/voltronic-esp32/dist-priority-ota/smart-energy-voltronic-S3-OTA-0.3.10-TEST.bin
           cp firmware/voltronic-esp32/build_ota/partition_table/partition-table.bin firmware/voltronic-esp32/dist-priority-ota/validated-partition-table.bin
           grep -q '^CONFIG_PARTITION_TABLE_CUSTOM=y' firmware/voltronic-esp32/sdkconfig
           python3 - <<'PY'
@@ -48,17 +49,17 @@ jobs:
           folder=Path("firmware/voltronic-esp32/dist-priority-ota")
           part=parse_partition_table((folder/"validated-partition-table.bin").read_bytes())
           assert part==EXPECTED,(part,EXPECTED)
-          app=(folder/"smart-energy-voltronic-S3-OTA-0.3.9-TEST.bin").read_bytes()
+          app=(folder/"smart-energy-voltronic-S3-OTA-0.3.10-TEST.bin").read_bytes()
           assert len(app)<=0x200000 and len(app)>=16384
           assert app[0]==0xE9 and int.from_bytes(app[12:14],"little")==9
-          assert b"0.3.9-test-priority-write" in app
+          assert b"0.3.10-test-pop-pcp" in app
           print("Validated dual-OTA partition layout and S3 version")
           print("SHA256",hashlib.sha256(app).hexdigest())
           PY
       - name: Package ONLY test app plus partition validation evidence
         uses: actions/upload-artifact@v4
         with:
-          name: SmartEnergy-Voltronic-S3-Priority-0.3.9-DUAL-OTA-TEST
+          name: SmartEnergy-Voltronic-S3-Priority-0.3.10-DUAL-OTA-TEST
           path: firmware/voltronic-esp32/dist-priority-ota/*.bin
           if-no-files-found: error
           retention-days: 30
